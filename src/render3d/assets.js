@@ -5,12 +5,21 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ASSETS, CAR } from '../config.js';
 
+// A config.js (és pl. grassField.js) az assetekre MINDIG gyökér-relatív utat ad meg
+// (pl. '/assets/car.glb') — ez helyi devnél helyes, de GitHub Pages-en a projekt egy
+// al-útvonalon fut (/autos-jatek/), ahol ez az abszolút út 404-et adna. A
+// import.meta.env.BASE_URL (Vite tölti fel a vite.config.js `base`-jéből, dev=/'/,
+// build='/autos-jatek/') hozzáfűzésével MINDEN betöltés a tényleges helyre mutat.
+function withBase(url) {
+  return import.meta.env.BASE_URL.replace(/\/$/, '') + url;
+}
+
 // A Kenney GLB egy relatív "Textures/colormap.png"-t hivatkoz, ami a public mappában
 // máshol/más case-sel van → átirányítjuk a tényleges fájlra (így nincs 404, és a
 // modell a saját textúrájával tölt be).
 const manager = new THREE.LoadingManager();
 manager.setURLModifier((url) =>
-  url.includes('colormap.png') ? ASSETS.car.colormap : url
+  url.includes('colormap.png') ? withBase(ASSETS.car.colormap) : url
 );
 
 const gltfLoader = new GLTFLoader(manager);
@@ -20,7 +29,7 @@ const texLoader = new THREE.TextureLoader();
 export function loadModel(url) {
   return new Promise((resolve) => {
     gltfLoader.load(
-      url,
+      withBase(url),
       (gltf) => resolve(gltf.scene),
       undefined,
       () => resolve(null) // hiányzik/hibás → fallback
@@ -32,7 +41,7 @@ export function loadModel(url) {
 export function loadTexture(url, repeat = 1) {
   return new Promise((resolve) => {
     texLoader.load(
-      url,
+      withBase(url),
       (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(repeat, repeat);
@@ -51,7 +60,7 @@ export function loadTexture(url, repeat = 1) {
 export function loadModelTexture(url) {
   return new Promise((resolve) => {
     texLoader.load(
-      url,
+      withBase(url),
       (tex) => {
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.flipY = false;

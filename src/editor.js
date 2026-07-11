@@ -458,7 +458,9 @@ saveBtn.addEventListener('click', () => {
   } else {
     saveCustomTrack(layout, relDecorations);
   }
-  window.location.href = '/index.html';
+  // Gyökér-relatív útvonal helyett BASE_URL-lel prefixelve, hogy GitHub Pages
+  // al-útvonalán (/autos-jatek/) is a helyes index.html-re navigáljon.
+  window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
 });
 
 resetDefaultBtn.addEventListener('click', () => {

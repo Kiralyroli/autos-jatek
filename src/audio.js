@@ -9,9 +9,12 @@
 import { AUDIO, ASSETS } from './config.js';
 
 // Egy hangfájl betöltése és dekódolása. Siker: AudioBuffer, hiba/hiány: null.
+// A url gyökér-relatív ('/assets/...') — BASE_URL-lel prefixelve, hogy GitHub
+// Pages al-útvonalán (/autos-jatek/) is a helyes helyre mutasson (lásd
+// render3d/assets.js withBase ugyanerről).
 async function loadSound(ctx, url) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(import.meta.env.BASE_URL.replace(/\/$/, '') + url);
     if (!res.ok) return null;
     return await ctx.decodeAudioData(await res.arrayBuffer());
   } catch {
