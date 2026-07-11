@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pálya-szerkesztő</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #1a1a1e;
+        color: #cfd2da;
+        font-family: system-ui, sans-serif;
+        overflow: hidden;
+      }
+      #layout {
+        display: flex;
+        height: 100vh;
+      }
+      #canvasWrap {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+      }
+      canvas {
+        background: #2a2d38;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #panel {
+        width: 300px;
+        padding: 16px;
+        background: #20222b;
+        border-left: 1px solid #33363f;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-sizing: border-box;
+        overflow-y: auto;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 13px;
+        margin: 4px 0 0;
+        color: #a8adb8;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      p {
+        font-size: 13px;
+        line-height: 1.5;
+        color: #a8adb8;
+        margin: 0;
+      }
+      button {
+        font-size: 14px;
+        padding: 10px 14px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        background: #33363f;
+        color: #e8eaef;
+      }
+      button:hover:not(:disabled) {
+        background: #40434f;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button.primary {
+        background: #2e7d32;
+      }
+      button.primary:hover:not(:disabled) {
+        background: #3a9d40;
+      }
+      button.danger {
+        background: #5c2b2b;
+      }
+      button.danger:hover:not(:disabled) {
+        background: #7a3838;
+      }
+      #modeToggle {
+        display: flex;
+        gap: 8px;
+      }
+      #modeToggle button {
+        flex: 1;
+      }
+      #modeToggle button.active {
+        background: #3a5a8f;
+      }
+      #modeToggle button.active:hover {
+        background: #45699e;
+      }
+      .decorLayerHeader {
+        font-size: 11px;
+        color: #a8adb8;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin: 8px 0 4px;
+      }
+      .decorLayerHeader:first-child {
+        margin-top: 0;
+      }
+      .decorLayerGroup {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .decorLayerGroup button {
+        font-size: 13px;
+        padding: 8px 8px;
+        text-align: left;
+      }
+      .decorLayerGroup button.active {
+        background: #6a4a1e;
+        outline: 2px solid #d99a3f;
+      }
+      #status {
+        font-size: 13px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #262a35;
+        border: 1px solid #33363f;
+      }
+      #status.closed {
+        border-color: #2e7d32;
+        color: #8fd693;
+      }
+      a.backlink {
+        color: #7fb0ff;
+        text-decoration: none;
+        font-size: 13px;
+      }
+      a.backlink:hover {
+        text-decoration: underline;
+      }
+      .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: #a8adb8;
+      }
+      .legend span.swatch {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid #33363f;
+        margin: 4px 0;
+      }
+      #trackNameInput {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 9px 10px;
+        border-radius: 8px;
+        border: 1px solid #33363f;
+        background: #1a1c23;
+        color: #e8eaef;
+        font-size: 14px;
+      }
+      #trackNameInput:focus {
+        outline: none;
+        border-color: #3a5a8f;
+      }
+      #savedTracksList {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 180px;
+        overflow-y: auto;
+      }
+      #savedTracksList p {
+        color: #6f7580;
+        font-style: italic;
+      }
+      .savedTrackRow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: #262a35;
+        border: 1px solid #33363f;
+        border-radius: 8px;
+        padding: 6px 6px 6px 10px;
+      }
+      .savedTrackName {
+        flex: 1;
+        font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .savedTrackRow button {
+        padding: 6px 9px;
+        font-size: 13px;
+        flex: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="layout">
+      <div id="canvasWrap">
+        <canvas id="editorCanvas"></canvas>
+      </div>
+      <div id="panel">
+        <h1>🏗️ Pálya-szerkesztő</h1>
+
+        <div id="modeToggle">
+          <button id="modeTrackBtn" class="active">🛣️ Pálya rajzolása</button>
+          <button id="modeDecorBtn">🌳 Dekoráció</button>
+        </div>
+
+        <p id="instructions">
+          Kattints egy cellára a kezdéshez, majd a szomszédos cellákra, hogy
+          megrajzold a pálya útvonalát. Ha eleget haladtál, kattints vissza a
+          zöld rajt-cellára a hurok zárásához.
+        </p>
+
+        <div id="trackLegend" class="legend">
+          <div><span class="swatch" style="background:#f2c14e"></span> Rajt/cél-kapu (2 cella)</div>
+          <div><span class="swatch" style="background:#5c8fd6"></span> Kijelölt útvonal</div>
+          <div><span class="swatch" style="background:#3a5a3a"></span> Ide kattinthatsz</div>
+        </div>
+
+        <div id="decorControls" style="display:none">
+          <h2>Elem</h2>
+          <div id="decorPalette"></div>
+          <button id="rotateBtn" style="margin-top:8px; width:100%;">🔄 Forgatás</button>
+        </div>
+
+        <div id="status">Kattints egy cellára a kezdéshez.</div>
+
+        <hr />
+        <button id="undoBtn">↩️ Visszavonás</button>
+        <button id="clearBtn" class="danger">🗑️ Törlés (pálya + dekoráció)</button>
+        <button id="resetDefaultBtn">↺ Alap pálya visszaállítása</button>
+
+        <hr />
+        <h2>Pálya neve</h2>
+        <input type="text" id="trackNameInput" placeholder="pl. Városi kör" maxlength="60" />
+        <button id="saveAsBtn">💾 Mentés névvel</button>
+        <button id="saveBtn" class="primary" disabled>▶️ Mentés és játék</button>
+
+        <h2>Mentett pályák</h2>
+        <div id="savedTracksList"></div>
+
+        <a class="backlink" href="/index.html">← Vissza a játékhoz (mentés nélkül)</a>
+      </div>
+    </div>
+    <script type="module" src="/src/editor.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "autos-jatek",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Böngészős multiplayer autós játék — Fázis 1: single-player prototípus",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "planck": "^1.1.0",
+    "three": "^0.166.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

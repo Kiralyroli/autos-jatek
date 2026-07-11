@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Autós játék — Fázis 1</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #1a1a1e;
+        overflow: hidden;
+      }
+      #game {
+        width: 100vw;
+        height: 100vh;
+      }
+      #hud {
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+        color: #cfd2da;
+        background: rgba(0, 0, 0, 0.45);
+        padding: 8px 12px;
+        border-radius: 8px;
+        line-height: 1.5;
+        pointer-events: none;
+        user-select: none;
+      }
+      #hud b { color: #fff; }
+      #hud kbd {
+        background: #2c2f3a;
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-family: ui-monospace, monospace;
+      }
+      #hud a {
+        color: #7fb0ff;
+        pointer-events: auto;
+      }
+      #race {
+        margin-top: 6px;
+        padding-top: 6px;
+        border-top: 1px solid rgba(255, 255, 255, 0.2);
+        font-variant-numeric: tabular-nums;
+      }
+      #countdown {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-family: system-ui, sans-serif;
+        font-weight: 800;
+        color: #fff;
+        text-shadow: 0 4px 24px rgba(0, 0, 0, 0.65);
+        pointer-events: none;
+        user-select: none;
+      }
+      #wrongway {
+        position: fixed;
+        top: 14%;
+        left: 0;
+        right: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        font-family: system-ui, sans-serif;
+        font-size: 42px;
+        font-weight: 800;
+        color: #ff4b3e;
+        text-shadow: 0 3px 16px rgba(0, 0, 0, 0.7);
+        pointer-events: none;
+        user-select: none;
+        animation: wrongway-blink 0.6s step-start infinite;
+      }
+      #wrongway .sign {
+        font-size: 84px;
+        line-height: 1;
+      }
+      @keyframes wrongway-blink {
+        50% {
+          opacity: 0.15;
+        }
+      }
+      #restart {
+        position: fixed;
+        left: 50%;
+        top: 64%;
+        transform: translateX(-50%);
+        display: none;
+        padding: 13px 30px;
+        font-family: system-ui, sans-serif;
+        font-size: 20px;
+        font-weight: 700;
+        color: #fff;
+        background: #2e7d32;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+      }
+      #restart:hover {
+        background: #3a9d40;
+      }
+      #restart:active {
+        transform: translateX(-50%) scale(0.97);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud">
+      <b>Autós játék — 3D</b><br />
+      Gyorsítás: <kbd>W</kbd> / <kbd>↑</kbd> &nbsp; Fék/tolatás: <kbd>S</kbd> / <kbd>↓</kbd><br />
+      Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
+      <span id="speed">Sebesség: 0 km/h</span>
+      <div id="race">
+        <span id="lap">Kör: –</span> &nbsp;
+        <span id="laptime">Köridő: –</span> &nbsp;
+        <span id="bestlap">Legjobb: –</span>
+      </div>
+      <div style="margin-top: 6px;">
+        <a href="/editor.html">🏗️ Pálya szerkesztése</a>
+      </div>
+    </div>
+    <div id="countdown"></div>
+    <div id="wrongway">
+      <span class="sign">⛔</span>
+      <span>ROSSZ IRÁNY!</span>
+    </div>
+    <button id="restart">🔄 Új verseny</button>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
