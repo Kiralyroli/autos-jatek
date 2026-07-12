@@ -110,6 +110,102 @@
       #restart:active {
         transform: translateX(-50%) scale(0.97);
       }
+      /* --- Főmenü + multiplayer lobby --- */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(10, 11, 16, 0.72);
+        font-family: system-ui, sans-serif;
+        z-index: 20;
+      }
+      .overlay .panel {
+        width: 340px;
+        background: #20222b;
+        border: 1px solid #33363f;
+        border-radius: 14px;
+        padding: 24px;
+        color: #e8eaef;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+      }
+      .overlay h1 {
+        margin: 0 0 4px;
+        font-size: 22px;
+        text-align: center;
+      }
+      .overlay label {
+        font-size: 13px;
+        color: #a8adb8;
+      }
+      .overlay input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #33363f;
+        background: #1a1c23;
+        color: #e8eaef;
+        font-size: 15px;
+      }
+      .overlay button {
+        padding: 12px 14px;
+        font-size: 15px;
+        font-weight: 600;
+        border: none;
+        border-radius: 9px;
+        cursor: pointer;
+        background: #33363f;
+        color: #e8eaef;
+      }
+      .overlay button:hover:not(:disabled) { background: #40434f; }
+      .overlay button:disabled { opacity: 0.45; cursor: default; }
+      .overlay button.primary { background: #2e7d32; }
+      .overlay button.primary:hover:not(:disabled) { background: #3a9d40; }
+      .overlay button.accent { background: #3a5a8f; }
+      .overlay button.accent:hover:not(:disabled) { background: #45699e; }
+      .overlay .joinrow { display: flex; gap: 8px; }
+      .overlay .joinrow input { flex: 1; }
+      .overlay hr { border: none; border-top: 1px solid #33363f; margin: 2px 0; }
+      .overlay .status { font-size: 13px; color: #d9a03f; min-height: 17px; }
+      #lobbyCode {
+        font-family: ui-monospace, monospace;
+        font-size: 26px;
+        text-align: center;
+        letter-spacing: 2px;
+        background: #1a1c23;
+        border: 1px dashed #4a4e5c;
+        border-radius: 8px;
+        padding: 10px;
+        user-select: all;
+      }
+      #lobbyPlayers { display: flex; flex-direction: column; gap: 6px; }
+      #lobbyPlayers .p {
+        background: #262a35;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 14px;
+      }
+      #standings {
+        position: fixed;
+        right: 12px;
+        top: 12px;
+        display: none;
+        flex-direction: column;
+        gap: 4px;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+        color: #e8eaef;
+        background: rgba(0, 0, 0, 0.45);
+        padding: 10px 14px;
+        border-radius: 8px;
+        pointer-events: none;
+        font-variant-numeric: tabular-nums;
+      }
     </style>
   </head>
   <body>
@@ -134,6 +230,40 @@
       <span>ROSSZ IRÁNY!</span>
     </div>
     <button id="restart">🔄 Új verseny</button>
+
+    <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
+    <div id="menu" class="overlay">
+      <div class="panel">
+        <h1>🏎️ Autós játék</h1>
+        <label for="playerName">Neved</label>
+        <input id="playerName" maxlength="20" placeholder="Játékos" />
+        <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
+        <hr />
+        <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>
+        <div class="joinrow">
+          <input id="joinCode" placeholder="Szoba-kód" />
+          <button id="btnJoin">Csatlakozás</button>
+        </div>
+        <div id="menuStatus" class="status"></div>
+      </div>
+    </div>
+
+    <!-- Multiplayer lobby: szoba-kód + játékoslista + indítás (host) -->
+    <div id="lobby" class="overlay">
+      <div class="panel">
+        <h1>👥 Szoba</h1>
+        <label>Küldd el ezt a kódot a barátaidnak:</label>
+        <div id="lobbyCode"></div>
+        <div id="lobbyPlayers"></div>
+        <button id="btnStart" class="primary" style="display:none">🚦 Verseny indítása</button>
+        <div id="lobbyStatus" class="status">Várakozás a játékosokra…</div>
+        <button id="btnLeave">← Kilépés a szobából</button>
+      </div>
+    </div>
+
+    <!-- Élő állás (multiplayer verseny közben) -->
+    <div id="standings"></div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

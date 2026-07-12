@@ -6,7 +6,6 @@
 //   - a raceStep bemenete csak az előző/jelenlegi pozíció és a fix dt.
 // =============================================================================
 import { RACE } from '../config.js';
-import { checkpoints } from './track.js';
 
 // Kezdőállapot. Minden mező szerializálható (JSON-ba írható → hálón küldhető).
 export function createRaceState() {
@@ -25,16 +24,11 @@ export function createRaceState() {
   };
 }
 
-// A checkpoint-vonalak felezőpontjai — a "jó irány" célpontjai.
-const CP_MIDS = checkpoints.map((cp) => ({
-  x: (cp.a.x + cp.b.x) / 2,
-  y: (cp.a.y + cp.b.y) / 2,
-}));
-
 // Rossz irány detektálás: elfelé mozog-e az autó a következő checkpointtól.
 // Türelmi idővel (graceSeconds), hogy egy kanyarbeli megcsúszás ne riasszon.
-function updateWrongWay(state, prevPos, currPos, dt) {
-  const mid = CP_MIDS[state.nextCheckpoint];
+function updateWrongWay(state, prevPos, currPos, dt, checkpoints) {
+  const cp = checkpoints[state.nextCheckpoint];
+  const mid = { x: (cp.a.x + cp.b.x) / 2, y: (cp.a.y + cp.b.y) / 2 };
   const mvx = currPos.x - prevPos.x;
   const mvy = currPos.y - prevPos.y;
   const speed = Math.hypot(mvx, mvy) / dt;
@@ -64,7 +58,9 @@ function segmentsCross(p1, p2, q1, q2) {
 // Egy fizika-lépésnyi verseny-frissítés. MUTÁLJA a state-et (determinisztikusan),
 // és eseménylistát ad vissza (HUD/hang/hálózat reagálhat rá):
 //   {type:'go'} | {type:'checkpoint', index} | {type:'lap', lapTime} | {type:'finish', totalTime}
-export function raceStep(state, prevPos, currPos, dt) {
+// A `checkpoints` paraméterben kapja a pálya keresztvonalait (kliensen a track.js
+// singletonét, szerveren a szoba trackState-jét) — így a modul pálya-független.
+export function raceStep(state, prevPos, currPos, dt, checkpoints) {
   const events = [];
 
   if (state.phase === 'countdown') {
@@ -80,7 +76,7 @@ export function raceStep(state, prevPos, currPos, dt) {
   if (state.phase !== 'racing') return events; // finished: az idő áll
 
   state.time += dt;
-  updateWrongWay(state, prevPos, currPos, dt);
+  updateWrongWay(state, prevPos, currPos, dt, checkpoints);
 
   // Csak a SORON KÖVETKEZŐ checkpoint átszelése számít — a sorrend így kikényszerített.
   const cp = checkpoints[state.nextCheckpoint];

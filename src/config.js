@@ -134,6 +134,10 @@ const RECT = (turn) => [
   { type: 'straight', n: 3 }, { type: 'corner', turn },
 ];
 
+// A beépített alap-pálya — a Colyseus szerver is ezt használja tartalékként,
+// ha a szobát létrehozó kliens nem küldött érvényes layoutot.
+export const DEFAULT_LAYOUT = RECT(1);
+
 // Ha a felhasználó az editor.html pálya-szerkesztőben rajzolt és mentett egy
 // pályát, azt localStorage-ból töltjük be a beépített téglalap helyett.
 const customLayout = loadCustomLayout();
@@ -177,6 +181,19 @@ export const DECORATION_TYPES = {
   lightGate: { model: '/assets/track/overheadLights.glb', label: 'Fénykapu (út fölé)', icon: '🚦', scale: 1, layer: 'object' },
 };
 
+// Multiplayer hálózat (3. fázis). A kliens ehhez a Colyseus szerverhez csatlakozik.
+// Lokális teszt: `npm run server` (localhost:2567) + két böngészőablak.
+// Élesben (deploy után) a wss:// URL-t kell ide írni.
+export const NET = {
+  serverUrl:
+    typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+      ? 'wss://REPLACE-ME-DEPLOY-URL' // ide jön majd a kitett játékszerver címe
+      : 'ws://localhost:2567',
+  snapshotHz: 20, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
+  interpDelayMs: 120, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
+  maxPlayers: 4,
+};
+
 // Verseny-szabályok és checkpointok. A checkpoint egy VONALSZAKASZ a folyosón
 // keresztben; az autó mozgás-szakaszának (előző→jelenlegi pozíció) kell metszenie.
 // A 0-s index a rajt/cél vonal; a többit SORRENDBEN kell átszelni (1→2→3→0 = kör).
@@ -184,6 +201,10 @@ export const DECORATION_TYPES = {
 export const RACE = {
   laps: 3,
   countdownSeconds: 3,
+  // Multiplayer: az ELSŐ célba érő után ennyi másodperccel a verseny akkor is
+  // lezárul, ha valaki még nem ért célba (ő DNF) — egy AFK játékos ne tartsa
+  // örökre nyitva a versenyt.
+  finishTimeoutSeconds: 45,
   // Rossz irány jelzés: ha az autó ennyi másodpercen át, legalább ekkora
   // sebességgel a következő checkpointtól ELFELÉ halad, szól a figyelmeztetés.
   wrongWay: {

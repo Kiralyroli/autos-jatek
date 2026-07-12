@@ -1,8 +1,15 @@
-// Belépési pont: saját game loop (requestAnimationFrame) — fizika a sim/ rétegben,
-// megjelenítés a render3d/ rétegben. Framework-es scene-kezelés nincs, nem is kell.
-import { SIM, ASSETS } from './config.js';
+// =============================================================================
+//  BELÉPÉSI PONT — közös 3D jelenet + mód-választó főmenü.
+//
+//  Két játékmód, ugyanarra a jelenetre építve:
+//   - EGYJÁTÉKOS: minden lokális (fizika + verseny-logika a böngészőben) —
+//     ez a korábbi 1-2. fázis változatlan viselkedése.
+//   - MULTIPLAYER (3. fázis): a Colyseus szerver futtatja a fizikát/versenyt,
+//     mi inputot küldünk és a snapshot-okból renderelünk minden autót.
+// =============================================================================
+import { SIM, ASSETS, RACE } from './config.js';
 import { createWorld, createStepper } from './sim/world.js';
-import { spawn } from './sim/track.js';
+import { spawn, checkpoints, offRoadExcess } from './sim/track.js';
 import {
   createCarBody,
   updateCar,
@@ -22,140 +29,424 @@ import { createChaseCamera } from './render3d/camera.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
+import * as THREE from 'three';
+import { createRoom, joinRoom, createSnapshotBuffer, createInputSender } from './net/mpClient.js';
+import { loadCustomLayout, loadCustomDecorations, saveCustomTrack } from './trackStorage.js';
+import { TRACK } from './config.js';
 
-// --- Szimuláció ---
-const world = createWorld();
-const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
-const stepper = createStepper();
-const readInput = createKeyboard();
-const race = createRaceState();
-const drive = createDriveState(); // fű-büntetés (gáz-szorzó) állapota
-
-// Interpolációhoz: a fizika legutóbbi két állapota (előző és jelenlegi lépés).
-const prev = { x: spawn.x, y: spawn.y, angle: spawn.angle };
-const curr = { x: spawn.x, y: spawn.y, angle: spawn.angle };
-
-function recordState() {
-  prev.x = curr.x;
-  prev.y = curr.y;
-  prev.angle = curr.angle;
-  const p = carBody.getPosition();
-  curr.x = p.x;
-  curr.y = p.y;
-  curr.angle = carBody.getAngle();
-
-  // Verseny-frissítés minden fizika-lépés után, az adott lépés mozgás-szakaszával.
-  // (Determinisztikus: fix dt, csak pozíciókból dolgozik — szerver-kész.)
-  raceStep(race, prev, curr, SIM.fixedDt);
-}
-
-// --- Megjelenítés ---
+// --- Közös megjelenítés (mindkét módhoz) ---
 const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
   document.getElementById('game')
 );
 
-// Külső assetek betöltése a háttérben (nem blokkol). Ha egy fájl hiányzik,
-// a beépített procedurális megjelenés marad — a betöltöttek "beúsznak".
+let trackColormapTex = null; // a TRACK-kit színatlasza — a multiplayer raceCar-okhoz
 (async () => {
-  const [carModel, carColormap, asphaltTex] = await Promise.all([
+  const [carModel, carColormap, trackColormap, asphaltTex] = await Promise.all([
     loadModel(ASSETS.car.url),
     loadModelTexture(ASSETS.car.colormap),
+    loadModelTexture('/assets/textures/colormap.png'),
     loadTexture(ASSETS.textures.asphalt, 1),
   ]);
+  trackColormapTex = trackColormap;
   if (carModel) setCarModel(carMesh, fitCarModel(carModel, carColormap));
   applyTexture(asphaltMesh, asphaltTex);
 })();
 
-// Kenney road-csempék lerakása a pálya mentén (nem blokkol).
 loadTrackTiles(scene);
-// A teljes talaj Kenney grass.glb csempékből, a pálya köré (nem blokkol).
 addGrassField(scene);
-// A szerkesztőben elhelyezett dekorációk (fal, fa, fű, rázókő, épület...) betöltése.
 loadDecorations(scene);
 const updateCamera = createChaseCamera(camera);
-
-// Új verseny: autó vissza a rajthoz, verseny-állapot és interpoláció nulláról.
-function resetGame() {
-  resetCar(carBody, spawn.x, spawn.y, spawn.angle);
-  Object.assign(race, createRaceState());
-  Object.assign(drive, createDriveState());
-  prev.x = curr.x = spawn.x;
-  prev.y = curr.y = spawn.y;
-  prev.angle = curr.angle = spawn.angle;
-}
-
-const updateHud = createHud(resetGame);
+const readInput = createKeyboard();
 const audio = createAudio();
 const speedEl = document.getElementById('speed');
 
-// Hang-eseményekhez: figyeljük a visszaszámláló egész-váltását és a rajtot.
-let lastCountInt = null;
-let lastPhase = race.phase;
+// A restart gomb viselkedése módfüggő — a dispatcher az aktív mód kezelőjét hívja.
+let onRestartClick = () => {};
+const updateHud = createHud(() => onRestartClick());
 
-// --- Game loop ---
+// --- Menü / lobby DOM ---
+const menuEl = document.getElementById('menu');
+const lobbyEl = document.getElementById('lobby');
+const standingsEl = document.getElementById('standings');
+const nameInput = document.getElementById('playerName');
+const menuStatus = document.getElementById('menuStatus');
+const lobbyStatus = document.getElementById('lobbyStatus');
+
+nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
+
+function playerName() {
+  const n = nameInput.value.trim() || 'Játékos';
+  localStorage.setItem('autos-jatek:playerName', n);
+  return n;
+}
+
+// --- Üresjárati render (amíg a menüben vagyunk): lassan körbeforgó kamera ---
+let mode = 'menu'; // 'menu' | 'single' | 'multi'
 let lastTime = performance.now();
 
-function frame(now) {
-  const dt = Math.min((now - lastTime) / 1000, 0.1); // védőkorlát nagy ugrás ellen
-  lastTime = now;
-
-  // Csak versenyzés közben van vezérlés; countdown alatt áll, cél után legördül.
-  const input = race.phase === 'racing' ? readInput() : NEUTRAL_INPUT;
-  const alpha = stepper(
-    world,
-    dt,
-    (fixedDt) => {
-      if (race.phase === 'finished') coastToStop(carBody);
-      else updateCar(carBody, input, fixedDt, drive);
-    },
-    recordState
-  );
-
-  // Sim → render, a két utolsó fizikai állapot közt interpolálva (sima mozgás).
-  const x = lerp(prev.x, curr.x, alpha);
-  const z = lerp(prev.y, curr.y, alpha); // fizikai y → 3D z (talajsík)
-  const angle = lerpAngle(prev.angle, curr.angle, alpha);
-
-  carMesh.position.set(x, 0.12, z); // kissé a Kenney út-csempe fölé, hogy ne süppedjen be
-  carMesh.rotation.y = -angle; // 2D szög → függőleges tengely körüli forgatás
-
-  // Fejlesztői felülnézet (window.__TOP = magasság) vagy normál chase kamera.
-  if (window.__TOP) {
-    camera.position.set(x, window.__TOP, z + 0.001);
-    camera.lookAt(x, 0, z);
-  } else {
-    updateCamera(x, z, angle, dt);
-  }
+function idleFrame(now) {
+  if (mode !== 'menu') return;
+  const t = now / 1000;
+  const cx = spawn.x, cz = spawn.y;
+  camera.position.set(cx + Math.cos(t * 0.15) * 60, 35, cz + Math.sin(t * 0.15) * 60);
+  camera.lookAt(cx, 0, cz);
   renderer.render(scene, camera);
+  requestAnimationFrame(idleFrame);
+}
 
-  // --- Hang ---
-  // Visszaszámláló bip a szám váltásakor (3, 2, 1), magasabb GO! a rajtnál.
-  if (race.phase === 'countdown') {
-    const c = Math.ceil(race.countdownLeft);
-    if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
-    lastCountInt = c;
+// =============================================================================
+//  EGYJÁTÉKOS MÓD — a korábbi (1-2. fázis) lokális játék, változatlan logikával.
+// =============================================================================
+function startSingleplayer() {
+  mode = 'single';
+  menuEl.style.display = 'none';
+
+  const world = createWorld();
+  const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
+  const stepper = createStepper();
+  const race = createRaceState();
+  const drive = createDriveState();
+
+  const prev = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+  const curr = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+
+  function recordState() {
+    prev.x = curr.x;
+    prev.y = curr.y;
+    prev.angle = curr.angle;
+    const p = carBody.getPosition();
+    curr.x = p.x;
+    curr.y = p.y;
+    curr.angle = carBody.getAngle();
+    raceStep(race, prev, curr, SIM.fixedDt, checkpoints);
   }
-  if (lastPhase === 'countdown' && race.phase === 'racing') audio.beep(880, 0.35);
-  lastPhase = race.phase;
 
-  // Motor és gumicsikorgás folyamatos frissítése.
-  audio.update({
-    speedKmh: speedKmh(carBody),
-    throttle: race.phase === 'racing' && input.up,
-    corneringLoad: race.phase === 'finished' ? 0 : corneringLoad(carBody),
+  onRestartClick = () => {
+    resetCar(carBody, spawn.x, spawn.y, spawn.angle);
+    Object.assign(race, createRaceState());
+    Object.assign(drive, createDriveState());
+    prev.x = curr.x = spawn.x;
+    prev.y = curr.y = spawn.y;
+    prev.angle = curr.angle = spawn.angle;
+  };
+
+  let lastCountInt = null;
+  let lastPhase = race.phase;
+  lastTime = performance.now();
+
+  function frame(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    const input = race.phase === 'racing' ? readInput() : NEUTRAL_INPUT;
+    const alpha = stepper(
+      world,
+      dt,
+      (fixedDt) => {
+        if (race.phase === 'finished') coastToStop(carBody);
+        else updateCar(carBody, input, fixedDt, drive, offRoadExcess);
+      },
+      recordState
+    );
+
+    const x = lerp(prev.x, curr.x, alpha);
+    const z = lerp(prev.y, curr.y, alpha);
+    const angle = lerpAngle(prev.angle, curr.angle, alpha);
+
+    carMesh.position.set(x, 0.12, z);
+    carMesh.rotation.y = -angle;
+
+    if (window.__TOP) {
+      camera.position.set(x, window.__TOP, z + 0.001);
+      camera.lookAt(x, 0, z);
+    } else {
+      updateCamera(x, z, angle, dt);
+    }
+    renderer.render(scene, camera);
+
+    if (race.phase === 'countdown') {
+      const c = Math.ceil(race.countdownLeft);
+      if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
+      lastCountInt = c;
+    }
+    if (lastPhase === 'countdown' && race.phase === 'racing') audio.beep(880, 0.35);
+    lastPhase = race.phase;
+
+    audio.update({
+      speedKmh: speedKmh(carBody),
+      throttle: race.phase === 'racing' && input.up,
+      corneringLoad: race.phase === 'finished' ? 0 : corneringLoad(carBody),
+    });
+
+    if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(speedKmh(carBody))} km/h`;
+    updateHud(race);
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  if (import.meta.env.DEV) {
+    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive };
+  }
+}
+
+// =============================================================================
+//  MULTIPLAYER MÓD — a szerver az igazság, mi inputot küldünk és renderelünk.
+// =============================================================================
+
+// A 4 játékos-szín autó-modellje (a Kenney Racing Kit kész versenyautói).
+const MP_CAR_MODELS = [
+  '/assets/track/raceCarRed.glb',
+  '/assets/track/raceCarGreen.glb',
+  '/assets/track/raceCarOrange.glb',
+  '/assets/track/raceCarWhite.glb',
+];
+
+// A szoba pályája a MI lokálisan felépített pályánk-e? Ha nem, elmentjük a
+// szerverét aktívnak, és újratöltjük az oldalt (a pálya-render a betöltéskor
+// épül) — a sessionStorage-ba tett "rejoin" adattal automatikusan visszalépünk.
+function ensureTrackMatches(init, roomCode) {
+  const localLayout = JSON.stringify(TRACK.layout);
+  const serverLayout = JSON.stringify(init.layout);
+  if (localLayout === serverLayout) return true;
+  saveCustomTrack(init.layout, init.decorations);
+  sessionStorage.setItem(
+    'autos-jatek:mp-rejoin',
+    JSON.stringify({ code: roomCode, name: playerName() })
+  );
+  window.location.reload();
+  return false;
+}
+
+async function startMultiplayer(room) {
+  mode = 'multi';
+  menuEl.style.display = 'none';
+
+  const buffer = createSnapshotBuffer();
+  const sendInput = createInputSender(room);
+  const myId = room.sessionId;
+
+  // Távoli (és saját) autó-mesh-ek: id → THREE.Group. A sajátunk a meglévő carMesh.
+  const meshes = new Map([[myId, carMesh]]);
+  const loadingMeshes = new Set();
+
+  async function ensureMesh(id, colorIdx) {
+    if (meshes.has(id) || loadingMeshes.has(id)) return;
+    loadingMeshes.add(id);
+    const model = await loadModel(MP_CAR_MODELS[colorIdx % MP_CAR_MODELS.length]);
+    // A raceCar-ok a TRACK-kit atlaszát használják (nem a fő autóét), a hossz-
+    // tengelyük viszont ugyanúgy z (mérve), így a config-beli forgatás jó nekik.
+    const group = model ? fitCarModel(model, trackColormapTex) : new THREE.Group();
+    scene.add(group);
+    meshes.set(id, group);
+    loadingMeshes.delete(id);
+  }
+
+  function removeStaleMeshes(players) {
+    for (const [id, mesh] of meshes.entries()) {
+      if (id !== myId && !players[id]) {
+        scene.remove(mesh);
+        meshes.delete(id);
+      }
+    }
+  }
+
+  // --- Lobby UI ---
+  const lobbyPlayersEl = document.getElementById('lobbyPlayers');
+  const lobbyCodeEl = document.getElementById('lobbyCode');
+  const btnStart = document.getElementById('btnStart');
+  const btnLeave = document.getElementById('btnLeave');
+  let isHost = false;
+  let roomPhase = 'lobby';
+
+  room.onMessage('lobby', (m) => {
+    isHost = m.hostId === myId;
+    roomPhase = m.phase;
+    lobbyCodeEl.textContent = m.code;
+    lobbyPlayersEl.innerHTML = '';
+    for (const p of m.players) {
+      const div = document.createElement('div');
+      div.className = 'p';
+      div.textContent = `${['🔴', '🟢', '🟠', '⚪'][p.colorIdx % 4]} ${p.name}${p.id === m.hostId ? ' 👑' : ''}${p.id === myId ? ' (te)' : ''}`;
+      lobbyPlayersEl.appendChild(div);
+    }
+    btnStart.style.display = isHost ? 'block' : 'none';
+    lobbyStatus.textContent = isHost
+      ? m.players.length > 1
+        ? 'Indíthatod a versenyt!'
+        : 'Várakozás a játékosokra… (egyedül is indíthatsz)'
+      : 'Várakozás a hostra…';
+    if (m.phase === 'lobby') lobbyEl.style.display = 'flex';
   });
 
-  if (speedEl) {
-    speedEl.textContent = `Sebesség: ${Math.round(speedKmh(carBody))} km/h`;
+  room.onMessage('snapshot', (s) => buffer.push(s));
+
+  // Az init (pálya-adatok) a 'ready' üzenetünkre érkezik — ha a szoba pályája
+  // eltér a lokálisan felépítettől, ensureTrackMatches ment + újratölt (rejoin).
+  room.onMessage('init', (init) => {
+    ensureTrackMatches(init, room.roomId);
+  });
+
+  btnStart.onclick = () => room.send('start');
+  btnLeave.onclick = () => {
+    room.leave();
+    window.location.reload();
+  };
+  room.onLeave(() => {
+    // Szerver-oldali bontás (pl. szoba megszűnt) → vissza a menübe.
+    if (mode === 'multi') window.location.reload();
+  });
+
+  onRestartClick = () => {
+    if (isHost) room.send('start');
+  };
+
+  // Minden kezelő regisztrálva → most kérhetjük el az init-adatokat a szervertől.
+  room.send('ready');
+
+  // --- MP game loop: snapshot-interpoláció + kamera + HUD + input ---
+  let lastCountInt = null;
+  let lastPhase = 'lobby';
+  lastTime = performance.now();
+
+  function frame(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    const sampled = buffer.sample();
+    if (sampled) {
+      roomPhase = sampled.phase;
+      if (sampled.phase !== 'lobby') lobbyEl.style.display = 'none';
+
+      removeStaleMeshes(sampled.players);
+      for (const [id, p] of Object.entries(sampled.players)) {
+        ensureMesh(id, p.colorIdx);
+        const mesh = meshes.get(id);
+        if (!mesh) continue;
+        mesh.position.set(p.x, 0.12, p.y);
+        mesh.rotation.y = -p.angle;
+      }
+
+      const me = sampled.players[myId];
+      if (me) {
+        // Kamera a saját autón.
+        if (window.__TOP) {
+          camera.position.set(me.x, window.__TOP, me.y + 0.001);
+          camera.lookAt(me.x, 0, me.y);
+        } else {
+          updateCamera(me.x, me.y, me.angle, dt);
+        }
+
+        // Input csak versenyzés közben (a szerver amúgy is eldobja máskor).
+        const input = sampled.phase === 'racing' && !me.finished ? readInput() : NEUTRAL_INPUT;
+        if (sampled.phase === 'racing') sendInput(input);
+
+        // HUD: a sim-beli race-objektum "makettje" a saját snapshot-adatainkból.
+        const fakeRace = {
+          phase: me.finished ? 'finished' : sampled.phase === 'lobby' ? 'countdown' : sampled.phase,
+          countdownLeft: sampled.countdownLeft,
+          lap: me.lap,
+          time: me.finished ? me.totalTime : me.curLap ?? 0,
+          lapStartTime: 0,
+          lastLapTime: me.lastLap,
+          bestLapTime: me.bestLap,
+          wrongWay: !!me.wrongWay,
+        };
+        updateHud(fakeRace);
+
+        if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(me.speed || 0)} km/h`;
+
+        // Hang: motor a saját sebességből; countdown-bipek a fázisból.
+        if (sampled.phase === 'countdown') {
+          const c = Math.ceil(sampled.countdownLeft);
+          if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
+          lastCountInt = c;
+        }
+        if (lastPhase === 'countdown' && sampled.phase === 'racing') audio.beep(880, 0.35);
+        lastPhase = sampled.phase;
+
+        audio.update({
+          speedKmh: me.speed || 0,
+          throttle: sampled.phase === 'racing' && input.up,
+          corneringLoad: 0,
+        });
+      }
+
+      updateStandings(sampled.players);
+    }
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
   }
-  updateHud(race);
-
   requestAnimationFrame(frame);
+
+  // Élő állás-lista a jobb felső sarokban.
+  function updateStandings(players) {
+    const list = Object.values(players).sort((a, b) => {
+      if (a.finished && b.finished) return a.totalTime - b.totalTime;
+      if (a.finished) return -1;
+      if (b.finished) return 1;
+      if (a.lap !== b.lap) return b.lap - a.lap;
+      return b.ncp - a.ncp;
+    });
+    standingsEl.style.display = roomPhase === 'lobby' ? 'none' : 'flex';
+    standingsEl.innerHTML = list
+      .map((p, i) => {
+        const icon = ['🔴', '🟢', '🟠', '⚪'][p.colorIdx % 4];
+        const info = p.finished
+          ? `🏁 ${p.totalTime.toFixed(2)} s`
+          : `${p.lap}/${RACE.laps}. kör`;
+        return `<div>${i + 1}. ${icon} ${p.name} — ${info}</div>`;
+      })
+      .join('');
+  }
+
+  if (import.meta.env.DEV) {
+    window.__GAME = { camera, scene, audio, renderer, room, buffer };
+  }
 }
 
-requestAnimationFrame(frame);
-
-// Fejlesztői debug-hozzáférés a böngésző-konzolból.
-if (import.meta.env.DEV) {
-  window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive };
+async function doCreate() {
+  menuStatus.textContent = 'Kapcsolódás a szerverhez…';
+  try {
+    const room = await createRoom({
+      name: playerName(),
+      layout: loadCustomLayout(),
+      decorations: loadCustomDecorations(),
+    });
+    startMultiplayer(room);
+  } catch (e) {
+    menuStatus.textContent = `Nem sikerült: ${e.message || 'a szerver nem elérhető'}`;
+  }
 }
+
+async function doJoin(code) {
+  if (!code.trim()) {
+    menuStatus.textContent = 'Írd be a szoba-kódot!';
+    return;
+  }
+  menuStatus.textContent = 'Csatlakozás…';
+  try {
+    const room = await joinRoom(code, { name: playerName() });
+    startMultiplayer(room);
+  } catch (e) {
+    menuStatus.textContent = `Nem sikerült: ${e.message || 'nincs ilyen szoba'}`;
+  }
+}
+
+// --- Indulás: rejoin (pálya-csere utáni reload), vagy főmenü ---
+document.getElementById('btnSingle').onclick = () => startSingleplayer();
+document.getElementById('btnCreate').onclick = () => doCreate();
+document.getElementById('btnJoin').onclick = () =>
+  doJoin(document.getElementById('joinCode').value);
+
+const rejoinRaw = sessionStorage.getItem('autos-jatek:mp-rejoin');
+if (rejoinRaw) {
+  sessionStorage.removeItem('autos-jatek:mp-rejoin');
+  const { code, name } = JSON.parse(rejoinRaw);
+  nameInput.value = name;
+  doJoin(code);
+} else {
+  menuEl.style.display = 'flex';
+}
+requestAnimationFrame(idleFrame);

@@ -37,14 +37,20 @@ felesleges. Következmények:
 
 A vezérelv: minden fázis végén legyen valami, ami fut. Ne egyszerre épüljön minden.
 
-1. **Single-player prototípus (MOST ITT VAGYUNK).** Egy autó, egy pálya, jó vezetési
+1. **Single-player prototípus (KÉSZ).** Egy autó, egy pálya, jó vezetési
    élmény. Tisztán kliens-oldali, nincs szerver. Ez a fázis dönti el, hogy a játék
    élvezhető-e — a vezetésre kell ráhajtani, nem a funkciók számára.
-2. **Verseny-logika.** Checkpointok, körszámlálás, köridő, rajt/cél, visszaszámlálás.
-3. **Colyseus szoba.** Két kliens ugyanazt az állapotot látja — még netcode-finomítás
-   nélkül, elfogadva a döcögést. Lokálisan tesztelve két böngészőablakban.
-4. **Netcode finomítás.** Client-side prediction + server reconciliation + entity
-   interpolation, hogy sima legyen.
+2. **Verseny-logika (KÉSZ).** Checkpointok, körszámlálás, köridő, rajt/cél,
+   visszaszámlálás. Plusz: pálya-szerkesztő, dekorációk, fű-büntetés, több mentett pálya.
+3. **Colyseus szoba (KÉSZ, 2026-07-11).** Szoba létrehozás/csatlakozás kóddal, lobby,
+   authoritative szerver-sim (server/RaceRoom.js — UGYANAZOKKAL a src/sim/* modulokkal),
+   2-4 játékos, 20Hz snapshot-broadcast + entity interpolation a kliensen, élő állás,
+   host-újraindítás, DNF-türelmi idő. Lokálisan tesztelve két böngészőablakban.
+   Indítás: `npm run server` (Colyseus, :2567) + `npm run dev` (Vite, :5173).
+4. **Netcode finomítás (KÖVETKEZŐ).** Client-side prediction + server reconciliation,
+   hogy a saját autó ne az (interp-késleltetésű) szerver-visszhangból mozogjon.
+   Plusz: a játékszerver kitétele az internetre (Railway/VPS) és a config.js
+   NET.serverUrl beállítása (most 'wss://REPLACE-ME-DEPLOY-URL' a placeholder).
 5. **Extrák.** Power-upok, több pálya, drift-finomítás, hang. Csak a mag után.
 
 ## Vezetési modell (a legfontosabb rész)

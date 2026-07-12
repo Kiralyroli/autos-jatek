@@ -18,10 +18,18 @@ const KEY = 'autos-jatek:customTrack';
 const LIST_KEY = 'autos-jatek:savedTracks';
 const ACTIVE_NAME_KEY = 'autos-jatek:activeTrackName';
 
+// A sim-réteg (config.js → trackStorage.js) a Colyseus SZERVEREN (Node) is fut,
+// ahol nincs localStorage — ott egy no-op tárolóval helyettesítjük, így minden
+// olvasás null-t ad (a szerver úgyis a szobát létrehozó klienstől kapja a pályát).
+const storage =
+  typeof localStorage !== 'undefined'
+    ? localStorage
+    : { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+
 // A mentett pálya-layout beolvasása. Ha nincs elmentve, vagy hibás, null.
 export function loadCustomLayout() {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = storage.getItem(KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (!Array.isArray(data.layout) || data.layout.length === 0) return null;
@@ -34,7 +42,7 @@ export function loadCustomLayout() {
 // A mentett dekorációk beolvasása. Ha nincs elmentve, vagy hibás, üres tömb.
 export function loadCustomDecorations() {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = storage.getItem(KEY);
     if (!raw) return [];
     const data = JSON.parse(raw);
     return Array.isArray(data.decorations) ? data.decorations : [];
@@ -45,19 +53,19 @@ export function loadCustomDecorations() {
 
 // Pálya + dekorációk mentése az AKTÍV (a játék által betöltött) slotba, név nélkül.
 export function saveCustomTrack(layout, decorations) {
-  localStorage.setItem(KEY, JSON.stringify({ layout, decorations: decorations || [] }));
+  storage.setItem(KEY, JSON.stringify({ layout, decorations: decorations || [] }));
 }
 
 export function clearCustomLayout() {
-  localStorage.removeItem(KEY);
-  localStorage.removeItem(ACTIVE_NAME_KEY);
+  storage.removeItem(KEY);
+  storage.removeItem(ACTIVE_NAME_KEY);
 }
 
 // --- Több, névvel elmentett pálya kezelése ---
 
 function readTrackList() {
   try {
-    const raw = localStorage.getItem(LIST_KEY);
+    const raw = storage.getItem(LIST_KEY);
     const data = raw ? JSON.parse(raw) : {};
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   } catch {
@@ -66,7 +74,7 @@ function readTrackList() {
 }
 
 function writeTrackList(list) {
-  localStorage.setItem(LIST_KEY, JSON.stringify(list));
+  storage.setItem(LIST_KEY, JSON.stringify(list));
 }
 
 // A mentett pályák neve, ábécésorrendben.
@@ -81,7 +89,7 @@ export function saveNamedTrack(name, layout, decorations) {
   list[name] = { layout, decorations: decorations || [] };
   writeTrackList(list);
   saveCustomTrack(layout, decorations);
-  localStorage.setItem(ACTIVE_NAME_KEY, name);
+  storage.setItem(ACTIVE_NAME_KEY, name);
 }
 
 // Egy elmentett pálya betöltése — visszaadja a {layout, decorations} adatot, ÉS
@@ -90,7 +98,7 @@ export function loadNamedTrack(name) {
   const entry = readTrackList()[name];
   if (!entry) return null;
   saveCustomTrack(entry.layout, entry.decorations);
-  localStorage.setItem(ACTIVE_NAME_KEY, name);
+  storage.setItem(ACTIVE_NAME_KEY, name);
   return entry;
 }
 
@@ -100,12 +108,12 @@ export function deleteSavedTrack(name) {
   const list = readTrackList();
   delete list[name];
   writeTrackList(list);
-  if (localStorage.getItem(ACTIVE_NAME_KEY) === name) {
-    localStorage.removeItem(ACTIVE_NAME_KEY);
+  if (storage.getItem(ACTIVE_NAME_KEY) === name) {
+    storage.removeItem(ACTIVE_NAME_KEY);
   }
 }
 
 // A jelenleg aktív (a játék által betöltött) pálya neve, ha van ilyen.
 export function getActiveTrackName() {
-  return localStorage.getItem(ACTIVE_NAME_KEY);
+  return storage.getItem(ACTIVE_NAME_KEY);
 }

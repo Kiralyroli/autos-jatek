@@ -74,8 +74,10 @@ export function loadModelTexture(url) {
 
 // A megadott modellt a fizikai autó méretére igazítja: AUTOMATIKUS skálázás a
 // befoglaló doboz alapján (a leghosszabb vízszintes tengely = CAR.length), a talajra
-// ültetve és középre igazítva. Az orientáció/finomhangolás az ASSETS.car configból.
-export function fitCarModel(model, colormap = null) {
+// ültetve és középre igazítva. Az orientáció/finomhangolás az ASSETS.car configból —
+// kivéve ha a hívó rotationY-t ad meg (a multiplayer raceCar-modellek MÁS tengely
+// mentén állnak, mint a fő car.glb, nekik saját forgatás kell).
+export function fitCarModel(model, colormap = null, rotationY = null) {
   const cfg = ASSETS.car;
 
   model.traverse((o) => {
@@ -100,7 +102,7 @@ export function fitCarModel(model, colormap = null) {
   // Belső "aligner": elforgatjuk (hogy az orra +x felé nézzen), skálázzuk,
   // és a talajra ültetjük (a modell alja y=0-ra, a középpontja az origóra).
   const aligner = new THREE.Group();
-  aligner.rotation.y = cfg.rotationY;
+  aligner.rotation.y = rotationY !== null ? rotationY : cfg.rotationY;
   aligner.scale.setScalar(scale);
   const center = box.getCenter(new THREE.Vector3());
   model.position.set(-center.x, -box.min.y, -center.z);

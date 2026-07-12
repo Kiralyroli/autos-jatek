@@ -8,7 +8,6 @@
 // =============================================================================
 import { Vec2, Box } from 'planck';
 import { CAR, OFFROAD } from '../config.js';
-import { offRoadExcess } from './track.js';
 
 // Lokális tengelyek világkoordinátában:
 //   előre = +x, jobbra (oldalra) = +y
@@ -52,9 +51,12 @@ export function createDriveState() {
 // Egy fizika-lépés input-feldolgozása. A world.step() ELŐTT hívandó.
 //   input: { up, down, left, right, drift } — boolean-ök (lásd input.js)
 //   drive: createDriveState() eredménye — a fű-büntetés perzisztens állapota
-export function updateCar(body, input, dt, drive) {
+//   offRoad: (x, y) => méter az útszélen KÍVÜL (0 = úton) — a hívó pályájából
+//            (kliensen track.js offRoadExcess, szerveren a szoba trackState-je),
+//            így ez a modul környezet- és pálya-független marad.
+export function updateCar(body, input, dt, drive, offRoad) {
   applyLateralTraction(body, input.drift);
-  updateOffRoadPenalty(body, drive);
+  updateOffRoadPenalty(body, drive, offRoad);
   applyDrive(body, input, drive);
   applySteering(body, input);
 }
@@ -62,9 +64,9 @@ export function updateCar(body, input, dt, drive) {
 // Azonnali váltás: a füvön grassThrottle, az úton mindig teljes (1). Az útról a
 // fűre ÁTLÉPÉS pillanatában (nem folyamatosan!) a sebesség is egyszer megvágva
 // entrySpeedFactor-ra — ezért kell a wasOnGrass, hogy csak az átlépéskor süljön el.
-function updateOffRoadPenalty(body, drive) {
+function updateOffRoadPenalty(body, drive, offRoad) {
   const p = body.getPosition();
-  const onGrass = offRoadExcess(p.x, p.y) > 0;
+  const onGrass = offRoad(p.x, p.y) > 0;
   if (onGrass && !drive.wasOnGrass) {
     body.setLinearVelocity(Vec2.mul(body.getLinearVelocity(), OFFROAD.entrySpeedFactor));
   }
