@@ -30,7 +30,8 @@ import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
-import { createRoom, joinRoom, createSnapshotBuffer, createInputSender } from './net/mpClient.js';
+import { createRoom, joinRoom, createSnapshotBuffer } from './net/mpClient.js';
+import { createPredictor } from './net/prediction.js';
 import { loadCustomLayout, loadCustomDecorations, saveCustomTrack } from './trackStorage.js';
 import { TRACK } from './config.js';
 
@@ -223,8 +224,10 @@ async function startMultiplayer(room) {
   menuEl.style.display = 'none';
 
   const buffer = createSnapshotBuffer();
-  const sendInput = createInputSender(room);
   const myId = room.sessionId;
+  // Saját autó: client-side prediction — azonnal reagál a gombokra, a szerver
+  // hivatalos állapota a snapshotokon keresztül korrigálja (reconcile).
+  const predictor = createPredictor(room);
 
   // Távoli (és saját) autó-mesh-ek: id → THREE.Group. A sajátunk a meglévő carMesh.
   const meshes = new Map([[myId, carMesh]]);
@@ -279,7 +282,19 @@ async function startMultiplayer(room) {
     if (m.phase === 'lobby') lobbyEl.style.display = 'flex';
   });
 
-  room.onMessage('snapshot', (s) => buffer.push(s));
+  room.onMessage('snapshot', (s) => {
+    buffer.push(s);
+    // A saját autónk hivatalos szerver-állapota → predikció indítás/korrekció.
+    const meNow = s.players[myId];
+    if (meNow) {
+      if (s.phase === 'racing' && !meNow.finished) {
+        if (!predictor.active) predictor.start(meNow);
+        else predictor.reconcile(meNow);
+      } else if (predictor.active) {
+        predictor.stop(); // cél után/újraindításkor vissza a snapshot-renderre
+      }
+    }
+  });
 
   // Az init (pálya-adatok) a 'ready' üzenetünkre érkezik — ha a szoba pályája
   // eltér a lokálisan felépítettől, ensureTrackMatches ment + újratölt (rejoin).
@@ -307,6 +322,7 @@ async function startMultiplayer(room) {
   // --- MP game loop: snapshot-interpoláció + kamera + HUD + input ---
   let lastCountInt = null;
   let lastPhase = 'lobby';
+  let lastStandingsAt = 0;
   lastTime = performance.now();
 
   function frame(now) {
@@ -329,34 +345,59 @@ async function startMultiplayer(room) {
 
       const me = sampled.players[myId];
       if (me) {
-        // Kamera a saját autón.
-        if (window.__TOP) {
-          camera.position.set(me.x, window.__TOP, me.y + 0.001);
-          camera.lookAt(me.x, 0, me.y);
-        } else {
-          updateCamera(me.x, me.y, me.angle, dt);
+        // Saját input + helyi predikció-lépések (az inputot a predictor küldi a
+        // szervernek, sorszámozva, fix lépésenként).
+        const racingMe = sampled.phase === 'racing' && !me.finished;
+        const input = racingMe ? readInput() : NEUTRAL_INPUT;
+        predictor.frame(dt, input);
+
+        // A saját autó a PREDIKÁLT állapotból renderelődik (azonnali reakció);
+        // ha a predikció nem aktív (countdown/cél után), marad a snapshot-interp.
+        const own = predictor.active ? predictor.renderState(dt) : { x: me.x, y: me.y, angle: me.angle };
+        const myMesh = meshes.get(myId);
+        if (myMesh) {
+          myMesh.position.set(own.x, 0.12, own.y);
+          myMesh.rotation.y = -own.angle;
         }
 
-        // Input csak versenyzés közben (a szerver amúgy is eldobja máskor).
-        const input = sampled.phase === 'racing' && !me.finished ? readInput() : NEUTRAL_INPUT;
-        if (sampled.phase === 'racing') sendInput(input);
+        // Kamera a saját (predikált) autón.
+        if (window.__TOP) {
+          camera.position.set(own.x, window.__TOP, own.y + 0.001);
+          camera.lookAt(own.x, 0, own.y);
+        } else {
+          updateCamera(own.x, own.y, own.angle, dt);
+        }
 
         // HUD: a sim-beli race-objektum "makettje" a saját snapshot-adatainkból.
+        // FONTOS: a `time` a TELJES versenyidő legyen (nem a köridő!) — a HUD a
+        // time<1-ből ismeri fel a rajt utáni "GO!" pillanatot, köridővel minden
+        // körváltásnál újra GO!-t villantana. A futó köridőt a lapStartTime adja
+        // ki (HUD: time - lapStartTime = curLap).
+        const totalTime = me.finished ? me.totalTime : sampled.raceTime ?? 0;
         const fakeRace = {
           phase: me.finished ? 'finished' : sampled.phase === 'lobby' ? 'countdown' : sampled.phase,
           countdownLeft: sampled.countdownLeft,
           lap: me.lap,
-          time: me.finished ? me.totalTime : me.curLap ?? 0,
-          lapStartTime: 0,
+          time: totalTime,
+          lapStartTime: me.finished ? 0 : totalTime - (me.curLap ?? 0),
           lastLapTime: me.lastLap,
           bestLapTime: me.bestLap,
           wrongWay: !!me.wrongWay,
         };
         updateHud(fakeRace);
 
-        if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(me.speed || 0)} km/h`;
+        // Sebesség/hang a HELYI predikcióból, ha aktív (azonnali reakció) —
+        // különben a snapshotból (countdown/cél utáni kigurulás).
+        const ownSpeed = predictor.active ? speedKmh(predictor.body) : me.speed || 0;
+        const ownCornering = predictor.active
+          ? corneringLoad(predictor.body)
+          : me.finished
+            ? 0
+            : me.cornering || 0;
 
-        // Hang: motor a saját sebességből; countdown-bipek a fázisból.
+        if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(ownSpeed)} km/h`;
+
+        // Countdown-bipek a fázisból.
         if (sampled.phase === 'countdown') {
           const c = Math.ceil(sampled.countdownLeft);
           if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
@@ -366,13 +407,17 @@ async function startMultiplayer(room) {
         lastPhase = sampled.phase;
 
         audio.update({
-          speedKmh: me.speed || 0,
-          throttle: sampled.phase === 'racing' && input.up,
-          corneringLoad: 0,
+          speedKmh: ownSpeed,
+          throttle: racingMe && input.up,
+          corneringLoad: ownCornering,
         });
       }
 
-      updateStandings(sampled.players);
+      // Az állás-lista DOM-ját elég 4x/mp újraépíteni (60x/mp felesleges terhelés).
+      if (now - lastStandingsAt > 250) {
+        lastStandingsAt = now;
+        updateStandings(sampled.players);
+      }
     }
 
     renderer.render(scene, camera);
@@ -402,7 +447,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, predictor };
   }
 }
 

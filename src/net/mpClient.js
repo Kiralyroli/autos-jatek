@@ -21,13 +21,20 @@ export async function joinRoom(code, { name }) {
   return client.joinById(code.trim(), { name });
 }
 
-// Snapshot-puffer: a beérkező pillanatképeket helyi órával időbélyegezzük, és
-// a renderelés a (most - interpDelay) időpontra kérdezi le az interpolált állapotot.
+// Snapshot-puffer: a pillanatképeket a SZERVER szimulációs időbélyegével (data.t)
+// rendezzük, és a renderelés a "becsült szerver-most − interpDelay" időpontra kér
+// interpolált állapotot. FONTOS: nem a fogadás helyi idejével dolgozunk — a hálózati
+// csomagok löketekben érkezhetnek (két, sim-időben 50ms-ra lévő snapshot akár 2ms
+// különbséggel), ami a fogadási-idős idővonalat összenyomná/megnyújtaná → szaggatás.
+// A helyi és a szerver-óra közti eltolást EMA-val simítva becsüljük.
 export function createSnapshotBuffer() {
-  const snaps = []; // { t: performance.now(), data }
+  const snaps = []; // { t: szerver-sim-idő (ms), data }
+  let clockOffset = null; // performance.now() − szerver-idő becslés (EMA-simított)
 
   function push(data) {
-    snaps.push({ t: performance.now(), data });
+    const off = performance.now() - data.t;
+    clockOffset = clockOffset === null ? off : clockOffset * 0.9 + off * 0.1;
+    snaps.push({ t: data.t, data });
     if (snaps.length > 30) snaps.shift();
   }
 
@@ -35,7 +42,8 @@ export function createSnapshotBuffer() {
   // Visszatérés: { phase, countdownLeft, players: Map<id, {x,y,angle,...}> } vagy null.
   function sample() {
     if (snaps.length === 0) return null;
-    const rt = performance.now() - NET.interpDelayMs;
+    // Szerver-idővonalon járunk: becsült szerver-most, mínusz az interp-késleltetés.
+    const rt = performance.now() - clockOffset - NET.interpDelayMs;
 
     // A legfrissebb, rt-nél NEM újabb snapshot indexe.
     let i = snaps.length - 1;

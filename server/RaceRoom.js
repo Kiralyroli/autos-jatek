@@ -15,7 +15,7 @@ const { Room } = require('colyseus'); // a colyseus CJS — createRequire-rel t�
 
 import { SIM, TRACK, RACE, NET, DEFAULT_LAYOUT } from '../src/config.js';
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
-import { createWorld } from '../src/sim/world.js';
+import { createWorld, createStepper } from '../src/sim/world.js';
 import {
   createCarBody,
   updateCar,
@@ -23,6 +23,7 @@ import {
   resetCar,
   createDriveState,
   speedKmh,
+  corneringLoad,
 } from '../src/sim/car.js';
 import { createRaceState, raceStep } from '../src/sim/race.js';
 
@@ -53,18 +54,35 @@ export class RaceRoom extends Room {
     this.countdownLeft = 0;
     this.hostId = null;
     this.usedColorIdx = new Set();
+    // A szoba szimulációs órája (s) — a snapshotok időbélyege. A kliens EZZEL
+    // (nem a csomag-fogadás idejével!) interpolál: a hálózati jitter/burst így
+    // nem torzítja az idővonalat (különben szaggatna a mozgás).
+    this.simTime = 0;
 
     this.onMessage('input', (client, msg) => {
       const p = this.players.get(client.sessionId);
       if (!p || this.phase !== 'racing') return;
       // Csak boolean-öket veszünk át — a kliens sosem küldhet erőt/pozíciót.
-      p.input = {
+      const input = {
         up: !!msg?.up,
         down: !!msg?.down,
         left: !!msg?.left,
         right: !!msg?.right,
         drift: !!msg?.drift,
       };
+      // A predikciós kliens SORSZÁMOZOTT inputot küld minden fix lépéséhez —
+      // sorba tesszük, és fizika-lépésenként EGYET fogyasztunk el (így a szerver
+      // pontosan ugyanazt az input-szekvenciát játssza le, mint a kliens helyi
+      // predikciója; a lastSeq a snapshotban megy vissza a reconcile-hoz).
+      const seq = Number.isFinite(msg?.seq) ? msg.seq : null;
+      if (seq !== null && seq > (p.lastQueuedSeq || 0)) {
+        p.lastQueuedSeq = seq;
+        p.inputQueue.push({ seq, input });
+        // Ha a kliens elszaladt (burst/lag utáni bepótlás), a legrégebbieket dobjuk.
+        if (p.inputQueue.length > 30) p.inputQueue.splice(0, p.inputQueue.length - 30);
+      } else if (seq === null) {
+        p.input = input; // sorszám nélküli (régi stílusú) input — azonnal érvényes
+      }
     });
 
     this.onMessage('start', (client) => {
@@ -86,8 +104,23 @@ export class RaceRoom extends Room {
       this.broadcastLobby();
     });
 
-    // 60 Hz fix-lépéses fizika — determinisztikus, mint a kliensen.
-    this.setSimulationInterval((dtMs) => this.simTick(dtMs / 1000), 1000 * SIM.fixedDt);
+    // Fix-lépéses fizika AKKUMULÁTORRAL (ugyanaz a createStepper, mint a kliensen).
+    // FONTOS: a Node/Windows timer nem pontos (a 16.7ms-os interval ~15.6/31.2ms-onként
+    // tüzel felváltva) — ha tüzelésenként pontosan EGY fix lépést tennénk, a
+    // szimulációs óra (snapshot-időbélyeg) és a fizika szétcsúszna, és a kliensen
+    // a látszólagos sebesség folyamatosan ingadozna (= szaggatás). Az akkumulátor
+    // annyi fix lépést futtat, amennyi valós idő ténylegesen eltelt.
+    this.stepper = createStepper();
+    this.setSimulationInterval(
+      (dtMs) =>
+        this.stepper(
+          this.world,
+          dtMs / 1000,
+          (fixedDt) => this.beforeStep(fixedDt),
+          () => this.afterStep()
+        ),
+      1000 * SIM.fixedDt
+    );
 
     // Snapshot-broadcast ritkábban (sávszélesség-kímélés).
     this.snapshotTimer = this.clock.setInterval(
@@ -115,6 +148,9 @@ export class RaceRoom extends Room {
       drive: createDriveState(),
       race: createRaceState(),
       input: { ...NEUTRAL },
+      inputQueue: [], // sorszámozott kliens-inputok (predikció) — lépésenként 1 fogy
+      lastSeq: 0, // az utolsó FELDOLGOZOTT input sorszáma (snapshotban megy vissza)
+      lastQueuedSeq: 0,
       prev: { x: slot.x, y: slot.y },
       finished: false,
       totalTime: null,
@@ -154,6 +190,9 @@ export class RaceRoom extends Room {
       p.drive.throttleMul = 1;
       p.drive.wasOnGrass = false;
       p.input = { ...NEUTRAL };
+      p.inputQueue = [];
+      p.lastSeq = 0;
+      p.lastQueuedSeq = 0;
       p.prev = { x: slot.x, y: slot.y };
       p.finished = false;
       p.totalTime = null;
@@ -165,26 +204,42 @@ export class RaceRoom extends Room {
     this.broadcastLobby();
   }
 
-  simTick(dt) {
+  // Minden fix fizika-lépés ELŐTT: óra, countdown, erők az autókra. A fizika
+  // MINDEN fázisban fut (lobby/countdown: a parkoló autók állnak; finished:
+  // kigurulás coastToStop-pal — enélkül a célba éréskor a világ befagyna, az
+  // autók mozgás közben megdermednének, és a sebesség/motorhang beragadna).
+  beforeStep(dt) {
+    this.simTime += dt; // a snapshot-időbélyeg PONTOSAN a fizika óráját követi
+
     if (this.phase === 'countdown') {
       this.countdownLeft -= dt;
       if (this.countdownLeft <= 0) {
         this.countdownLeft = 0;
         this.phase = 'racing';
       }
-      return;
     }
-    if (this.phase !== 'racing') return;
 
-    // Input/erők minden autóra, MAJD egyetlen közös world.step (az autók
-    // egymással is ütköznek — ugyanabban a Planck világban élnek).
     for (const p of this.players.values()) {
-      if (p.finished) coastToStop(p.body);
-      else updateCar(p.body, p.input, dt, p.drive, this.trackState.offRoadExcess);
+      if (this.phase === 'racing' && !p.finished) {
+        // Lépésenként EGY sorszámozott inputot fogyasztunk (ha van) — ha épp
+        // nincs (kimaradó csomag), az utolsó ismert input marad érvényben.
+        if (p.inputQueue.length > 0) {
+          const q = p.inputQueue.shift();
+          p.input = q.input;
+          p.lastSeq = q.seq;
+        }
+        updateCar(p.body, p.input, dt, p.drive, this.trackState.offRoadExcess);
+      } else {
+        coastToStop(p.body);
+      }
     }
-    this.world.step(SIM.fixedDt, SIM.velocityIterations, SIM.positionIterations);
+  }
 
-    // Verseny-logika játékosonként (checkpoint/kör/cél).
+  // Minden fix fizika-lépés UTÁN: verseny-logika (checkpoint/kör/cél).
+  afterStep() {
+    if (this.phase !== 'racing') return;
+    const dt = SIM.fixedDt;
+
     let allFinished = true;
     let anyFinished = false;
     for (const p of this.players.values()) {
@@ -237,11 +292,19 @@ export class RaceRoom extends Room {
     const players = {};
     for (const [id, p] of this.players.entries()) {
       const pos = p.body.getPosition();
+      const vel = p.body.getLinearVelocity();
       players[id] = {
         x: pos.x,
         y: pos.y,
         angle: p.body.getAngle(),
+        // A saját-autó predikció visszatekeréséhez (reconcile) kell a TELJES
+        // mozgásállapot + az utolsó feldolgozott input sorszáma:
+        vx: vel.x,
+        vy: vel.y,
+        w: p.body.getAngularVelocity(),
+        seq: p.lastSeq,
         speed: speedKmh(p.body),
+        cornering: corneringLoad(p.body), // a kliens gumicsikorgás-hangjához
         lap: p.race.lap,
         ncp: p.race.nextCheckpoint,
         curLap: p.race.time - p.race.lapStartTime, // futó köridő (HUD)
@@ -255,6 +318,7 @@ export class RaceRoom extends Room {
       };
     }
     this.broadcast('snapshot', {
+      t: this.simTime * 1000, // ms — a fizikai állapot szimulációs időbélyege
       phase: this.phase,
       countdownLeft: this.countdownLeft,
       raceTime: this.firstRaceTime(),
