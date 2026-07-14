@@ -13,7 +13,7 @@ export default defineConfig(({ command }) => ({
   // így nem változnak. A kód a hardkódolt '/assets/...' útvonalakat mindenhol az
   // import.meta.env.BASE_URL-lel prefixeli (lásd render3d/assets.js withBase),
   // ez adja mindkét módban a helyes, tényleges elérési utat.
-  base: command === 'build' ? '/autos-jatek/' : '/',
+  base: process.env.VITE_BASE || '/',
   server: {
     port: 5173,
     open: false,

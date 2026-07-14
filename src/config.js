@@ -183,11 +183,13 @@ export const DECORATION_TYPES = {
 
 // Multiplayer hálózat (3. fázis). A kliens ehhez a Colyseus szerverhez csatlakozik.
 // Lokális teszt: `npm run server` (localhost:2567) + két böngészőablak.
-// Élesben (deploy után) a wss:// URL-t kell ide írni.
+// Élesben a szerver (server/index.js) UGYANARRÓL az originről szolgálja ki a
+// lebuildelt klienst is (express.static), ezért a szerver címe egyszerűen a
+// jelenlegi oldal originje — nincs kézzel beírandó URL, bármelyik domainen működik.
 export const NET = {
   serverUrl:
     typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-      ? 'wss://REPLACE-ME-DEPLOY-URL' // ide jön majd a kitett játékszerver címe
+      ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
       : 'ws://localhost:2567',
   snapshotHz: 20, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
   interpDelayMs: 120, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
