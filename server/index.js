@@ -39,7 +39,14 @@ app.get('/api/tracks', (_req, res) => {
 app.get('/api/tracks/:id', (req, res) => {
   const t = getTrack(req.params.id);
   if (!t) return res.status(404).json({ error: 'Nincs ilyen pálya.' });
-  res.json({ id: t.id, name: t.name, layout: t.layout, decorations: t.decorations });
+  res.json({
+    id: t.id,
+    name: t.name,
+    layout: t.layout,
+    decorations: t.decorations,
+    editorPath: t.editorPath,
+    editorDecorations: t.editorDecorations,
+  });
 });
 app.post('/api/tracks', (req, res) => {
   const rec = saveTrack(req.body || {}, Date.now());

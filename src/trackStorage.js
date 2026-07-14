@@ -47,8 +47,28 @@ export function loadCustomDecorations() {
 }
 
 // Pálya + dekorációk mentése az AKTÍV (a játék által betöltött) slotba, név nélkül.
-export function saveCustomTrack(layout, decorations) {
-  storage.setItem(KEY, JSON.stringify({ layout, decorations: decorations || [] }));
+// Az editorView opcionális: { path, decorations } — a szerkesztő pontos (WYSIWYG)
+// rajzolt állapota, hogy újranyitáskor ugyanúgy jelenjen meg (a játék nem használja).
+export function saveCustomTrack(layout, decorations, editorView) {
+  const slot = { layout, decorations: decorations || [] };
+  if (editorView && Array.isArray(editorView.path) && editorView.path.length) {
+    slot.editorPath = editorView.path;
+    slot.editorDecorations = editorView.decorations || [];
+  }
+  storage.setItem(KEY, JSON.stringify(slot));
+}
+
+// A szerkesztő WYSIWYG-nézete az aktív slotból (ha van): { path, decorations }.
+export function loadEditorView() {
+  try {
+    const raw = storage.getItem(KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.editorPath) || data.editorPath.length === 0) return null;
+    return { path: data.editorPath, decorations: data.editorDecorations || [] };
+  } catch {
+    return null;
+  }
 }
 
 export function clearCustomLayout() {
@@ -69,8 +89,8 @@ export function getActiveTrackName() {
 // Az AKTÍV (a játék által betöltendő) pálya beállítása névvel együtt. A globális
 // katalógus a szerveren él (net/trackApi.js) — ez csak a "melyik pálya induljon a
 // játékban most" átadás a config.js felé (az oldal újratöltésekor onnan olvasódik).
-export function setActiveTrack(name, layout, decorations) {
-  saveCustomTrack(layout, decorations);
+export function setActiveTrack(name, layout, decorations, editorView) {
+  saveCustomTrack(layout, decorations, editorView);
   if (name) storage.setItem(ACTIVE_NAME_KEY, name);
   else storage.removeItem(ACTIVE_NAME_KEY);
 }

@@ -18,6 +18,7 @@ import {
   clearCustomLayout,
   loadCustomLayout,
   loadCustomDecorations,
+  loadEditorView,
   setActiveTrack,
   getActiveTrackName,
 } from './trackStorage.js';
@@ -438,14 +439,58 @@ clearBtn.addEventListener('click', () => {
   updateStatus();
 });
 
-// A dekorációkat a rajt-cellához (path[0]) képesti relatív rács-eltolásként mentjük.
-function computeRelDecorations() {
-  return decorations.map((d) => ({
+// Egységvektor → irányindex (kelet=0, dél=1, nyugat=2, észak=3). A rot90 lentebb
+// ezt eggyel növeli.
+function dirIndex(dx, dy) {
+  if (dx > 0) return 0;
+  if (dy > 0) return 1;
+  if (dx < 0) return 2;
+  return 3;
+}
+
+// (x,y) rács-vektor forgatása k negyed-fordulattal: lépésenként (x,y) -> (-y,x).
+function rot90(x, y, k) {
+  let vx = x;
+  let vy = y;
+  const n = ((k % 4) + 4) % 4;
+  for (let i = 0; i < n; i++) {
+    const nx = -vy;
+    const ny = vx;
+    vx = nx;
+    vy = ny;
+  }
+  return { x: vx, y: vy };
+}
+
+// A dekorációkat a rajt-cellához (path[0]) képesti relatív rács-eltolásként mentjük,
+// a KANONIKUS (kelet-kezdésű) tájolásba forgatva.
+//
+// MIÉRT: a szerkesztőben tetszőleges irányba rajzolhatod a pályát, de mentéskor/
+// újranyitáskor (layoutToPath) ÉS a játékban (trackbuilder, TRACK.start.dir=0) a
+// pálya MINDIG kelet-kezdésűre épül fel. Ha a dekorációkat a nyers (rajzolt)
+// eltolással mentenénk, a pálya "elfordulna" a dekorációkhoz képest (a rajzolt
+// pálya és a kanonikus ugyanaz az ALAK, csak elforgatva). Ezért a dekorációkat
+// ugyanazzal a k·90°-os forgatással forgatjuk, amivel a rajzolt pálya kelet-
+// kezdésűre fordul — a forgatás mértékét az ELSŐ lépés iránykülönbségéből olvassuk ki.
+function computeRelDecorations(layout) {
+  const raw = decorations.map((d) => ({
     type: d.type,
     dgx: d.gx - path[0].x,
     dgy: d.gy - path[0].y,
-    rot: d.rot,
+    rot: d.rot || 0,
   }));
+  const canon = layoutToPath(layout);
+  if (canon.length < 2 || path.length < 2) return raw;
+  const drawn = dirIndex(path[1].x - path[0].x, path[1].y - path[0].y);
+  const canonical = dirIndex(canon[1].x - canon[0].x, canon[1].y - canon[0].y);
+  const k = ((canonical - drawn) % 4 + 4) % 4;
+  if (k === 0) return raw;
+  return raw.map((d) => {
+    const r = rot90(d.dgx, d.dgy, k);
+    // A pozíció +k negyed-fordulattal forog (rot90); a Three.js Y-forgatás
+    // ellentétes előjelű, ezért a dekoráció TÁJOLÁSA (rot) -k-val változik.
+    return { type: d.type, dgx: r.x, dgy: r.y, rot: (((d.rot || 0) - k) % 4 + 4) % 4 };
+  });
 }
 
 function gotoGame() {
@@ -454,19 +499,37 @@ function gotoGame() {
   window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
 }
 
+// A szerkesztő PONTOS rajzolt állapota (WYSIWYG) — újranyitáskor ez áll vissza
+// változatlanul (a pálya nem forog el / nem ugrik a sarokba). A játék ezt nem
+// használja, csak a kanonikus layout + decorations adatot.
+function captureEditorView() {
+  return {
+    path: path.map((c) => (c.cornerSize ? { x: c.x, y: c.y, cornerSize: c.cornerSize } : { x: c.x, y: c.y })),
+    decorations: decorations.map((d) => ({ gx: d.gx, gy: d.gy, type: d.type, rot: d.rot })),
+  };
+}
+
 saveBtn.addEventListener('click', async () => {
   const layout = computeLayout();
   if (!layout) return;
-  const relDecorations = computeRelDecorations();
+  const relDecorations = computeRelDecorations(layout);
+  const editorView = captureEditorView();
   const name = trackNameInput.value.trim();
-  // Ez a pálya induljon a játékban (lokális átadás a config.js felé).
-  setActiveTrack(name, layout, relDecorations);
+  // Ez a pálya induljon a játékban (lokális átadás a config.js felé) — a szerkesztő
+  // WYSIWYG-nézetét is elmentjük, hogy visszatérve ugyanígy jelenjen meg.
+  setActiveTrack(name, layout, relDecorations, editorView);
   // Ha van neve, GLOBÁLISAN is elmentjük a szerverre (minden gépről elérhető).
   // Ha a szerver nem elérhető, akkor is elindul lokálisan — csak nem lesz globális.
   if (name) {
     saveBtn.disabled = true;
     try {
-      await apiSaveTrack({ name, layout, decorations: relDecorations });
+      await apiSaveTrack({
+        name,
+        layout,
+        decorations: relDecorations,
+        editorPath: editorView.path,
+        editorDecorations: editorView.decorations,
+      });
     } catch (e) {
       statusEl.textContent = `⚠️ Globális mentés sikertelen (${e.message}). Lokálisan indítom.`;
       statusEl.classList.remove('closed');
@@ -666,12 +729,31 @@ function drawArrow(a, b) {
 // visszaépíti a cella-sorozatot, és a mentett (path[0]-hoz relatív) dekorációkat
 // is elhelyezi. Ugyanezt a logikát használja az induláskori "utoljára aktív
 // pálya" betöltés ÉS a mentett pályák listájának "Betöltés" gombja is.
-function loadLayoutIntoEditor(savedLayout, savedDecorations) {
+function loadLayoutIntoEditor(savedLayout, savedDecorations, editorView) {
   path.length = 0;
   decorations.length = 0;
   closed = false;
   if (!savedLayout) return;
 
+  // WYSIWYG: ha van elmentett szerkesztő-nézet (a rajzolt path + dekorációk), azt
+  // állítjuk vissza VÁLTOZATLANUL — így a pálya pontosan ott és úgy jelenik meg,
+  // ahogy rajzolták (nem forog el kelet-kezdésűre, nem ugrik a sarokba).
+  if (editorView && Array.isArray(editorView.path) && editorView.path.length > 0) {
+    for (const c of editorView.path) {
+      const cell = { x: c.x, y: c.y };
+      if (c.cornerSize) cell.cornerSize = c.cornerSize;
+      path.push(cell);
+    }
+    closed = true;
+    for (const d of editorView.decorations || []) {
+      if (!DECORATION_TYPES[d.type]) continue;
+      decorations.push({ gx: d.gx, gy: d.gy, type: d.type, rot: d.rot });
+    }
+    return;
+  }
+
+  // Visszaesés (régi, editor-nézet nélküli pálya): a layoutból kanonikus
+  // (kelet-kezdésű) alakban építjük vissza — a dekorációk a kanonikus frame-ben.
   const restored = layoutToPath(savedLayout);
 
   // A rács-igazítás: a legkisebb x/y (a pálya VAGY a dekorációk közül) kapjon
@@ -742,9 +824,12 @@ async function renderSavedTracksList() {
     loadBtn.addEventListener('click', async () => {
       try {
         const entry = await apiGetTrack(t.id);
-        loadLayoutIntoEditor(entry.layout, entry.decorations);
+        const editorView = entry.editorPath
+          ? { path: entry.editorPath, decorations: entry.editorDecorations || [] }
+          : null;
+        loadLayoutIntoEditor(entry.layout, entry.decorations, editorView);
         trackNameInput.value = entry.name;
-        setActiveTrack(entry.name, entry.layout, entry.decorations);
+        setActiveTrack(entry.name, entry.layout, entry.decorations, editorView);
         render();
         updateStatus();
         renderSavedTracksList();
@@ -790,11 +875,18 @@ saveAsBtn.addEventListener('click', async () => {
     statusEl.classList.remove('closed');
     return;
   }
-  const relDecorations = computeRelDecorations();
+  const relDecorations = computeRelDecorations(layout);
+  const editorView = captureEditorView();
   saveAsBtn.disabled = true;
   try {
-    await apiSaveTrack({ name, layout, decorations: relDecorations });
-    setActiveTrack(name, layout, relDecorations);
+    await apiSaveTrack({
+      name,
+      layout,
+      decorations: relDecorations,
+      editorPath: editorView.path,
+      editorDecorations: editorView.decorations,
+    });
+    setActiveTrack(name, layout, relDecorations, editorView);
     renderSavedTracksList();
     statusEl.textContent = `✅ "${name}" elmentve globálisan (minden gépről elérhető).`;
     statusEl.classList.add('closed');
@@ -808,7 +900,7 @@ saveAsBtn.addEventListener('click', async () => {
 
 // Induláskor: az utoljára aktív pálya betöltése szerkesztésre (ne kelljen
 // mindig előről kezdeni), és a globális katalógus lekérése a szerverről.
-loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations());
+loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations(), loadEditorView());
 const activeNameOnLoad = getActiveTrackName();
 if (activeNameOnLoad) trackNameInput.value = activeNameOnLoad;
 renderSavedTracksList();

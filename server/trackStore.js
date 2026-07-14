@@ -22,6 +22,7 @@ const FILE = join(DATA_DIR, 'tracks.json');
 const MAX_NAME = 40;
 const MAX_LAYOUT = 1000;
 const MAX_DECOR = 5000;
+const MAX_EDITOR_CELLS = 2000;
 
 let cache = null; // { tracks: [...] } — memóriában, lemezre íráskor szinkronban
 
@@ -50,7 +51,7 @@ function persist() {
 }
 
 // A bejövő pálya-adat megtisztítása/validálása. Hibás adatra null-t ad.
-function sanitize({ name, layout, decorations }) {
+function sanitize({ name, layout, decorations, editorPath, editorDecorations }) {
   if (typeof name !== 'string') return null;
   const cleanName = name.trim().slice(0, MAX_NAME);
   if (!cleanName) return null;
@@ -78,7 +79,32 @@ function sanitize({ name, layout, decorations }) {
       rot: Number(d.rot) || 0,
     }));
 
-  return { name: cleanName, layout: cleanLayout, decorations: cleanDecor };
+  const clean = { name: cleanName, layout: cleanLayout, decorations: cleanDecor };
+
+  // Opcionális "editor-nézet" — a szerkesztőben pontosan úgy jelenjen meg
+  // (tájolás + pozíció), ahogy rajzolták (WYSIWYG). A JÁTÉK ezt figyelmen kívül
+  // hagyja; csak a layout + decorations kanonikus (kelet-kezdésű) adatot használja.
+  if (Array.isArray(editorPath) && editorPath.length > 0 && editorPath.length <= MAX_EDITOR_CELLS) {
+    clean.editorPath = editorPath
+      .filter((c) => c && Number.isFinite(c.x) && Number.isFinite(c.y))
+      .map((c) => {
+        const cell = { x: c.x, y: c.y };
+        if (Number.isFinite(c.cornerSize)) cell.cornerSize = c.cornerSize;
+        return cell;
+      });
+  }
+  if (Array.isArray(editorDecorations) && editorDecorations.length <= MAX_DECOR) {
+    clean.editorDecorations = editorDecorations
+      .filter((d) => d && typeof d.type === 'string')
+      .map((d) => ({
+        gx: Number(d.gx) || 0,
+        gy: Number(d.gy) || 0,
+        type: d.type,
+        rot: Number(d.rot) || 0,
+      }));
+  }
+
+  return clean;
 }
 
 // Metaadat-lista (a katalógushoz) — a nehéz layout/decor NÉLKÜL, névre rendezve.
@@ -113,6 +139,8 @@ export function saveTrack(input, nowMs) {
   if (existing) {
     existing.layout = clean.layout;
     existing.decorations = clean.decorations;
+    existing.editorPath = clean.editorPath;
+    existing.editorDecorations = clean.editorDecorations;
     existing.updatedAt = ts;
     persist();
     return existing;
@@ -122,6 +150,8 @@ export function saveTrack(input, nowMs) {
     name: clean.name,
     layout: clean.layout,
     decorations: clean.decorations,
+    editorPath: clean.editorPath,
+    editorDecorations: clean.editorDecorations,
     createdAt: ts,
     updatedAt: ts,
   };

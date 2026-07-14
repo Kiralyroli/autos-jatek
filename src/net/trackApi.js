@@ -37,11 +37,13 @@ export async function apiGetTrack(id) {
 }
 
 // Pálya mentése/felülírása (névre upsert). Visszaadja: { id, name }.
-export async function apiSaveTrack({ name, layout, decorations }) {
+// Az editorPath/editorDecorations a szerkesztő WYSIWYG-nézete (opcionális) — a
+// játék nem használja, csak a szerkesztő újranyitásakor áll vissza pontosan.
+export async function apiSaveTrack({ name, layout, decorations, editorPath, editorDecorations }) {
   return req('/api/tracks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, layout, decorations }),
+    body: JSON.stringify({ name, layout, decorations, editorPath, editorDecorations }),
   });
 }
 

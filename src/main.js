@@ -128,7 +128,10 @@ async function playWithSelectedTrack(action) {
   try {
     if (id) {
       const t = await apiGetTrack(id);
-      setActiveTrack(t.name, t.layout, t.decorations);
+      const editorView = t.editorPath
+        ? { path: t.editorPath, decorations: t.editorDecorations || [] }
+        : null;
+      setActiveTrack(t.name, t.layout, t.decorations, editorView);
     } else {
       clearCustomLayout(); // "Alap pálya" — a beépített layout
     }
