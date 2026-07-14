@@ -18,12 +18,10 @@ import {
   clearCustomLayout,
   loadCustomLayout,
   loadCustomDecorations,
-  listSavedTracks,
-  saveNamedTrack,
-  loadNamedTrack,
-  deleteSavedTrack,
+  setActiveTrack,
   getActiveTrackName,
 } from './trackStorage.js';
+import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
 import { DECORATION_TYPES } from './config.js';
 
 const GRID_COLS = 20;
@@ -440,27 +438,41 @@ clearBtn.addEventListener('click', () => {
   updateStatus();
 });
 
-saveBtn.addEventListener('click', () => {
-  const layout = computeLayout();
-  if (!layout) return;
-  // A dekorációkat a rajt-cellához (path[0]) képesti relatív rács-eltolásként mentjük.
-  const relDecorations = decorations.map((d) => ({
+// A dekorációkat a rajt-cellához (path[0]) képesti relatív rács-eltolásként mentjük.
+function computeRelDecorations() {
+  return decorations.map((d) => ({
     type: d.type,
     dgx: d.gx - path[0].x,
     dgy: d.gy - path[0].y,
     rot: d.rot,
   }));
-  // Ha van megadott név, névvel is elmentjük (bekerül/frissül a listában),
-  // különben csak az aktív (névtelen) slotba — mindkét esetben ez indul a játékban.
-  const name = trackNameInput.value.trim();
-  if (name) {
-    saveNamedTrack(name, layout, relDecorations);
-  } else {
-    saveCustomTrack(layout, relDecorations);
-  }
+}
+
+function gotoGame() {
   // Gyökér-relatív útvonal helyett BASE_URL-lel prefixelve, hogy GitHub Pages
   // al-útvonalán (/autos-jatek/) is a helyes index.html-re navigáljon.
   window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
+}
+
+saveBtn.addEventListener('click', async () => {
+  const layout = computeLayout();
+  if (!layout) return;
+  const relDecorations = computeRelDecorations();
+  const name = trackNameInput.value.trim();
+  // Ez a pálya induljon a játékban (lokális átadás a config.js felé).
+  setActiveTrack(name, layout, relDecorations);
+  // Ha van neve, GLOBÁLISAN is elmentjük a szerverre (minden gépről elérhető).
+  // Ha a szerver nem elérhető, akkor is elindul lokálisan — csak nem lesz globális.
+  if (name) {
+    saveBtn.disabled = true;
+    try {
+      await apiSaveTrack({ name, layout, decorations: relDecorations });
+    } catch (e) {
+      statusEl.textContent = `⚠️ Globális mentés sikertelen (${e.message}). Lokálisan indítom.`;
+      statusEl.classList.remove('closed');
+    }
+  }
+  gotoGame();
 });
 
 resetDefaultBtn.addEventListener('click', () => {
@@ -687,51 +699,77 @@ function loadLayoutIntoEditor(savedLayout, savedDecorations) {
   }
 }
 
-// --- Mentett pályák listája (mentés névvel, betöltés, törlés) ---
+// --- Globális pálya-katalógus (a szerverről: betöltés szerkesztésre, törlés) ---
 
-function renderSavedTracksList() {
+async function renderSavedTracksList() {
   savedTracksListEl.innerHTML = '';
-  const names = listSavedTracks();
+  const loading = document.createElement('p');
+  loading.textContent = 'Betöltés…';
+  savedTracksListEl.appendChild(loading);
+
+  let tracks;
+  try {
+    tracks = await apiListTracks();
+  } catch (e) {
+    savedTracksListEl.innerHTML = '';
+    const err = document.createElement('p');
+    err.textContent = `⚠️ A szerver nem elérhető (${e.message}).`;
+    savedTracksListEl.appendChild(err);
+    return;
+  }
+
+  savedTracksListEl.innerHTML = '';
   const activeName = getActiveTrackName();
-  if (names.length === 0) {
+  if (tracks.length === 0) {
     const empty = document.createElement('p');
-    empty.textContent = 'Még nincs névvel mentett pálya.';
+    empty.textContent = 'Még nincs globálisan mentett pálya.';
     savedTracksListEl.appendChild(empty);
     return;
   }
-  for (const name of names) {
+  for (const t of tracks) {
     const row = document.createElement('div');
     row.className = 'savedTrackRow';
 
     const label = document.createElement('span');
     label.className = 'savedTrackName';
-    label.textContent = (name === activeName ? '▶ ' : '') + name;
+    label.textContent = (t.name === activeName ? '▶ ' : '') + t.name;
+    label.title = `${t.segments} szakasz, ${t.decorations} dekoráció`;
     row.appendChild(label);
 
     const loadBtn = document.createElement('button');
     loadBtn.textContent = '📂';
     loadBtn.title = 'Betöltés szerkesztésre';
-    loadBtn.addEventListener('click', () => {
-      const entry = loadNamedTrack(name);
-      if (!entry) return;
-      loadLayoutIntoEditor(entry.layout, entry.decorations);
-      trackNameInput.value = name;
-      render();
-      updateStatus();
-      renderSavedTracksList();
-      statusEl.textContent = `📂 "${name}" betöltve szerkesztésre.`;
-      statusEl.classList.add('closed');
+    loadBtn.addEventListener('click', async () => {
+      try {
+        const entry = await apiGetTrack(t.id);
+        loadLayoutIntoEditor(entry.layout, entry.decorations);
+        trackNameInput.value = entry.name;
+        setActiveTrack(entry.name, entry.layout, entry.decorations);
+        render();
+        updateStatus();
+        renderSavedTracksList();
+        statusEl.textContent = `📂 "${entry.name}" betöltve szerkesztésre.`;
+        statusEl.classList.add('closed');
+      } catch (e) {
+        statusEl.textContent = `⚠️ Betöltés sikertelen: ${e.message}`;
+        statusEl.classList.remove('closed');
+      }
     });
     row.appendChild(loadBtn);
 
     const delBtn = document.createElement('button');
     delBtn.textContent = '🗑️';
     delBtn.className = 'danger';
-    delBtn.title = 'Törlés';
-    delBtn.addEventListener('click', () => {
-      if (!confirm(`Biztosan törlöd a(z) "${name}" pályát? Ez nem vonható vissza.`)) return;
-      deleteSavedTrack(name);
-      renderSavedTracksList();
+    delBtn.title = 'Törlés (mindenkinél!)';
+    delBtn.addEventListener('click', async () => {
+      if (!confirm(`Biztosan törlöd a(z) "${t.name}" pályát? Ez MINDENKINÉL törli, és nem vonható vissza.`)) return;
+      try {
+        await apiDeleteTrack(t.id);
+        renderSavedTracksList();
+      } catch (e) {
+        statusEl.textContent = `⚠️ Törlés sikertelen: ${e.message}`;
+        statusEl.classList.remove('closed');
+      }
     });
     row.appendChild(delBtn);
 
@@ -739,7 +777,7 @@ function renderSavedTracksList() {
   }
 }
 
-saveAsBtn.addEventListener('click', () => {
+saveAsBtn.addEventListener('click', async () => {
   const name = trackNameInput.value.trim();
   if (!name) {
     statusEl.textContent = 'Adj nevet a pályának a mentéshez!';
@@ -752,20 +790,24 @@ saveAsBtn.addEventListener('click', () => {
     statusEl.classList.remove('closed');
     return;
   }
-  const relDecorations = decorations.map((d) => ({
-    type: d.type,
-    dgx: d.gx - path[0].x,
-    dgy: d.gy - path[0].y,
-    rot: d.rot,
-  }));
-  saveNamedTrack(name, layout, relDecorations);
-  renderSavedTracksList();
-  statusEl.textContent = `✅ "${name}" néven elmentve.`;
-  statusEl.classList.add('closed');
+  const relDecorations = computeRelDecorations();
+  saveAsBtn.disabled = true;
+  try {
+    await apiSaveTrack({ name, layout, decorations: relDecorations });
+    setActiveTrack(name, layout, relDecorations);
+    renderSavedTracksList();
+    statusEl.textContent = `✅ "${name}" elmentve globálisan (minden gépről elérhető).`;
+    statusEl.classList.add('closed');
+  } catch (e) {
+    statusEl.textContent = `⚠️ Globális mentés sikertelen: ${e.message}`;
+    statusEl.classList.remove('closed');
+  } finally {
+    saveAsBtn.disabled = false;
+  }
 });
 
 // Induláskor: az utoljára aktív pálya betöltése szerkesztésre (ne kelljen
-// mindig előről kezdeni), és a mentett pályák listájának felépítése.
+// mindig előről kezdeni), és a globális katalógus lekérése a szerverről.
 loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations());
 const activeNameOnLoad = getActiveTrackName();
 if (activeNameOnLoad) trackNameInput.value = activeNameOnLoad;

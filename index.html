@@ -142,7 +142,8 @@
         font-size: 13px;
         color: #a8adb8;
       }
-      .overlay input {
+      .overlay input,
+      .overlay select {
         width: 100%;
         box-sizing: border-box;
         padding: 10px 12px;
@@ -152,6 +153,7 @@
         color: #e8eaef;
         font-size: 15px;
       }
+      .overlay select { cursor: pointer; }
       .overlay button {
         padding: 12px 14px;
         font-size: 15px;
@@ -237,6 +239,10 @@
         <h1>🏎️ Autós játék</h1>
         <label for="playerName">Neved</label>
         <input id="playerName" maxlength="20" placeholder="Játékos" />
+        <label for="trackSelect">Pálya</label>
+        <select id="trackSelect">
+          <option value="">🏁 Alap pálya (beépített)</option>
+        </select>
         <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
         <hr />
         <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>

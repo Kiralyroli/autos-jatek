@@ -32,7 +32,15 @@ import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
 import { createRoom, joinRoom, createSnapshotBuffer } from './net/mpClient.js';
 import { createPredictor } from './net/prediction.js';
-import { loadCustomLayout, loadCustomDecorations, saveCustomTrack } from './trackStorage.js';
+import {
+  loadCustomLayout,
+  loadCustomDecorations,
+  saveCustomTrack,
+  setActiveTrack,
+  clearCustomLayout,
+  getActiveTrackName,
+} from './trackStorage.js';
+import { apiListTracks, apiGetTrack } from './net/trackApi.js';
 import { TRACK } from './config.js';
 
 // --- Közös megjelenítés (mindkét módhoz) ---
@@ -73,12 +81,74 @@ const nameInput = document.getElementById('playerName');
 const menuStatus = document.getElementById('menuStatus');
 const lobbyStatus = document.getElementById('lobbyStatus');
 
+const trackSelect = document.getElementById('trackSelect');
+
 nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
 
 function playerName() {
   const n = nameInput.value.trim() || 'Játékos';
   localStorage.setItem('autos-jatek:playerName', n);
   return n;
+}
+
+// A jelenleg BETÖLTÖTT pálya aláírása (config.js ezt olvasta induláskor a
+// localStorage aktív slotjából). Ha a menüben másik pályát választunk, ehhez
+// hasonlítunk: eltérés esetén újratöltés kell, hogy a config.js/track.js az új
+// pályával épüljön fel (a rejoin-mintát követve).
+const initialTrackSig = JSON.stringify({
+  l: loadCustomLayout(),
+  d: loadCustomDecorations(),
+});
+
+// A főmenü pálya-választójának feltöltése a globális katalógusból.
+async function populateTrackSelect() {
+  let tracks = [];
+  try {
+    tracks = await apiListTracks();
+  } catch {
+    return; // szerver nem elérhető — marad csak az "Alap pálya" opció
+  }
+  const activeName = getActiveTrackName();
+  for (const t of tracks) {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.name;
+    if (t.name === activeName) opt.selected = true;
+    trackSelect.appendChild(opt);
+  }
+}
+
+// A kiválasztott pálya alkalmazása, majd a kért akció (egyjátékos / szoba).
+// Ha az új pálya eltér a jelenleg betöltöttől, elmentjük aktívnak és újratöltünk
+// egy "pending" akcióval — az oldal újratöltése után a config.js már az új
+// pályával épül, és a pending akció automatikusan lefut.
+async function playWithSelectedTrack(action) {
+  const id = trackSelect.value;
+  menuStatus.textContent = 'Pálya betöltése…';
+  try {
+    if (id) {
+      const t = await apiGetTrack(id);
+      setActiveTrack(t.name, t.layout, t.decorations);
+    } else {
+      clearCustomLayout(); // "Alap pálya" — a beépített layout
+    }
+  } catch (e) {
+    menuStatus.textContent = `Nem sikerült a pálya betöltése: ${e.message || 'ismeretlen hiba'}`;
+    return;
+  }
+  menuStatus.textContent = '';
+
+  const sig = JSON.stringify({ l: loadCustomLayout(), d: loadCustomDecorations() });
+  if (sig !== initialTrackSig) {
+    sessionStorage.setItem(
+      'autos-jatek:pending',
+      JSON.stringify({ action, name: playerName() })
+    );
+    window.location.reload();
+    return;
+  }
+  if (action === 'single') startSingleplayer();
+  else doCreate();
 }
 
 // --- Üresjárati render (amíg a menüben vagyunk): lassan körbeforgó kamera ---
@@ -480,19 +550,30 @@ async function doJoin(code) {
   }
 }
 
-// --- Indulás: rejoin (pálya-csere utáni reload), vagy főmenü ---
-document.getElementById('btnSingle').onclick = () => startSingleplayer();
-document.getElementById('btnCreate').onclick = () => doCreate();
+// --- Indulás: rejoin / pending pálya-akció (reload után), vagy főmenü ---
+document.getElementById('btnSingle').onclick = () => playWithSelectedTrack('single');
+document.getElementById('btnCreate').onclick = () => playWithSelectedTrack('create');
 document.getElementById('btnJoin').onclick = () =>
   doJoin(document.getElementById('joinCode').value);
 
 const rejoinRaw = sessionStorage.getItem('autos-jatek:mp-rejoin');
+const pendingRaw = sessionStorage.getItem('autos-jatek:pending');
 if (rejoinRaw) {
+  // Multiplayer visszalépés a szoba pályájára váltó reload után.
   sessionStorage.removeItem('autos-jatek:mp-rejoin');
   const { code, name } = JSON.parse(rejoinRaw);
   nameInput.value = name;
   doJoin(code);
+} else if (pendingRaw) {
+  // A menüben választott pálya alkalmazása utáni reload — a config.js már az új
+  // pályával épült, most lefuttatjuk a halasztott akciót.
+  sessionStorage.removeItem('autos-jatek:pending');
+  const { action, name } = JSON.parse(pendingRaw);
+  nameInput.value = name;
+  if (action === 'single') startSingleplayer();
+  else doCreate();
 } else {
   menuEl.style.display = 'flex';
+  populateTrackSelect();
 }
 requestAnimationFrame(idleFrame);
