@@ -97,15 +97,19 @@ export const CAR = {
   maxForwardSpeed: 39, // ~140 km/h
   maxReverseSpeed: 10, // ~36 km/h
 
-  // Kormányzás
-  maxSteerAngularVel: 3.2, // rad/s — teljes sebességnél a maximális fordulási ráta
-  steerSpeedRef: 14, // m/s — e sebesség felett teljes a kormányzás; alatta arányosan kevesebb
-  steerReleaseDamping: 0.9, // kormány elengedésekor a pörgés csillapítása / lépés
-
-  // Tapadás — EZ a vezetési élmény kulcsa (lásd CLAUDE.md).
-  // 1.0 = az oldalirányú (csúszó) sebességet teljesen kioltjuk minden lépésben.
-  lateralGripNormal: 1.0, // normál tapadás: kanyarban nem csúszik
-  lateralGripDrift: 0.28, // drift közben: az oldaltapadás szándékos részleges elengedése
+  // Kormányzás + tapadás — KÉTTENGELYES GUMI-MODELL (sim/car.js applyTireFriction).
+  // Az autót az ELFORDÍTOTT ELSŐ KEREKEK oldalirányú tapadási impulzusa fordítja
+  // (a hátsó tengely körül kanyarodik be, mint a valóságban) — nincs "beállított"
+  // forgási ráta. A tapadási határ felett a gumi megcsúszik: elöl alulkormányzottság,
+  // hátul (driftnél) kitörő far — mind a fizikából adódik.
+  wheelbase: 2.6, // m — tengelytáv; a két tengelypont a tömegközépponttól ±wheelbase/2
+  maxSteerAngle: 0.5, // rad (~29°) — a kerekek maximális elfordulása
+  steerSpeed: 3.5, // rad/s — milyen gyorsan fordul BE a kormány (teljes kitérés ~0.15 s)
+  steerReturnSpeed: 6.0, // rad/s — elengedéskor/ellenkormányzáskor gyorsabb visszaállás
+  maxLateralAccel: 18, // m/s² (~1.8g, sportos) — kanyar-tapadási határ (tengelyenként a fele);
+  //                      ez adja a minimális fordulókört: r = v²/a (pl. 20 m/s-nél ~22 m)
+  lateralGripDrift: 0.28, // drift (Space): a HÁTSÓ tengely tapadás-szorzója — kézifék-effekt
+  steerReleaseDamping: 0.9, // (coastToStop) cél utáni kigurulásnál a pörgés csillapítása / lépés
 
   // Gördülési/légellenállás (a forward sebességgel arányos fékező erő szorzója).
   // Kicsi érték: a csúcssebességet a maxForwardSpeed clamp adja, nem a drag.
