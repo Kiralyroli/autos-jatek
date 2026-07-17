@@ -10,7 +10,14 @@ function fmt(seconds) {
   return m > 0 ? `${m}:${s.toFixed(2).padStart(5, '0')}` : `${s.toFixed(2)} s`;
 }
 
+// Helyezés → "1." + hely-emoji (dobogó az első 3-nak).
+function placeLabel(place) {
+  const medal = place === 1 ? '🥇 ' : place === 2 ? '🥈 ' : place === 3 ? '🥉 ' : '';
+  return `${medal}${place}. helyezés`;
+}
+
 export function createHud(onRestart) {
+  const raceInfoEl = document.getElementById('raceinfo');
   const lapEl = document.getElementById('lap');
   const timeEl = document.getElementById('laptime');
   const bestEl = document.getElementById('bestlap');
@@ -21,14 +28,18 @@ export function createHud(onRestart) {
   if (onRestart) restartEl.addEventListener('click', onRestart);
 
   return function updateHud(race) {
+    raceInfoEl.style.display = 'flex'; // updateHud csak játék közben fut
     wrongWayEl.style.display =
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
-    restartEl.style.display = race.phase === 'finished' ? 'block' : 'none';
-    lapEl.textContent = `Kör: ${race.lap}/${race.totalLaps || RACE.laps}`;
+    // A cél utáni "Új verseny" gombot MP-ben a végeredmény-panel váltja ki (main.js).
+    restartEl.style.display =
+      race.phase === 'finished' && !race.hideRestart ? 'block' : 'none';
+
+    lapEl.textContent = `${race.lap}/${race.totalLaps || RACE.laps}`;
     const current =
       race.phase === 'racing' ? race.time - race.lapStartTime : race.lastLapTime;
-    timeEl.textContent = `Köridő: ${fmt(current)}`;
-    bestEl.textContent = `Legjobb: ${fmt(race.bestLapTime)}`;
+    timeEl.textContent = fmt(current);
+    bestEl.textContent = fmt(race.bestLapTime);
 
     // Középső overlay: visszaszámlálás → GO! → (verseny közben semmi) → cél-eredmény.
     if (race.phase === 'countdown') {
@@ -41,9 +52,11 @@ export function createHud(onRestart) {
       cdEl.textContent = 'GO!';
     } else if (race.phase === 'finished') {
       cdEl.style.display = 'flex';
-      cdEl.style.fontSize = '44px';
+      cdEl.style.fontSize = '40px';
+      // MP: a célba éréskor a HELYEZÉS a fő üzenet; SP: sima "Cél!".
+      const head = race.place ? `🏁 ${placeLabel(race.place)}!` : '🏁 Cél!';
       cdEl.innerHTML =
-        `🏁 Cél!<br>Összidő: ${fmt(race.time)}<br>Legjobb kör: ${fmt(race.bestLapTime)}`;
+        `${head}<br>Összidő: ${fmt(race.time)}<br>Legjobb kör: ${fmt(race.bestLapTime)}`;
     } else {
       cdEl.style.display = 'none';
     }

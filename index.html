@@ -40,12 +40,75 @@
         color: #7fb0ff;
         pointer-events: auto;
       }
-      #race {
-        margin-top: 6px;
-        padding-top: 6px;
-        border-top: 1px solid rgba(255, 255, 255, 0.2);
+      /* Kör- és időkijelző — felül középen, jól látható. */
+      #raceinfo {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 18px;
+        font-family: system-ui, sans-serif;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px 20px;
+        border-radius: 12px;
+        pointer-events: none;
+        user-select: none;
+        font-variant-numeric: tabular-nums;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+      }
+      #raceinfo .ri-lap {
+        font-size: 30px;
+        font-weight: 800;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      #raceinfo .ri-lap #lap { font-size: 34px; }
+      #raceinfo .ri-times {
+        border-left: 1px solid rgba(255, 255, 255, 0.22);
+        padding-left: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      #raceinfo .ri-row { font-size: 18px; }
+      #raceinfo .ri-row b { font-weight: 700; }
+      #raceinfo .ri-best b { color: #ffd54a; }
+      #raceinfo .ri-label {
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: #b6bac4;
+        text-transform: uppercase;
+      }
+      /* Végeredmény-lista (a #results overlay panelben). */
+      #resultsList {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 4px 0 8px;
         font-variant-numeric: tabular-nums;
       }
+      #resultsList .res {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: #262a35;
+        border-radius: 8px;
+        padding: 9px 12px;
+        font-size: 15px;
+      }
+      #resultsList .res.me { background: #2e3a4f; outline: 1px solid #4a6a9e; }
+      #resultsList .res .pos {
+        font-weight: 800;
+        font-size: 17px;
+        min-width: 26px;
+        text-align: center;
+      }
+      #resultsList .res .rname { flex: 1; font-weight: 600; }
+      #resultsList .res .rtime { color: #b6bac4; }
+      #resultsList .res .dnf { color: #d9663f; }
       #countdown {
         position: fixed;
         inset: 0;
@@ -220,15 +283,20 @@
       Gyorsítás: <kbd>W</kbd> / <kbd>↑</kbd> &nbsp; Fék/tolatás: <kbd>S</kbd> / <kbd>↓</kbd><br />
       Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
       <span id="speed">Sebesség: 0 km/h</span>
-      <div id="race">
-        <span id="lap">Kör: –</span> &nbsp;
-        <span id="laptime">Köridő: –</span> &nbsp;
-        <span id="bestlap">Legjobb: –</span>
-      </div>
       <div style="margin-top: 6px;">
         <a href="./editor.html">🏗️ Pálya szerkesztése</a>
       </div>
     </div>
+
+    <!-- Kör- és időkijelző (jól látható, felül középen) -->
+    <div id="raceinfo">
+      <div class="ri-lap"><span class="ri-label">KÖR</span> <span id="lap">–</span></div>
+      <div class="ri-times">
+        <div class="ri-row"><span class="ri-label">Köridő</span> <b id="laptime">–</b></div>
+        <div class="ri-row ri-best"><span class="ri-label">🏆 Legjobb</span> <b id="bestlap">–</b></div>
+      </div>
+    </div>
+
     <div id="countdown"></div>
     <div id="wrongway">
       <span class="sign">⛔</span>
@@ -274,6 +342,16 @@
 
     <!-- Élő állás (multiplayer verseny közben) -->
     <div id="standings"></div>
+
+    <!-- Végeredmény (verseny vége — teljes helyezés-lista) -->
+    <div id="results" class="overlay">
+      <div class="panel">
+        <h1>🏁 Végeredmény</h1>
+        <div id="resultsList"></div>
+        <button id="btnResultsAgain" class="primary" style="display:none">🔄 Új verseny</button>
+        <button id="btnResultsLeave">← Vissza a menübe</button>
+      </div>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

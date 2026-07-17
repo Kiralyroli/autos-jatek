@@ -27,6 +27,7 @@ import { loadDecorations } from './render3d/decorations.js';
 import { addGrassField } from './render3d/grassField.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
 import { setupWheels } from './render3d/wheels.js';
+import { createNameplate } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
@@ -311,6 +312,15 @@ const MP_CAR_MODELS = [
   '/assets/track/raceCarOrange.glb',
   '/assets/track/raceCarWhite.glb',
 ];
+// A színindexekhez tartozó jelölő-színek (névtábla-pötty, lobbi/állás-ikon: 🔴🟢🟠⚪).
+const CAR_COLORS = ['#ff4b3e', '#3a9d40', '#e08a2a', '#e6e8ec'];
+
+// Játékosnév biztonságos beszúrása HTML-be (a végeredmény-listához).
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 // A szoba pályája a MI lokálisan felépített pályánk-e? Ha nem, elmentjük a
 // szerverét aktívnak, és újratöltjük az oldalt (a pálya-render a betöltéskor
@@ -350,13 +360,15 @@ async function startMultiplayer(room) {
   // Kerék-animátorok id-nként (gördülés + kormányzás). A sajátunk a fő carWheels.
   const wheelAnims = new Map([[myId, carWheels]]);
 
-  async function ensureMesh(id, colorIdx) {
+  async function ensureMesh(id, colorIdx, name) {
     if (meshes.has(id) || loadingMeshes.has(id)) return;
     loadingMeshes.add(id);
     const model = await loadModel(MP_CAR_MODELS[colorIdx % MP_CAR_MODELS.length]);
     // A raceCar-ok a TRACK-kit atlaszát használják (nem a fő autóét), a hossz-
     // tengelyük viszont ugyanúgy z (mérve), így a config-beli forgatás jó nekik.
     const group = model ? fitCarModel(model, trackColormapTex) : new THREE.Group();
+    // A TÖBBI játékos autója fölé lebegő névtábla (a sajátunk fölé nem kell).
+    if (id !== myId) group.add(createNameplate(name, CAR_COLORS[colorIdx % CAR_COLORS.length]));
     scene.add(group);
     meshes.set(id, group);
     wheelAnims.set(id, setupWheels(group));
@@ -380,6 +392,50 @@ async function startMultiplayer(room) {
   const btnLeave = document.getElementById('btnLeave');
   let isHost = false;
   let roomPhase = 'lobby';
+
+  // --- Végeredmény-panel (verseny vége) ---
+  const resultsEl = document.getElementById('results');
+  const resultsListEl = document.getElementById('resultsList');
+  const btnResultsAgain = document.getElementById('btnResultsAgain');
+  const btnResultsLeave = document.getElementById('btnResultsLeave');
+  let resultsShown = false;
+  btnResultsAgain.onclick = () => room.send('start'); // host: új verseny ugyanabban a szobában
+  btnResultsLeave.onclick = () => {
+    room.leave();
+    window.location.reload();
+  };
+
+  // A teljes helyezés-lista kirajzolása és a panel megjelenítése (egyszer/verseny).
+  function showResults(players) {
+    if (resultsShown) return;
+    resultsShown = true;
+    const list = Object.values(players).sort((a, b) => {
+      if (a.finished && b.finished) return a.place - b.place; // célba értek: helyezés szerint
+      if (a.finished) return -1;
+      if (b.finished) return 1;
+      // DNF-ek egymás közt: aki messzebb jutott, előrébb.
+      if (a.lap !== b.lap) return b.lap - a.lap;
+      return b.ncp - a.ncp;
+    });
+    resultsListEl.innerHTML = list
+      .map((p, i) => {
+        const pos = p.finished ? `${p.place}.` : '–';
+        const medal = p.place === 1 ? '🥇' : p.place === 2 ? '🥈' : p.place === 3 ? '🥉' : '';
+        const time = p.finished
+          ? `<span class="rtime">${p.totalTime.toFixed(2)} s</span>`
+          : `<span class="dnf">DNF</span>`;
+        const meCls = p.name === playerName() ? ' me' : '';
+        const dot = `<span style="color:${CAR_COLORS[p.colorIdx % CAR_COLORS.length]}">●</span>`;
+        return `<div class="res${meCls}"><span class="pos">${medal || pos}</span>${dot}<span class="rname">${escapeHtml(p.name)}</span>${time}</div>`;
+      })
+      .join('');
+    btnResultsAgain.style.display = isHost ? 'block' : 'none';
+    resultsEl.style.display = 'flex';
+  }
+  function hideResults() {
+    resultsShown = false;
+    resultsEl.style.display = 'none';
+  }
 
   room.onMessage('lobby', (m) => {
     isHost = m.hostId === myId;
@@ -456,7 +512,7 @@ async function startMultiplayer(room) {
 
       removeStaleMeshes(sampled.players);
       for (const [id, p] of Object.entries(sampled.players)) {
-        ensureMesh(id, p.colorIdx);
+        ensureMesh(id, p.colorIdx, p.name);
         const mesh = meshes.get(id);
         if (!mesh) continue;
         mesh.position.set(p.x, 0.12, p.y);
@@ -521,6 +577,8 @@ async function startMultiplayer(room) {
           lastLapTime: me.lastLap,
           bestLapTime: me.bestLap,
           wrongWay: !!me.wrongWay,
+          place: me.place || null, // hányadikként értünk célba (a szervertől)
+          hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
         };
         updateHud(fakeRace);
 
@@ -556,6 +614,10 @@ async function startMultiplayer(room) {
         lastStandingsAt = now;
         updateStandings(sampled.players);
       }
+
+      // Verseny vége → teljes végeredmény-panel; új verseny indításakor eltűnik.
+      if (sampled.phase === 'finished') showResults(sampled.players);
+      else hideResults();
     }
 
     renderer.render(scene, camera);

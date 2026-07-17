@@ -158,6 +158,7 @@ export class RaceRoom extends Room {
       prev: { x: slot.x, y: slot.y },
       finished: false,
       totalTime: null,
+      place: null, // hányadikként ért célba (1-től) — a célvonal átlépés sorrendje
     });
 
     // Az init-adatokat (pálya stb.) NEM itt küldjük, hanem a kliens 'ready'
@@ -201,10 +202,12 @@ export class RaceRoom extends Room {
       p.prev = { x: slot.x, y: slot.y };
       p.finished = false;
       p.totalTime = null;
+      p.place = null;
     }
     this.phase = 'countdown';
     this.countdownLeft = RACE.countdownSeconds;
     this.finishTimeout = 0;
+    this.finishedCount = 0; // hányan értek eddig célba (a helyezés-sorszámhoz)
     this.lock(); // verseny közben nem csatlakozhat új játékos
     this.broadcastLobby();
   }
@@ -255,6 +258,7 @@ export class RaceRoom extends Room {
         if (p.race.phase === 'finished') {
           p.finished = true;
           p.totalTime = p.race.time;
+          p.place = ++this.finishedCount; // a célvonal átlépés sorrendje = helyezés
         } else {
           allFinished = false;
         }
@@ -318,6 +322,7 @@ export class RaceRoom extends Room {
         wrongWay: p.race.wrongWay,
         finished: p.finished,
         totalTime: p.totalTime,
+        place: p.place,
         name: p.name,
         colorIdx: p.colorIdx,
       };
