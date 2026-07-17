@@ -16,6 +16,7 @@ import {
   coastToStop,
   resetCar,
   speedKmh,
+  forwardSpeed,
   corneringLoad,
   createDriveState,
 } from './sim/car.js';
@@ -25,6 +26,7 @@ import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './rend
 import { loadDecorations } from './render3d/decorations.js';
 import { addGrassField } from './render3d/grassField.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
+import { setupWheels } from './render3d/wheels.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
@@ -41,7 +43,9 @@ import {
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack } from './net/trackApi.js';
-import { TRACK } from './config.js';
+import { TRACK, CAR } from './config.js';
+import { isDevMode } from './devmode.js';
+import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
 // --- Közös megjelenítés (mindkét módhoz) ---
 const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
@@ -49,6 +53,7 @@ const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
 );
 
 let trackColormapTex = null; // a TRACK-kit színatlasza — a multiplayer raceCar-okhoz
+let carWheels = { update() {} }; // az egyjátékos autó kerék-animátora (modell betöltése után)
 (async () => {
   const [carModel, carColormap, trackColormap, asphaltTex] = await Promise.all([
     loadModel(ASSETS.car.url),
@@ -57,7 +62,11 @@ let trackColormapTex = null; // a TRACK-kit színatlasza — a multiplayer raceC
     loadTexture(ASSETS.textures.asphalt, 1),
   ]);
   trackColormapTex = trackColormap;
-  if (carModel) setCarModel(carMesh, fitCarModel(carModel, carColormap));
+  if (carModel) {
+    const holder = fitCarModel(carModel, carColormap);
+    setCarModel(carMesh, holder);
+    carWheels = setupWheels(holder);
+  }
   applyTexture(asphaltMesh, asphaltTex);
 })();
 
@@ -82,6 +91,19 @@ const menuStatus = document.getElementById('menuStatus');
 const lobbyStatus = document.getElementById('lobbyStatus');
 
 const trackSelect = document.getElementById('trackSelect');
+
+// --- Dev mód (?dev=1): pálya-szerkesztő link + élő autó-hangoló panel ---
+// A szerkesztő linkje csak dev módban látszik (maga az editor.html is átirányít
+// dev mód nélkül). A hangoló csúszkák a CAR-t élőben mutálják (lásd tuning.js);
+// a mentett hangolást már induláskor alkalmazzuk, hogy a játék azzal fusson.
+const editorLink = document.querySelector('#hud a[href*="editor"]');
+let tuningPanel = null;
+if (isDevMode()) {
+  loadCarTuning();
+  tuningPanel = createTuningPanel();
+} else if (editorLink) {
+  editorLink.parentElement.style.display = 'none';
+}
 
 nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
 
@@ -229,6 +251,7 @@ function startSingleplayer() {
 
     carMesh.position.set(x, 0.12, z);
     carMesh.rotation.y = -angle;
+    carWheels.update(forwardSpeed(carBody), drive.steer, dt);
 
     if (window.__TOP) {
       camera.position.set(x, window.__TOP, z + 0.001);
@@ -296,6 +319,11 @@ async function startMultiplayer(room) {
   mode = 'multi';
   menuEl.style.display = 'none';
 
+  // Multiplayerben a helyi CAR-hangolás predikció-hibát okozna (a szerver az
+  // ALAP értékekkel szimulál) — visszaállunk az alapra, a hangoló panel eltűnik.
+  resetCarToDefaults();
+  if (tuningPanel) tuningPanel.hide();
+
   const buffer = createSnapshotBuffer();
   const myId = room.sessionId;
   // Saját autó: client-side prediction — azonnal reagál a gombokra, a szerver
@@ -305,6 +333,8 @@ async function startMultiplayer(room) {
   // Távoli (és saját) autó-mesh-ek: id → THREE.Group. A sajátunk a meglévő carMesh.
   const meshes = new Map([[myId, carMesh]]);
   const loadingMeshes = new Set();
+  // Kerék-animátorok id-nként (gördülés + kormányzás). A sajátunk a fő carWheels.
+  const wheelAnims = new Map([[myId, carWheels]]);
 
   async function ensureMesh(id, colorIdx) {
     if (meshes.has(id) || loadingMeshes.has(id)) return;
@@ -315,6 +345,7 @@ async function startMultiplayer(room) {
     const group = model ? fitCarModel(model, trackColormapTex) : new THREE.Group();
     scene.add(group);
     meshes.set(id, group);
+    wheelAnims.set(id, setupWheels(group));
     loadingMeshes.delete(id);
   }
 
@@ -323,6 +354,7 @@ async function startMultiplayer(room) {
       if (id !== myId && !players[id]) {
         scene.remove(mesh);
         meshes.delete(id);
+        wheelAnims.delete(id);
       }
     }
   }
@@ -414,6 +446,18 @@ async function startMultiplayer(room) {
         if (!mesh) continue;
         mesh.position.set(p.x, 0.12, p.y);
         mesh.rotation.y = -p.angle;
+        // Távoli autók kerekei a snapshotból: gördülés az előre-sebességből,
+        // kormányszög becslése a bicikli-modell inverzéből (δ ≈ atan(ω·L / v)).
+        if (id !== myId) {
+          const anim = wheelAnims.get(id);
+          if (anim) {
+            const fwd = p.vx * Math.cos(p.angle) + p.vy * Math.sin(p.angle);
+            const spd = Math.hypot(p.vx, p.vy);
+            let steer = spd > 1 ? Math.atan((p.w * CAR.wheelbase) / spd) : 0;
+            steer = Math.max(-CAR.maxSteerAngle, Math.min(CAR.maxSteerAngle, steer));
+            anim.update(fwd, steer, dt);
+          }
+        }
       }
 
       const me = sampled.players[myId];
@@ -432,6 +476,10 @@ async function startMultiplayer(room) {
         if (myMesh) {
           myMesh.position.set(own.x, 0.12, own.y);
           myMesh.rotation.y = -own.angle;
+        }
+        // Saját kerekek: a predikált (helyi) állapotból — azonnali, pontos.
+        if (predictor.active) {
+          carWheels.update(forwardSpeed(predictor.body), predictor.steerAngle, dt);
         }
 
         // Kamera a saját (predikált) autón.

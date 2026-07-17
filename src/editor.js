@@ -24,6 +24,14 @@ import {
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
 import { DECORATION_TYPES } from './config.js';
+import { isDevMode } from './devmode.js';
+
+// A pálya-szerkesztő CSAK dev módban érhető el (?dev=1 a játék URL-jén) —
+// enélkül vissza a játékhoz. A throw megállítja a modul további futását.
+if (!isDevMode()) {
+  window.location.replace(import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html');
+  throw new Error('A pálya-szerkesztő csak dev módban érhető el (?dev=1).');
+}
 
 const GRID_COLS = 20;
 const GRID_ROWS = 14;

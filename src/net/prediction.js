@@ -119,6 +119,9 @@ export function createPredictor(room) {
     get active() {
       return active;
     },
+    get steerAngle() {
+      return drive.steer; // a kerék-animációhoz (render3d/wheels.js)
+    },
     body, // a hangokhoz (speedKmh/corneringLoad) — azonnali, helyi állapot
 
     start(me) {
@@ -129,6 +132,7 @@ export function createPredictor(room) {
       corr.x = corr.y = corr.a = 0;
       drive.throttleMul = 1;
       drive.wasOnGrass = false;
+      drive.steer = 0;
       setBodyState(me);
       const s = snap();
       prev.x = curr.x = s.x;
@@ -227,6 +231,7 @@ export function createPredictor(room) {
       };
       const fThrottle = drive.throttleMul;
       const fGrass = drive.wasOnGrass;
+      const fSteer = drive.steer;
 
       // "Hiteles most": szerver-állapot + a még nyugtázatlan inputok újrajátszása.
       while (pending.length && pending[0].seq <= (me.seq || 0)) pending.shift();
@@ -265,6 +270,7 @@ export function createPredictor(room) {
       body.setAngularVelocity(F.w);
       drive.throttleMul = fThrottle;
       drive.wasOnGrass = fGrass;
+      drive.steer = fSteer;
 
       prev.x += dx;
       prev.y += dy;
