@@ -39,6 +39,10 @@ export class RaceRoom extends Room {
       : DEFAULT_LAYOUT;
     this.layout = layout;
     this.decorations = Array.isArray(options?.decorations) ? options.decorations : [];
+    // A szoba körszáma — a létrehozó (host) választja; korlátozva 1..50-re.
+    this.laps = Number.isFinite(options?.laps)
+      ? Math.max(1, Math.min(50, Math.round(options.laps)))
+      : RACE.laps;
 
     this.trackState = createTrackState(layout, {
       tile: TRACK.tile,
@@ -98,7 +102,7 @@ export class RaceRoom extends Room {
       client.send('init', {
         layout: this.layout,
         decorations: this.decorations,
-        laps: RACE.laps,
+        laps: this.laps,
         code: this.roomId,
       });
       this.broadcastLobby();
@@ -146,7 +150,7 @@ export class RaceRoom extends Room {
       colorIdx,
       body,
       drive: createDriveState(),
-      race: createRaceState(),
+      race: createRaceState(this.laps),
       input: { ...NEUTRAL },
       inputQueue: [], // sorszámozott kliens-inputok (predikció) — lépésenként 1 fogy
       lastSeq: 0, // az utolsó FELDOLGOZOTT input sorszáma (snapshotban megy vissza)
@@ -184,11 +188,12 @@ export class RaceRoom extends Room {
     for (const p of this.players.values()) {
       const slot = spawnSlot(this.trackState, i++);
       resetCar(p.body, slot.x, slot.y, slot.angle);
-      Object.assign(p.race, createRaceState());
+      Object.assign(p.race, createRaceState(this.laps));
       p.race.phase = 'racing'; // a countdownt a SZOBA vezérli, nem a per-játékos state
       p.race.time = 0;
       p.drive.throttleMul = 1;
       p.drive.wasOnGrass = false;
+      p.drive.steer = 0;
       p.input = { ...NEUTRAL };
       p.inputQueue = [];
       p.lastSeq = 0;

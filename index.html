@@ -154,6 +154,9 @@
         font-size: 15px;
       }
       .overlay select { cursor: pointer; }
+      /* A szám-mező natív léptető-nyilai a sötét témához igazodjanak (ne fehér
+         háttéren fehér nyilak legyenek). */
+      .overlay input[type="number"] { color-scheme: dark; }
       .overlay button {
         padding: 12px 14px;
         font-size: 15px;
@@ -243,6 +246,8 @@
         <select id="trackSelect">
           <option value="">🏁 Alap pálya (beépített)</option>
         </select>
+        <label for="lapsInput">Körök száma</label>
+        <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
         <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
         <hr />
         <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>

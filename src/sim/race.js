@@ -8,11 +8,14 @@
 import { RACE } from '../config.js';
 
 // Kezdőállapot. Minden mező szerializálható (JSON-ba írható → hálón küldhető).
-export function createRaceState() {
+// `totalLaps`: a verseny hossza körökben — a rajtnál választható (menü/host);
+// ha nincs megadva, a config alapértéke (RACE.laps). A raceStep EZT használja.
+export function createRaceState(totalLaps) {
   return {
     phase: 'countdown', // 'countdown' → 'racing' → 'finished'
     countdownLeft: RACE.countdownSeconds, // s — hátralévő visszaszámlálás
     time: 0, // s — versenyidő a GO óta (finished után áll)
+    totalLaps: totalLaps || RACE.laps, // ennyi kör után van cél
     lap: 1, // aktuális kör (1-től)
     nextCheckpoint: 1, // a KÖVETKEZŐ átszelendő checkpoint indexe (0 = célvonal)
     lapStartTime: 0, // s — az aktuális kör kezdete (versenyidőben)
@@ -97,7 +100,7 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints) {
     state.bestLapTime = lapTime;
   }
 
-  if (state.lap >= RACE.laps) {
+  if (state.lap >= state.totalLaps) {
     state.phase = 'finished';
     events.push({ type: 'finish', totalTime: state.time });
   } else {

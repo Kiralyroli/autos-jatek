@@ -91,6 +91,7 @@ const menuStatus = document.getElementById('menuStatus');
 const lobbyStatus = document.getElementById('lobbyStatus');
 
 const trackSelect = document.getElementById('trackSelect');
+const lapsInput = document.getElementById('lapsInput');
 
 // --- Dev mód (?dev=1): pálya-szerkesztő link + élő autó-hangoló panel ---
 // A szerkesztő linkje csak dev módban látszik (maga az editor.html is átirányít
@@ -106,11 +107,22 @@ if (isDevMode()) {
 }
 
 nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
+lapsInput.value = localStorage.getItem('autos-jatek:laps') || '3';
 
 function playerName() {
   const n = nameInput.value.trim() || 'Játékos';
   localStorage.setItem('autos-jatek:playerName', n);
   return n;
+}
+
+// A választott körszám (a menü legördülőjéből). Perzisztálva, hogy az egyjátékos
+// pálya-váltás miatti reload (playWithSelectedTrack) után is megmaradjon.
+function chosenLaps() {
+  const n = parseInt(lapsInput.value, 10);
+  const laps = Number.isFinite(n) && n >= 1 && n <= 50 ? n : 3;
+  lapsInput.value = String(laps); // érvénytelen/üres bevitel esetén visszaírjuk
+  localStorage.setItem('autos-jatek:laps', String(laps));
+  return laps;
 }
 
 // A jelenleg BETÖLTÖTT pálya aláírása (config.js ezt olvasta induláskor a
@@ -200,7 +212,8 @@ function startSingleplayer() {
   const world = createWorld();
   const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
   const stepper = createStepper();
-  const race = createRaceState();
+  const laps = chosenLaps();
+  const race = createRaceState(laps);
   const drive = createDriveState();
 
   const prev = { x: spawn.x, y: spawn.y, angle: spawn.angle };
@@ -219,7 +232,7 @@ function startSingleplayer() {
 
   onRestartClick = () => {
     resetCar(carBody, spawn.x, spawn.y, spawn.angle);
-    Object.assign(race, createRaceState());
+    Object.assign(race, createRaceState(laps));
     Object.assign(drive, createDriveState());
     prev.x = curr.x = spawn.x;
     prev.y = curr.y = spawn.y;
@@ -326,6 +339,7 @@ async function startMultiplayer(room) {
 
   const buffer = createSnapshotBuffer();
   const myId = room.sessionId;
+  let mpTotalLaps = RACE.laps; // a szoba körszáma (az init üzenetből)
   // Saját autó: client-side prediction — azonnal reagál a gombokra, a szerver
   // hivatalos állapota a snapshotokon keresztül korrigálja (reconcile).
   const predictor = createPredictor(room);
@@ -404,6 +418,7 @@ async function startMultiplayer(room) {
   // Az init (pálya-adatok) a 'ready' üzenetünkre érkezik — ha a szoba pályája
   // eltér a lokálisan felépítettől, ensureTrackMatches ment + újratölt (rejoin).
   room.onMessage('init', (init) => {
+    if (Number.isFinite(init.laps)) mpTotalLaps = init.laps;
     ensureTrackMatches(init, room.roomId);
   });
 
@@ -501,6 +516,7 @@ async function startMultiplayer(room) {
           countdownLeft: sampled.countdownLeft,
           lap: me.lap,
           time: totalTime,
+          totalLaps: mpTotalLaps,
           lapStartTime: me.finished ? 0 : totalTime - (me.curLap ?? 0),
           lastLapTime: me.lastLap,
           bestLapTime: me.bestLap,
@@ -562,7 +578,7 @@ async function startMultiplayer(room) {
         const icon = ['🔴', '🟢', '🟠', '⚪'][p.colorIdx % 4];
         const info = p.finished
           ? `🏁 ${p.totalTime.toFixed(2)} s`
-          : `${p.lap}/${RACE.laps}. kör`;
+          : `${p.lap}/${mpTotalLaps}. kör`;
         return `<div>${i + 1}. ${icon} ${p.name} — ${info}</div>`;
       })
       .join('');
@@ -580,6 +596,7 @@ async function doCreate() {
       name: playerName(),
       layout: loadCustomLayout(),
       decorations: loadCustomDecorations(),
+      laps: chosenLaps(),
     });
     startMultiplayer(room);
   } catch (e) {

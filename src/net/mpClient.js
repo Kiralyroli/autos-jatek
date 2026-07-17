@@ -11,9 +11,9 @@ import { NET } from '../config.js';
 import { lerp, lerpAngle } from '../utils.js';
 
 // Csatlakozás + szoba létrehozás/belépés. Visszatérés: a Colyseus room objektum.
-export async function createRoom({ name, layout, decorations }) {
+export async function createRoom({ name, layout, decorations, laps }) {
   const client = new Client(NET.serverUrl);
-  return client.create('race', { name, layout, decorations });
+  return client.create('race', { name, layout, decorations, laps });
 }
 
 export async function joinRoom(code, { name }) {

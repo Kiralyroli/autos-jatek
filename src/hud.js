@@ -24,7 +24,7 @@ export function createHud(onRestart) {
     wrongWayEl.style.display =
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
     restartEl.style.display = race.phase === 'finished' ? 'block' : 'none';
-    lapEl.textContent = `Kör: ${race.lap}/${RACE.laps}`;
+    lapEl.textContent = `Kör: ${race.lap}/${race.totalLaps || RACE.laps}`;
     const current =
       race.phase === 'racing' ? race.time - race.lapStartTime : race.lastLapTime;
     timeEl.textContent = `Köridő: ${fmt(current)}`;
