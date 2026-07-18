@@ -9,7 +9,7 @@
 // =============================================================================
 import { SIM, ASSETS, RACE } from './config.js';
 import { createWorld, createStepper } from './sim/world.js';
-import { spawn, checkpoints, offRoadExcess } from './sim/track.js';
+import { spawn, checkpoints, offRoadExcess, trackHeadingAt } from './sim/track.js';
 import {
   createCarBody,
   updateCar,
@@ -298,7 +298,7 @@ function startSingleplayer() {
     curr.angle = carBody.getAngle();
     // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → a kör érvénytelen.
     const offTrack = isFullyOffRoad(carBody, offRoadExcess);
-    raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack);
+    raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
   }
 
   onRestartClick = () => {
@@ -477,9 +477,8 @@ async function startMultiplayer(room) {
       if (a.finished && b.finished) return a.place - b.place; // célba értek: helyezés szerint
       if (a.finished) return -1;
       if (b.finished) return 1;
-      // DNF-ek egymás közt: aki messzebb jutott, előrébb.
-      if (a.lap !== b.lap) return b.lap - a.lap;
-      return b.ncp - a.ncp;
+      // DNF-ek egymás közt: aki messzebb jutott (kör + folytonos pálya-progressz), előrébb.
+      return (b.lap + (b.progress || 0)) - (a.lap + (a.progress || 0));
     });
     resultsListEl.innerHTML = list
       .map((p, i) => {
@@ -700,8 +699,13 @@ async function startMultiplayer(room) {
       if (a.finished && b.finished) return a.totalTime - b.totalTime;
       if (a.finished) return -1;
       if (b.finished) return 1;
-      if (a.lap !== b.lap) return b.lap - a.lap;
-      return b.ncp - a.ncp;
+      // Kör + folytonos (ívhossz-arányos) pálya-progressz — NEM a durva checkpoint-
+      // indexet (ncp) nézzük. Az ncp csak néhány milestone-ot ismer: ha két játékos
+      // épp ugyanazt célozza, sorrendjük a régi kódban esetlegesen (tie-break)
+      // dőlt el, akkor is, ha valójában jelentős távolság volt köztük — ez okozta,
+      // hogy az állás néha megugrott/villogott, főleg a checkpointok köré eső
+      // kanyaroknál, anélkül hogy a tényleges sorrend változott volna.
+      return (b.lap + (b.progress || 0)) - (a.lap + (a.progress || 0));
     });
     standingsEl.style.display = roomPhase === 'lobby' ? 'none' : 'flex';
     standingsEl.innerHTML = list

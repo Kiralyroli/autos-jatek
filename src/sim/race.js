@@ -30,18 +30,24 @@ export function createRaceState(totalLaps) {
   };
 }
 
-// Rossz irány detektálás: elfelé mozog-e az autó a következő checkpointtól.
-// Türelmi idővel (graceSeconds), hogy egy kanyarbeli megcsúszás ne riasszon.
-function updateWrongWay(state, prevPos, currPos, dt, checkpoints) {
-  const cp = checkpoints[state.nextCheckpoint];
-  const mid = { x: (cp.a.x + cp.b.x) / 2, y: (cp.a.y + cp.b.y) / 2 };
+// Rossz irány detektálás: a haladási irány SZEMBEN áll-e a pálya HELYI (a jelenlegi
+// pozícióhoz legközelebbi középvonal-ponton mért) haladási irányával. Türelmi idővel
+// (graceSeconds), hogy egy kanyarbeli megcsúszás ne riasszon.
+//
+// KORÁBBAN a következő checkpointra mutató EGYENES vonalat néztük — ez kanyarban
+// megbízhatatlan volt: a checkpoint a kanyar túloldalán lehet, így a hozzá mutató
+// "légvonal" irány jelentősen eltérhet a tényleges útiránytól, ami hamis "rossz
+// irány" jelzést adott pont a kanyarokban. A pálya helyi iránya (trackDirAt) ehelyett
+// mindig a tényleges, ott érvényes haladási irány — kanyarban is megbízható.
+function updateWrongWay(state, prevPos, currPos, dt, trackDirAt) {
   const mvx = currPos.x - prevPos.x;
   const mvy = currPos.y - prevPos.y;
   const speed = Math.hypot(mvx, mvy) / dt;
 
-  const movingAway =
-    speed >= RACE.wrongWay.minSpeed &&
-    mvx * (mid.x - currPos.x) + mvy * (mid.y - currPos.y) < 0;
+  const heading = trackDirAt(currPos.x, currPos.y);
+  const tdx = Math.cos(heading);
+  const tdy = Math.sin(heading);
+  const movingAway = speed >= RACE.wrongWay.minSpeed && mvx * tdx + mvy * tdy < 0;
 
   state.wrongWaySeconds = movingAway ? state.wrongWaySeconds + dt : 0;
   state.wrongWay = state.wrongWaySeconds >= RACE.wrongWay.graceSeconds;
@@ -70,7 +76,9 @@ function segmentsCross(p1, p2, q1, q2) {
 // (fűre tért / sarkot vágott). Ha a kör ALATT bármikor igaz, a kör érvénytelen lesz
 // (lapValid=false), és a köridő NEM számít a legjobbhoz. A hívó ezt az offRoadExcess-ből
 // számolja (kliensen track.js, szerveren a szoba trackState-je) egy tűréshatárral.
-export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = false) {
+// `trackDirAt` (x,y)=>rad: a pálya helyi haladási iránya — a rossz-irány
+// detektáláshoz (kliensen track.js trackHeadingAt, szerveren a trackState-je).
+export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = false, trackDirAt) {
   const events = [];
 
   if (state.phase === 'countdown') {
@@ -87,7 +95,7 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = fa
 
   state.time += dt;
   if (offTrack) state.lapValid = false; // letért a pályáról → az egész kör érvénytelen
-  updateWrongWay(state, prevPos, currPos, dt, checkpoints);
+  if (trackDirAt) updateWrongWay(state, prevPos, currPos, dt, trackDirAt);
 
   // Csak a SORON KÖVETKEZŐ checkpoint átszelése számít — a sorrend így kikényszerített.
   const cp = checkpoints[state.nextCheckpoint];

@@ -266,7 +266,7 @@ export class RaceRoom extends Room {
       if (!p.finished) {
         // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → érvénytelen.
         const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess, this.car);
-        raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack);
+        raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack, this.trackState.trackHeadingAt);
         if (p.race.phase === 'finished') {
           p.finished = true;
           p.totalTime = p.race.time;
@@ -328,6 +328,11 @@ export class RaceRoom extends Room {
         cornering: corneringLoad(p.body), // a kliens gumicsikorgás-hangjához
         lap: p.race.lap,
         ncp: p.race.nextCheckpoint,
+        // Folytonos (ívhossz-arányos) pálya-menti pozíció [0,1) — az ÉLŐ ÁLLÁS
+        // rangsorolásához. A checkpoint-index (ncp) önmagában túl durva: két
+        // játékos gyakran UGYANAZT a checkpointot célozza, miközben valójában
+        // jelentős pálya-menti távolság van köztük — ez okozta a sorrend-villogást.
+        progress: this.trackState.trackProgress(pos.x, pos.y),
         curLap: p.race.time - p.race.lapStartTime, // futó köridő (HUD)
         lastLap: p.race.lastLapTime,
         bestLap: p.race.bestLapTime,

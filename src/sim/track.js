@@ -22,6 +22,7 @@ export const track = trackState.track;
 export const spawn = trackState.spawn;
 export const checkpoints = trackState.checkpoints;
 export const offRoadExcess = trackState.offRoadExcess;
+export const trackHeadingAt = trackState.trackHeadingAt;
 
 // Réteg-távolságok a középvonaltól (méter) — a render-réteg használja.
 export const ROAD_HALF = trackState.roadHalf;
