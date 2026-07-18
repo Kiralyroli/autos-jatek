@@ -85,6 +85,9 @@ export function fitCarModel(model, colormap = null, rotationY = null) {
       o.castShadow = true;
       o.receiveShadow = true;
       // A Kenney színatlasz kézi rátétele (a GLB belső textúra-hivatkozása helyett).
+      // A versenyautók (raceCar*) TEXTÚRA NÉLKÜLIEK — a színük az anyag
+      // baseColorFactor-ában van, ezért NEKIK nem adunk colormapet (skip), így
+      // megmarad a natív piros/zöld/narancs/fehér színük.
       if (colormap && o.material) {
         o.material.map = colormap;
         o.material.color.set(0xffffff);

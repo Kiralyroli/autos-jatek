@@ -51,6 +51,22 @@ export const ASSETS = {
   },
 };
 
+// Választható autók (menü autó-választó). A játékos-index (colorIdx a hálón) EZ a
+// lista indexe — így multiplayerben mindenki a másik VÁLASZTOTT autóját látja.
+//   model: a GLB útvonala.
+//   color/icon: a névtábla/állás jelölőszíne és ikonja.
+//   colormap: HA a modell TEXTÚRÁS (Car Kit, pl. car.glb) — ekkor a Kenney
+//     szín-atlaszt rá kell tenni. A Racing Kit versenyautói TEXTÚRA NÉLKÜLIEK
+//     (anyag-baseColor a színük), nekik nincs colormap → a natív színük marad.
+// A kétféle Kit így KEVERHETŐ egy listában (lásd main.js setPlayerCar/ensureMesh).
+export const CARS = [
+  { name: 'Piros', model: '/assets/track/raceCarRed.glb', color: '#ff4b3e', icon: '🔴' },
+  { name: 'Zöld', model: '/assets/track/raceCarGreen.glb', color: '#3a9d40', icon: '🟢' },
+  { name: 'Narancs', model: '/assets/track/raceCarOrange.glb', color: '#e08a2a', icon: '🟠' },
+  { name: 'Fehér', model: '/assets/track/raceCarWhite.glb', color: '#e6e8ec', icon: '⚪' },
+  { name: 'Gokart', model: '/assets/car.glb', color: '#5a86d8', icon: '🔵', colormap: '/assets/car-colormap.png' },
+];
+
 // Hang (Web Audio API). Valós hangfájl HA van (ASSETS.sounds), különben szintetizált.
 export const AUDIO = {
   masterVolume: 0.5,

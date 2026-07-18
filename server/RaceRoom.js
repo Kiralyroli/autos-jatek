@@ -57,7 +57,6 @@ export class RaceRoom extends Room {
     this.phase = 'lobby'; // 'lobby' | 'countdown' | 'racing' | 'finished'
     this.countdownLeft = 0;
     this.hostId = null;
-    this.usedColorIdx = new Set();
     // A szoba szimulációs órája (s) — a snapshotok időbélyege. A kliens EZZEL
     // (nem a csomag-fogadás idejével!) interpolál: a hálózati jitter/burst így
     // nem torzítja az idővonalat (különben szaggatna a mozgás).
@@ -136,10 +135,13 @@ export class RaceRoom extends Room {
   onJoin(client, options) {
     if (!this.hostId) this.hostId = client.sessionId;
 
-    // Első szabad szín-index (0-3) — a kliens ebből választ autó-modellt.
-    let colorIdx = 0;
-    while (this.usedColorIdx.has(colorIdx)) colorIdx++;
-    this.usedColorIdx.add(colorIdx);
+    // A játékos által VÁLASZTOTT autó indexe (a kliens CARS listájából). A szerver
+    // csak egy kis, nemnegatív egészként őrzi (a kliens CARS.length-re modulózza),
+    // duplikáció megengedett — mindenki azt látja, amit a másik választott.
+    const colorIdx =
+      Number.isInteger(options?.carIdx) && options.carIdx >= 0 && options.carIdx < 32
+        ? options.carIdx
+        : 0;
 
     const slotIdx = this.players.size;
     const slot = spawnSlot(this.trackState, slotIdx);
@@ -169,7 +171,6 @@ export class RaceRoom extends Room {
   onLeave(client) {
     const p = this.players.get(client.sessionId);
     if (p) {
-      this.usedColorIdx.delete(p.colorIdx);
       this.world.destroyBody(p.body);
       this.players.delete(client.sessionId);
     }

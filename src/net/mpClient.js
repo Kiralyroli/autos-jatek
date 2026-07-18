@@ -11,14 +11,14 @@ import { NET } from '../config.js';
 import { lerp, lerpAngle } from '../utils.js';
 
 // Csatlakozás + szoba létrehozás/belépés. Visszatérés: a Colyseus room objektum.
-export async function createRoom({ name, layout, decorations, laps }) {
+export async function createRoom({ name, layout, decorations, laps, carIdx }) {
   const client = new Client(NET.serverUrl);
-  return client.create('race', { name, layout, decorations, laps });
+  return client.create('race', { name, layout, decorations, laps, carIdx });
 }
 
-export async function joinRoom(code, { name }) {
+export async function joinRoom(code, { name, carIdx }) {
   const client = new Client(NET.serverUrl);
-  return client.joinById(code.trim(), { name });
+  return client.joinById(code.trim(), { name, carIdx });
 }
 
 // Snapshot-puffer: a pillanatképeket a SZERVER szimulációs időbélyegével (data.t)

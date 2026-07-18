@@ -217,6 +217,36 @@
         font-size: 15px;
       }
       .overlay select { cursor: pointer; }
+      /* Autó-választó kártyák. */
+      #carSelect {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      #carSelect .carswatch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 10px;
+        font-size: 14px;
+        border: 1px solid #33363f;
+        border-radius: 8px;
+        background: #1a1c23;
+        color: #e8eaef;
+        cursor: pointer;
+      }
+      #carSelect .carswatch:hover { background: #262a35; }
+      #carSelect .carswatch.active {
+        border-color: #3a9d40;
+        background: #223026;
+      }
+      #carSelect .carswatch .dot {
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        flex-shrink: 0;
+      }
       /* A szám-mező natív léptető-nyilai a sötét témához igazodjanak (ne fehér
          háttéren fehér nyilak legyenek). */
       .overlay input[type="number"] { color-scheme: dark; }
@@ -316,6 +346,8 @@
         </select>
         <label for="lapsInput">Körök száma</label>
         <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
+        <label>Autó</label>
+        <div id="carSelect"></div>
         <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
         <hr />
         <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>

@@ -44,7 +44,7 @@ import {
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack } from './net/trackApi.js';
-import { TRACK, CAR } from './config.js';
+import { TRACK, CAR, CARS } from './config.js';
 import { isDevMode } from './devmode.js';
 import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
@@ -53,23 +53,42 @@ const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
   document.getElementById('game')
 );
 
-let trackColormapTex = null; // a TRACK-kit színatlasza — a multiplayer raceCar-okhoz
-let carWheels = { update() {} }; // az egyjátékos autó kerék-animátora (modell betöltése után)
-(async () => {
-  const [carModel, carColormap, trackColormap, asphaltTex] = await Promise.all([
-    loadModel(ASSETS.car.url),
-    loadModelTexture(ASSETS.car.colormap),
-    loadModelTexture('/assets/textures/colormap.png'),
-    loadTexture(ASSETS.textures.asphalt, 1),
-  ]);
-  trackColormapTex = trackColormap;
-  if (carModel) {
-    const holder = fitCarModel(carModel, carColormap);
-    setCarModel(carMesh, holder);
-    carWheels = setupWheels(holder);
-  }
-  applyTexture(asphaltMesh, asphaltTex);
+// A menüben választott autó indexe (CARS lista) — perzisztálva. A saját autó
+// modellje (SP + MP) ÉS multiplayerben a hálón küldött választás is ez.
+let selectedCar = (() => {
+  const n = parseInt(localStorage.getItem('autos-jatek:carIdx') || '0', 10);
+  return Number.isInteger(n) && n >= 0 && n < CARS.length ? n : 0;
 })();
+
+let carColormapTex = null; // a Car Kit (textúrás) autókhoz — a Racing Kit-eseknek nem kell
+let carWheels = { update() {} }; // a saját autó kerék-animátora (modell betöltése után)
+(async () => {
+  const [asphaltTex, carColormap] = await Promise.all([
+    loadTexture(ASSETS.textures.asphalt, 1),
+    loadModelTexture(ASSETS.car.colormap),
+  ]);
+  carColormapTex = carColormap;
+  applyTexture(asphaltMesh, asphaltTex);
+  await setPlayerCar(selectedCar); // a menüben választott autó betöltése a carMesh-be
+})();
+
+// Egy CARS-elem betöltött modelljét a saját kit-je szerint készíti el: a TEXTÚRÁS
+// (Car Kit, colormap-es) autóra rátesszük a szín-atlaszt, a Racing Kit versenyautók
+// a natív anyag-színükkel maradnak (colormap nélkül) — lásd config.CARS.
+function buildCarHolder(car, model) {
+  if (!model) return new THREE.Group();
+  return fitCarModel(model, car.colormap ? carColormapTex : null);
+}
+
+// A saját autó (carMesh) modelljét a választott CARS-elemre cseréli — az üresjárati
+// menü-előnézet ÉS az egyjátékos/multiplayer saját autó is ezt használja.
+async function setPlayerCar(idx) {
+  const car = CARS[idx % CARS.length];
+  const model = await loadModel(car.model);
+  const holder = buildCarHolder(car, model);
+  setCarModel(carMesh, holder);
+  carWheels = setupWheels(holder);
+}
 
 loadTrackTiles(scene);
 addGrassField(scene);
@@ -93,6 +112,28 @@ const lobbyStatus = document.getElementById('lobbyStatus');
 
 const trackSelect = document.getElementById('trackSelect');
 const lapsInput = document.getElementById('lapsInput');
+const carSelectEl = document.getElementById('carSelect');
+
+// Autó-választó: a CARS listából kattintható kártyák. A választás perzisztál, a
+// 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar).
+function renderCarSelect() {
+  carSelectEl.innerHTML = '';
+  CARS.forEach((c, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'carswatch' + (i === selectedCar ? ' active' : '');
+    btn.innerHTML = `<span class="dot" style="background:${c.color}"></span>${c.name}`;
+    btn.onclick = () => {
+      if (i === selectedCar) return;
+      selectedCar = i;
+      localStorage.setItem('autos-jatek:carIdx', String(i));
+      renderCarSelect();
+      setPlayerCar(i);
+    };
+    carSelectEl.appendChild(btn);
+  });
+}
+renderCarSelect();
 
 // --- Dev mód (?dev=1): pálya-szerkesztő link + élő autó-hangoló panel ---
 // A szerkesztő linkje csak dev módban látszik (maga az editor.html is átirányít
@@ -305,15 +346,9 @@ function startSingleplayer() {
 //  MULTIPLAYER MÓD — a szerver az igazság, mi inputot küldünk és renderelünk.
 // =============================================================================
 
-// A 4 játékos-szín autó-modellje (a Kenney Racing Kit kész versenyautói).
-const MP_CAR_MODELS = [
-  '/assets/track/raceCarRed.glb',
-  '/assets/track/raceCarGreen.glb',
-  '/assets/track/raceCarOrange.glb',
-  '/assets/track/raceCarWhite.glb',
-];
-// A színindexekhez tartozó jelölő-színek (névtábla-pötty, lobbi/állás-ikon: 🔴🟢🟠⚪).
-const CAR_COLORS = ['#ff4b3e', '#3a9d40', '#e08a2a', '#e6e8ec'];
+// Az autó-modell + jelölőszín + ikon a config.CARS listából (a colorIdx = ez az index).
+const carColor = (i) => CARS[i % CARS.length].color;
+const carIcon = (i) => CARS[i % CARS.length].icon;
 
 // Játékosnév biztonságos beszúrása HTML-be (a végeredmény-listához).
 function escapeHtml(s) {
@@ -363,12 +398,12 @@ async function startMultiplayer(room) {
   async function ensureMesh(id, colorIdx, name) {
     if (meshes.has(id) || loadingMeshes.has(id)) return;
     loadingMeshes.add(id);
-    const model = await loadModel(MP_CAR_MODELS[colorIdx % MP_CAR_MODELS.length]);
-    // A raceCar-ok a TRACK-kit atlaszát használják (nem a fő autóét), a hossz-
-    // tengelyük viszont ugyanúgy z (mérve), így a config-beli forgatás jó nekik.
-    const group = model ? fitCarModel(model, trackColormapTex) : new THREE.Group();
+    const car = CARS[colorIdx % CARS.length];
+    const model = await loadModel(car.model);
+    // A kit-jének megfelelően (Car Kit: colormap, Racing Kit: natív anyagszín).
+    const group = buildCarHolder(car, model);
     // A TÖBBI játékos autója fölé lebegő névtábla (a sajátunk fölé nem kell).
-    if (id !== myId) group.add(createNameplate(name, CAR_COLORS[colorIdx % CAR_COLORS.length]));
+    if (id !== myId) group.add(createNameplate(name, carColor(colorIdx)));
     scene.add(group);
     meshes.set(id, group);
     wheelAnims.set(id, setupWheels(group));
@@ -425,7 +460,7 @@ async function startMultiplayer(room) {
           ? `<span class="rtime">${p.totalTime.toFixed(2)} s</span>`
           : `<span class="dnf">DNF</span>`;
         const meCls = p.name === playerName() ? ' me' : '';
-        const dot = `<span style="color:${CAR_COLORS[p.colorIdx % CAR_COLORS.length]}">●</span>`;
+        const dot = `<span style="color:${carColor(p.colorIdx)}">●</span>`;
         return `<div class="res${meCls}"><span class="pos">${medal || pos}</span>${dot}<span class="rname">${escapeHtml(p.name)}</span>${time}</div>`;
       })
       .join('');
@@ -445,7 +480,7 @@ async function startMultiplayer(room) {
     for (const p of m.players) {
       const div = document.createElement('div');
       div.className = 'p';
-      div.textContent = `${['🔴', '🟢', '🟠', '⚪'][p.colorIdx % 4]} ${p.name}${p.id === m.hostId ? ' 👑' : ''}${p.id === myId ? ' (te)' : ''}`;
+      div.textContent = `${carIcon(p.colorIdx)} ${p.name}${p.id === m.hostId ? ' 👑' : ''}${p.id === myId ? ' (te)' : ''}`;
       lobbyPlayersEl.appendChild(div);
     }
     btnStart.style.display = isHost ? 'block' : 'none';
@@ -637,7 +672,7 @@ async function startMultiplayer(room) {
     standingsEl.style.display = roomPhase === 'lobby' ? 'none' : 'flex';
     standingsEl.innerHTML = list
       .map((p, i) => {
-        const icon = ['🔴', '🟢', '🟠', '⚪'][p.colorIdx % 4];
+        const icon = carIcon(p.colorIdx);
         const info = p.finished
           ? `🏁 ${p.totalTime.toFixed(2)} s`
           : `${p.lap}/${mpTotalLaps}. kör`;
@@ -659,6 +694,7 @@ async function doCreate() {
       layout: loadCustomLayout(),
       decorations: loadCustomDecorations(),
       laps: chosenLaps(),
+      carIdx: selectedCar,
     });
     startMultiplayer(room);
   } catch (e) {
@@ -673,7 +709,7 @@ async function doJoin(code) {
   }
   menuStatus.textContent = 'Csatlakozás…';
   try {
-    const room = await joinRoom(code, { name: playerName() });
+    const room = await joinRoom(code, { name: playerName(), carIdx: selectedCar });
     startMultiplayer(room);
   } catch (e) {
     menuStatus.textContent = `Nem sikerült: ${e.message || 'nincs ilyen szoba'}`;
