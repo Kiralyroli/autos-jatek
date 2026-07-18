@@ -25,6 +25,7 @@ import {
   speedKmh,
   corneringLoad,
   isFullyOffRoad,
+  hitsCone,
 } from '../src/sim/car.js';
 import { createRaceState, raceStep } from '../src/sim/race.js';
 import { hashLayout } from '../src/sim/trackKey.js';
@@ -42,6 +43,12 @@ export class RaceRoom extends Room {
       : DEFAULT_LAYOUT;
     this.layout = layout;
     this.decorations = Array.isArray(options?.decorations) ? options.decorations : [];
+    // Terelőkúpok VILÁG-koordinátái (egyszer kiszámolva, lásd render3d/decorations.js
+    // ugyanezt a world = dgx/dgy * TRACK.tile képletet) — a kör-érvényesség
+    // ellenőrzéséhez (afterStep, hitsCone).
+    this.conePoints = this.decorations
+      .filter((d) => d.type === 'pylon')
+      .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
     // A szoba körszáma — a létrehozó (host) választja; korlátozva 1..50-re.
     this.laps = Number.isFinite(options?.laps)
       ? Math.max(1, Math.min(50, Math.round(options.laps)))
@@ -274,8 +281,10 @@ export class RaceRoom extends Room {
       const pos = p.body.getPosition();
       const curr = { x: pos.x, y: pos.y };
       if (!p.finished) {
-        // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → érvénytelen.
-        const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess, this.car);
+        // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
+        const offTrack =
+          isFullyOffRoad(p.body, this.trackState.offRoadExcess, this.car) ||
+          hitsCone(p.body, this.conePoints, RACE.coneHitRadius, this.car);
         raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack, this.trackState.trackHeadingAt);
 
         // ÖRÖK RANGLISTA: a szerver AUTHORITATIVE, ezért innen küldjük be a

@@ -20,6 +20,7 @@ import {
   corneringLoad,
   createDriveState,
   isFullyOffRoad,
+  hitsCone,
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
@@ -369,6 +370,12 @@ function startSingleplayer() {
   const { trackKey, trackName } = currentTrackInfo();
   let lastSubmittedBest = null;
 
+  // Terelőkúpok VILÁG-koordinátái (lásd render3d/decorations.js ugyanezt a
+  // world = dgx/dgy * TRACK.tile képletet) — a kör-érvényesség ellenőrzéséhez.
+  const conePoints = loadCustomDecorations()
+    .filter((d) => d.type === 'pylon')
+    .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
+
   const world = createWorld();
   const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
   const stepper = createStepper();
@@ -387,8 +394,9 @@ function startSingleplayer() {
     curr.x = p.x;
     curr.y = p.y;
     curr.angle = carBody.getAngle();
-    // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → a kör érvénytelen.
-    const offTrack = isFullyOffRoad(carBody, offRoadExcess);
+    // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
+    const offTrack =
+      isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
     raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
 
     if (

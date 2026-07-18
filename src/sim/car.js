@@ -251,3 +251,25 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
   }
   return true;
 }
+
+// Hozzáért-e az autó valamelyik terelőkúphoz? A `points` a kúpok VILÁG-koordinátái
+// ({x,y}[], a hívó számolja a dekorációkból — lásd main.js/RaceRoom.js). A kúpot
+// pontnak vesszük, az autó dobozát `hitRadius`-szal megnöveljük, majd a pontot az
+// autó HELYI keretébe forgatjuk (az isFullyOffRoad-hoz hasonlóan) — ha a megnövelt
+// dobozon belülre esik, ütközés történt.
+export function hitsCone(body, points, hitRadius, car = CAR) {
+  if (!points || points.length === 0) return false;
+  const p = body.getPosition();
+  const cos = Math.cos(body.getAngle());
+  const sin = Math.sin(body.getAngle());
+  const hl = car.length / 2 + hitRadius;
+  const hw = car.width / 2 + hitRadius;
+  for (const pt of points) {
+    const dx = pt.x - p.x;
+    const dy = pt.y - p.y;
+    const lx = dx * cos + dy * sin; // világ → autó helyi kerete (inverz forgatás)
+    const ly = -dx * sin + dy * cos;
+    if (Math.abs(lx) <= hl && Math.abs(ly) <= hw) return true;
+  }
+  return false;
+}
