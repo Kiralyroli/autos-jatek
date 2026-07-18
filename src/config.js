@@ -132,6 +132,63 @@ export const CAR = {
   forwardDrag: 0.25,
 };
 
+// Választható autó-fizika előbeállítások (menü választó — a futam indításánál).
+// Csak a MOZGÁSSAL kapcsolatos mezőket írják felül (a CAR többi mezője — méret,
+// tömeg, tolatás-erő stb. — változatlan marad, lásd applyPhysicsPreset).
+//   realistic: a valósághoz közelebbi arányok (nagyobb tengelytáv, mérsékeltebb tapadás).
+//   light: könnyített/arcade — kisebb tengelytáv (élesebb fordulás), magas tapadási
+//     határ (gyakorlatilag nincs csúszás-plafon), nincs gördülési ellenállás.
+export const PHYSICS_PRESETS = {
+  realistic: {
+    engineForce: 15000,
+    brakeForce: 12000,
+    maxForwardSpeed: 60,
+    forwardDrag: 0.25,
+    maxSteerAngle: 0.5,
+    steerSpeed: 3.5,
+    steerReturnSpeed: 6,
+    wheelbase: 2,
+    maxLateralAccel: 50,
+    lateralGripDrift: 0.28,
+  },
+  light: {
+    engineForce: 8000,
+    brakeForce: 12000,
+    maxForwardSpeed: 40,
+    forwardDrag: 0,
+    maxSteerAngle: 0.5,
+    steerSpeed: 3.5,
+    steerReturnSpeed: 6,
+    wheelbase: 1.2,
+    maxLateralAccel: 100,
+    lateralGripDrift: 0.28,
+  },
+};
+export const DEFAULT_PHYSICS = 'realistic';
+
+// Egy preset nevének validálása (ismeretlen/hiányzó → DEFAULT_PHYSICS). Mindkét
+// oldal (kliens ÉS szerver) ezzel dönti el, melyik preset-tel fusson.
+export function resolvePhysicsPreset(name) {
+  return PHYSICS_PRESETS[name] ? name : DEFAULT_PHYSICS;
+}
+
+// A KLIENS oldali (egy lapon egyszerre csak EGY versenyt futtató) globális CAR
+// mutálása egy preset-re — így a sim/car.js mindenhol (SP + a saját MP-predikció)
+// a választott fizikával fut. Multiplayerben a SZERVER a saját (szobánkénti,
+// KÜLÖN objektumba másolt — lásd server/RaceRoom.js) car-paraméterekkel dolgozik,
+// mert a Node-folyamat egyszerre TÖBB szobát is kiszolgál, és a globális CAR
+// mutálása azok között összeakadna. A kliens ide a szerver 'init' üzenetéből kapja
+// vissza a ténylegesen használt preset nevét, hogy a predikció ne térjen el tőle.
+export function applyPhysicsPreset(name) {
+  const resolved = resolvePhysicsPreset(name);
+  Object.assign(CAR, PHYSICS_PRESETS[resolved]);
+  return resolved;
+}
+
+// A CAR alapértéke induláskor a DEFAULT_PHYSICS preset legyen (egységes forrás —
+// a fenti mezőknél ne legyen eltérés a CAR literál és a preset között).
+applyPhysicsPreset(DEFAULT_PHYSICS);
+
 // Fű-büntetés: fizikai fal helyett ez tartja az autót a pályán. Azonnali váltás,
 // nincs fokozatos átmenet: úton 100%, a fűre lépve azonnal grassThrottle-re esik,
 // visszaérve az útra azonnal vissza 100%-ra. Amikor az autó ÁTLÉPI az útszélt (úton

@@ -25,7 +25,8 @@ export function forwardSpeed(body) {
 }
 
 // Létrehoz egy autó-testet a világban. Visszaadja a Planck body-t.
-export function createCarBody(world, x, y, angle = 0) {
+// `car`: opcionális paraméter-objektum (alapból a globális CAR) — lásd updateCar.
+export function createCarBody(world, x, y, angle = 0, car = CAR) {
   const body = world.createBody({
     type: 'dynamic',
     position: Vec2(x, y),
@@ -35,8 +36,8 @@ export function createCarBody(world, x, y, angle = 0) {
     angularDamping: 0,
   });
   body.createFixture({
-    shape: new Box(CAR.length / 2, CAR.width / 2),
-    density: CAR.density,
+    shape: new Box(car.length / 2, car.width / 2),
+    density: car.density,
     friction: 0.3,
   });
   return body;
@@ -56,11 +57,16 @@ export function createDriveState() {
 //   offRoad: (x, y) => méter az útszélen KÍVÜL (0 = úton) — a hívó pályájából
 //            (kliensen track.js offRoadExcess, szerveren a szoba trackState-je),
 //            így ez a modul környezet- és pálya-független marad.
-export function updateCar(body, input, dt, drive, offRoad) {
-  updateSteerAngle(input, dt, drive); // előbb a kormányszög, mert a gumik használják
-  applyTireFriction(body, input, dt, drive);
+//   car: opcionális fizika-paraméter objektum (alapból a globális CAR — a
+//        SP/predikció ezt használja). A SZERVER szobánként KÜLÖN objektumot ad át
+//        (lásd config.js applyPhysicsPreset megjegyzése), mert egy Node-folyamat
+//        több szobát is kiszolgálhat egyszerre eltérő választott fizikával — a
+//        globális CAR mutálása ilyenkor összeakadna a szobák közt.
+export function updateCar(body, input, dt, drive, offRoad, car = CAR) {
+  updateSteerAngle(input, dt, drive, car); // előbb a kormányszög, mert a gumik használják
+  applyTireFriction(body, input, dt, drive, car);
   updateOffRoadPenalty(body, drive, offRoad);
-  applyDrive(body, input, drive);
+  applyDrive(body, input, drive, car);
 }
 
 // Azonnali váltás: a füvön grassThrottle, az úton mindig teljes (1). Az útról a
@@ -91,12 +97,12 @@ function updateOffRoadPenalty(body, drive, offRoad) {
 //    korlátos (tapadási határ) — e fölött a gumi MEGCSÚSZIK: elöl túllépve
 //    alulkormányzottság (az orr kifelé tol), hátul túllépve túlkormányzottság/
 //    drift (a far kitör) — mind magától adódik, nincs külön szkriptelve.
-function applyTireFriction(body, input, dt, drive) {
+function applyTireFriction(body, input, dt, drive, car) {
   const m = body.getMass();
   const I = body.getInertia();
   const fwd = forwardNormal(body);
   const com = body.getWorldCenter();
-  const half = CAR.wheelbase / 2;
+  const half = car.wheelbase / 2;
 
   // Egy tengelyponton (p) a `n` irányú sebesség-komponens kioltása impulzussal.
   // A pontbeli effektív tömeg: 1/(1/m + c²/I), ahol c = r×n (az impulzus forgató
@@ -116,13 +122,13 @@ function applyTireFriction(body, input, dt, drive) {
   }
 
   // Tapadási határ tengelyenként: a teljes autóra vetített maxLateralAccel fele-fele.
-  const axleCap = CAR.maxLateralAccel * m * 0.5 * dt;
+  const axleCap = car.maxLateralAccel * m * 0.5 * dt;
 
   // HÁTSÓ tengely — a kerék a karosszériával áll egy vonalban; driftnél (Space)
   // a hátsó tapadást csökkentjük (kézifék-effekt: a far kitörhet).
   const rearP = Vec2(com.x - fwd.x * half, com.y - fwd.y * half);
   const rearN = rightNormal(body);
-  tireImpulse(rearP, rearN, axleCap * (input.drift ? CAR.lateralGripDrift : 1));
+  tireImpulse(rearP, rearN, axleCap * (input.drift ? car.lateralGripDrift : 1));
 
   // ELSŐ tengely — a kerék a kormányszöggel (drive.steer) elfordítva; a "merőleges"
   // irány is vele fordul. EZ az impulzus fordítja be az autót.
@@ -135,26 +141,26 @@ function applyTireFriction(body, input, dt, drive) {
 }
 
 // 2) Hajtás — gáz / fék / tolatás + gördülési ellenállás.
-function applyDrive(body, input, drive) {
+function applyDrive(body, input, drive, car) {
   const forward = forwardNormal(body);
   const speed = forwardSpeed(body);
 
   let force = 0;
   if (input.up) {
     // Csak a GÁZT csökkenti a fű-büntetés — fék és tolatás mindig teljes erővel.
-    force = CAR.engineForce * drive.throttleMul;
+    force = car.engineForce * drive.throttleMul;
   } else if (input.down) {
     // Ha még előre gurul → fék. Ha áll vagy hátrafelé megy → tolatás.
-    force = speed > 0.5 ? -CAR.brakeForce : -CAR.reverseForce;
+    force = speed > 0.5 ? -car.brakeForce : -car.reverseForce;
   }
 
   // Sebességhatárok: a határ felett nem adunk több hajtóerőt az adott irányba.
-  if (force > 0 && speed > CAR.maxForwardSpeed) force = 0;
-  if (force < 0 && speed < -CAR.maxReverseSpeed) force = 0;
+  if (force > 0 && speed > car.maxForwardSpeed) force = 0;
+  if (force < 0 && speed < -car.maxReverseSpeed) force = 0;
 
   // Hajtóerő és gördülési ellenállás egyetlen, forward irányú eredő erőként.
   // (A drag a sebességgel arányos, azzal ellentétes irányú fékerő.)
-  const netForce = force - speed * CAR.forwardDrag * body.getMass();
+  const netForce = force - speed * car.forwardDrag * body.getMass();
   body.applyForceToCenter(Vec2.mul(forward, netForce), true);
 }
 
@@ -162,14 +168,14 @@ function applyDrive(body, input, drive) {
 //    steerSpeed, elengedés/ellenkormányzás steerReturnSpeed sebességgel) — nem
 //    ugrik ±maxSteerAngle-re egy frame alatt. A tényleges FORDULÁST nem itt,
 //    hanem az első kerekek tapadási impulzusa végzi (applyTireFriction).
-function updateSteerAngle(input, dt, drive) {
+function updateSteerAngle(input, dt, drive, car) {
   let steerInput = 0;
   if (input.left) steerInput -= 1;
   if (input.right) steerInput += 1;
 
-  const target = steerInput * CAR.maxSteerAngle;
+  const target = steerInput * car.maxSteerAngle;
   const returning = steerInput === 0 || target * drive.steer < 0;
-  const rate = returning ? CAR.steerReturnSpeed : CAR.steerSpeed;
+  const rate = returning ? car.steerReturnSpeed : car.steerSpeed;
   const maxDelta = rate * dt;
   drive.steer += Math.max(-maxDelta, Math.min(maxDelta, target - drive.steer));
 }
@@ -177,7 +183,7 @@ function updateSteerAngle(input, dt, drive) {
 // Cél után: lágy fékezés teljes megállásig, vezérlés nélkül. A world.step() ELŐTT
 // hívandó (updateCar helyett). Az oldalcsúszást a tömegközéppontban oltjuk ki
 // (itt már nem számít a kanyar-geometria, csak hogy szépen kiguruljon).
-export function coastToStop(body) {
+export function coastToStop(body, car = CAR) {
   const right = rightNormal(body);
   const lateralSpeed = Vec2.dot(right, body.getLinearVelocity());
   body.applyLinearImpulse(
@@ -185,7 +191,7 @@ export function coastToStop(body) {
     body.getWorldCenter(),
     true
   );
-  body.setAngularVelocity(body.getAngularVelocity() * CAR.steerReleaseDamping);
+  body.setAngularVelocity(body.getAngularVelocity() * car.steerReleaseDamping);
 
   const speed = forwardSpeed(body);
   if (Math.abs(speed) < 0.5) {
@@ -197,8 +203,8 @@ export function coastToStop(body) {
 
   // Enyhe fék a haladással szemben + a szokásos gördülési ellenállás.
   const forward = forwardNormal(body);
-  const brake = -Math.sign(speed) * CAR.coastBrakeForce;
-  const drag = -speed * CAR.forwardDrag * body.getMass();
+  const brake = -Math.sign(speed) * car.coastBrakeForce;
+  const drag = -speed * car.forwardDrag * body.getMass();
   body.applyForceToCenter(Vec2.mul(forward, brake + drag), true);
 }
 
@@ -226,12 +232,12 @@ export function corneringLoad(body) {
 // elhagyta a pályát (a kör-érvényességhez, race.js). Amíg akár egy sarok az úton
 // van, még nem számít. Az offRoad a hívó pályájából jön (kliens track.js / szerver
 // trackState) — így ez a modul pálya-független marad.
-export function isFullyOffRoad(body, offRoad) {
+export function isFullyOffRoad(body, offRoad, car = CAR) {
   const p = body.getPosition();
   const cos = Math.cos(body.getAngle());
   const sin = Math.sin(body.getAngle());
-  const hl = CAR.length / 2;
-  const hw = CAR.width / 2;
+  const hl = car.length / 2;
+  const hw = car.width / 2;
   const corners = [
     [hl, hw],
     [hl, -hw],

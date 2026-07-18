@@ -45,7 +45,7 @@ import {
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack } from './net/trackApi.js';
-import { TRACK, CAR, CARS } from './config.js';
+import { TRACK, CAR, CARS, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
 import { isDevMode } from './devmode.js';
 import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
@@ -114,6 +114,7 @@ const lobbyStatus = document.getElementById('lobbyStatus');
 const trackSelect = document.getElementById('trackSelect');
 const lapsInput = document.getElementById('lapsInput');
 const carSelectEl = document.getElementById('carSelect');
+const physicsSelect = document.getElementById('physicsSelect');
 
 // Autó-választó: a CARS listából kattintható kártyák. A választás perzisztál, a
 // 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar).
@@ -151,6 +152,12 @@ if (isDevMode()) {
 
 nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
 lapsInput.value = localStorage.getItem('autos-jatek:laps') || '3';
+physicsSelect.value = Object.prototype.hasOwnProperty.call(
+  PHYSICS_PRESETS,
+  localStorage.getItem('autos-jatek:physics')
+)
+  ? localStorage.getItem('autos-jatek:physics')
+  : DEFAULT_PHYSICS;
 
 function playerName() {
   const n = nameInput.value.trim() || 'Játékos';
@@ -166,6 +173,21 @@ function chosenLaps() {
   lapsInput.value = String(laps); // érvénytelen/üres bevitel esetén visszaírjuk
   localStorage.setItem('autos-jatek:laps', String(laps));
   return laps;
+}
+
+// A választott autó-fizika (a menü legördülőjéből) — 'realistic' vagy 'light'.
+// Perzisztálva. Egyjátékosnál KÖZVETLENÜL erre állítjuk a CAR-t (applyPhysicsPreset);
+// multiplayerben csak ELKÜLDJÜK a szervernek (createRoom), a ténylegesen használt
+// nevet a szoba az 'init' üzenetben adja vissza — azt alkalmazzuk (lásd startMultiplayer),
+// mert a szerver egy Node-folyamatban több szobát szolgál ki, a globális CAR-t csak
+// egy-egy kliens (SP/saját predikció) mutálja biztonságosan, a szerver nem.
+function chosenPhysics() {
+  const name = Object.prototype.hasOwnProperty.call(PHYSICS_PRESETS, physicsSelect.value)
+    ? physicsSelect.value
+    : DEFAULT_PHYSICS;
+  physicsSelect.value = name;
+  localStorage.setItem('autos-jatek:physics', name);
+  return name;
 }
 
 // A jelenleg BETÖLTÖTT pálya aláírása (config.js ezt olvasta induláskor a
@@ -251,6 +273,10 @@ function idleFrame(now) {
 function startSingleplayer() {
   mode = 'single';
   menuEl.style.display = 'none';
+
+  // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
+  // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
+  applyPhysicsPreset(chosenPhysics());
 
   const world = createWorld();
   const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
@@ -513,6 +539,10 @@ async function startMultiplayer(room) {
   // eltér a lokálisan felépítettől, ensureTrackMatches ment + újratölt (rejoin).
   room.onMessage('init', (init) => {
     if (Number.isFinite(init.laps)) mpTotalLaps = init.laps;
+    // A szoba TÉNYLEGESEN használt fizikáját alkalmazzuk (nem a saját menü-
+    // választásunkat) — a host dönt, a szerver validál/visszaküld; enélkül a
+    // helyi predikció eltérne a szerver-autoritatív szimulációtól.
+    if (init.physics) applyPhysicsPreset(init.physics);
     ensureTrackMatches(init, room.roomId);
   });
 
@@ -699,6 +729,7 @@ async function doCreate() {
       decorations: loadCustomDecorations(),
       laps: chosenLaps(),
       carIdx: selectedCar,
+      physics: chosenPhysics(),
     });
     startMultiplayer(room);
   } catch (e) {

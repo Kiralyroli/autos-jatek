@@ -13,7 +13,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { Room } = require('colyseus'); // a colyseus CJS — createRequire-rel töltjük ESM-ből
 
-import { SIM, TRACK, RACE, NET, DEFAULT_LAYOUT } from '../src/config.js';
+import { SIM, TRACK, RACE, NET, DEFAULT_LAYOUT, CAR, PHYSICS_PRESETS, resolvePhysicsPreset } from '../src/config.js';
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
 import { createWorld, createStepper } from '../src/sim/world.js';
 import {
@@ -44,6 +44,13 @@ export class RaceRoom extends Room {
     this.laps = Number.isFinite(options?.laps)
       ? Math.max(1, Math.min(50, Math.round(options.laps)))
       : RACE.laps;
+
+    // A szoba autó-fizikája — a létrehozó választja (config.PHYSICS_PRESETS neve).
+    // SAJÁT objektumba másolva (this.car), NEM a globális CAR-t mutálva — egy
+    // Node-folyamat több szobát is kiszolgálhat, eltérő választott fizikával; a
+    // megosztott CAR mutálása összeakadna köztük (lásd config.js applyPhysicsPreset).
+    this.physics = resolvePhysicsPreset(options?.physics);
+    this.car = { ...CAR, ...PHYSICS_PRESETS[this.physics] };
 
     this.trackState = createTrackState(layout, {
       tile: TRACK.tile,
@@ -103,6 +110,7 @@ export class RaceRoom extends Room {
         layout: this.layout,
         decorations: this.decorations,
         laps: this.laps,
+        physics: this.physics, // a kliens ezt alkalmazza a saját CAR-jára (predikció-egyezés)
         code: this.roomId,
       });
       this.broadcastLobby();
@@ -146,7 +154,7 @@ export class RaceRoom extends Room {
 
     const slotIdx = this.players.size;
     const slot = spawnSlot(this.trackState, slotIdx);
-    const body = createCarBody(this.world, slot.x, slot.y, slot.angle);
+    const body = createCarBody(this.world, slot.x, slot.y, slot.angle, this.car);
 
     this.players.set(client.sessionId, {
       name: String(options?.name || 'Játékos').slice(0, 20),
@@ -238,9 +246,9 @@ export class RaceRoom extends Room {
           p.input = q.input;
           p.lastSeq = q.seq;
         }
-        updateCar(p.body, p.input, dt, p.drive, this.trackState.offRoadExcess);
+        updateCar(p.body, p.input, dt, p.drive, this.trackState.offRoadExcess, this.car);
       } else {
-        coastToStop(p.body);
+        coastToStop(p.body, this.car);
       }
     }
   }
@@ -257,7 +265,7 @@ export class RaceRoom extends Room {
       const curr = { x: pos.x, y: pos.y };
       if (!p.finished) {
         // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → érvénytelen.
-        const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess);
+        const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess, this.car);
         raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack);
         if (p.race.phase === 'finished') {
           p.finished = true;
