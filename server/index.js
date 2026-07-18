@@ -21,6 +21,7 @@ const cors = require('cors');
 
 import { RaceRoom } from './RaceRoom.js';
 import { listTracks, getTrack, saveTrack, deleteTrack } from './trackStore.js';
+import { listEntries, recordLap, deleteEntry, clearBoard } from './leaderboardStore.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = join(__dirname, '..', 'dist');
@@ -55,6 +56,24 @@ app.post('/api/tracks', (req, res) => {
 });
 app.delete('/api/tracks/:id', (req, res) => {
   res.json({ ok: deleteTrack(req.params.id) });
+});
+
+// --- Örök ranglista REST API (pálya+fizika kombinációnként a legjobb köridők) ---
+// Az egyjátékos kliens ide küldi a saját köreit; a multiplayer szerver (RaceRoom)
+// UGYANEZT a modult közvetlenül (HTTP nélkül) hívja, mert ott már authoritative.
+app.get('/api/leaderboard/:trackKey/:physics', (req, res) => {
+  res.json({ entries: listEntries(req.params.trackKey, req.params.physics) });
+});
+app.post('/api/leaderboard', (req, res) => {
+  const rec = recordLap(req.body || {}, Date.now());
+  if (!rec) return res.status(400).json({ error: 'Hibás köridő-adat.' });
+  res.json({ ok: true });
+});
+app.delete('/api/leaderboard/:trackKey/:physics/:playerName', (req, res) => {
+  res.json({ ok: deleteEntry(req.params.trackKey, req.params.physics, req.params.playerName) });
+});
+app.delete('/api/leaderboard/:trackKey/:physics', (req, res) => {
+  res.json({ removed: clearBoard(req.params.trackKey, req.params.physics) });
 });
 
 app.use(express.static(DIST_DIR));

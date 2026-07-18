@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { hashLayout } from '../src/sim/trackKey.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const FILE = join(DATA_DIR, 'tracks.json');
@@ -108,11 +109,15 @@ function sanitize({ name, layout, decorations, editorPath, editorDecorations }) 
 }
 
 // Metaadat-lista (a katalógushoz) — a nehéz layout/decor NÉLKÜL, névre rendezve.
+// A trackKey (a layout GEOMETRIÁJÁHOZ kötött, névtől független azonosító) itt is
+// szerepel — így a kliens az örök ranglistát tud lekérni anélkül, hogy a teljes
+// pálya-adatot (getTrack) külön le kellene töltenie csak a kulcs kiszámolásához.
 export function listTracks() {
   return load()
     .tracks.map((t) => ({
       id: t.id,
       name: t.name,
+      trackKey: hashLayout(t.layout),
       segments: t.layout.length,
       decorations: t.decorations.length,
       createdAt: t.createdAt,

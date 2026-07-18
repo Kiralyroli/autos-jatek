@@ -205,8 +205,18 @@
         font-family: system-ui, sans-serif;
         z-index: 20;
       }
+      /* A főmenü panelje + a mellette futó ranglista-sáv közös sora — a
+         ranglistát a #menu SAJÁT overlay-jén belül, de a fő panelen KÍVÜL, egy
+         külön oszlopban jelenítjük meg, hogy ne kelljen a szűk főmenübe zsúfolni. */
+      #menu .menuLayout {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+      }
       .overlay .panel {
         width: 340px;
+        max-height: 90vh;
+        overflow-y: auto;
         background: #20222b;
         border: 1px solid #33363f;
         border-radius: 14px;
@@ -216,6 +226,32 @@
         flex-direction: column;
         gap: 12px;
         box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+      }
+      .overlay .panel.sidepanel {
+        width: 260px;
+      }
+      /* Keskeny nézeten (mobil, kis ablak) a két panel egymás alá kerül,
+         különben kilógna a képernyőből. */
+      @media (max-width: 720px) {
+        #menu .menuLayout {
+          flex-direction: column;
+          align-items: stretch;
+          max-height: 90vh;
+          overflow-y: auto;
+        }
+        .overlay .panel,
+        .overlay .panel.sidepanel {
+          width: 340px;
+          max-height: none;
+          overflow-y: visible;
+        }
+      }
+      .overlay h2 {
+        font-size: 13px;
+        margin: 4px 0 0;
+        color: #a8adb8;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
       }
       .overlay h1 {
         margin: 0 0 4px;
@@ -271,6 +307,49 @@
       /* A szám-mező natív léptető-nyilai a sötét témához igazodjanak (ne fehér
          háttéren fehér nyilak legyenek). */
       .overlay input[type="number"] { color-scheme: dark; }
+      /* Örök ranglista — a mellette futó sidepanel saját listája. */
+      #leaderboardList {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 60vh;
+        overflow-y: auto;
+        /* flex-shrink nélkül a flex-column .panel a saját overflow-y:auto-nk miatt
+           (min-height:auto → 0 a spec szerint scrollozható elemeknél) 0-ra zsugorítaná,
+           holott a tartalom simán elférne — lásd böngésző-teszt. */
+        flex-shrink: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      #leaderboardList p {
+        color: #6f7580;
+        font-style: italic;
+        font-size: 13px;
+        margin: 0;
+      }
+      .lbRow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #262a35;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 13px;
+      }
+      .lbRow .lbPos { font-weight: 700; min-width: 20px; color: #a8adb8; }
+      .lbRow .lbName { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .lbRow .lbTime { color: #ffd54a; font-weight: 600; }
+      .lbRow .lbDel {
+        padding: 3px 7px;
+        font-size: 12px;
+        border: none;
+        border-radius: 6px;
+        background: #33363f;
+        color: #e8eaef;
+        cursor: pointer;
+        flex: none;
+      }
+      .overlay button.danger { background: #7d2e2e; }
+      .overlay button.danger:hover:not(:disabled) { background: #9a3a3a; }
       .overlay button {
         padding: 12px 14px;
         font-size: 15px;
@@ -358,31 +437,38 @@
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">
-      <div class="panel">
-        <h1>🏎️ Autós játék</h1>
-        <label for="playerName">Neved</label>
-        <input id="playerName" maxlength="20" placeholder="Játékos" />
-        <label for="trackSelect">Pálya</label>
-        <select id="trackSelect">
-          <option value="">🏁 Alap pálya (beépített)</option>
-        </select>
-        <label for="lapsInput">Körök száma</label>
-        <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
-        <label>Autó</label>
-        <div id="carSelect"></div>
-        <label for="physicsSelect">Autó-fizika</label>
-        <select id="physicsSelect">
-          <option value="realistic">Realisztikus</option>
-          <option value="light">Könnyített (arcade)</option>
-        </select>
-        <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
-        <hr />
-        <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>
-        <div class="joinrow">
-          <input id="joinCode" placeholder="Szoba-kód" />
-          <button id="btnJoin">Csatlakozás</button>
+      <div class="menuLayout">
+        <div class="panel">
+          <h1>🏎️ Autós játék</h1>
+          <label for="playerName">Neved</label>
+          <input id="playerName" maxlength="20" placeholder="Játékos" />
+          <label for="trackSelect">Pálya</label>
+          <select id="trackSelect">
+            <option value="">🏁 Alap pálya (beépített)</option>
+          </select>
+          <label for="lapsInput">Körök száma</label>
+          <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
+          <label>Autó</label>
+          <div id="carSelect"></div>
+          <label for="physicsSelect">Autó-fizika</label>
+          <select id="physicsSelect">
+            <option value="realistic">Realisztikus</option>
+            <option value="light">Könnyített (arcade)</option>
+          </select>
+          <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
+          <hr />
+          <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>
+          <div class="joinrow">
+            <input id="joinCode" placeholder="Szoba-kód" />
+            <button id="btnJoin">Csatlakozás</button>
+          </div>
+          <div id="menuStatus" class="status"></div>
         </div>
-        <div id="menuStatus" class="status"></div>
+        <div class="panel sidepanel">
+          <h2>🏆 Ranglista (ehhez a pályához + fizikához)</h2>
+          <div id="leaderboardList"></div>
+          <button id="btnClearLeaderboard" class="danger" style="display:none">🗑️ Tábla törlése</button>
+        </div>
       </div>
     </div>
 

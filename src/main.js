@@ -30,7 +30,7 @@ import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3
 import { setupWheels } from './render3d/wheels.js';
 import { createNameplate } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
-import { createHud } from './hud.js';
+import { createHud, fmt as fmtTime } from './hud.js';
 import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
@@ -45,7 +45,14 @@ import {
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack } from './net/trackApi.js';
-import { TRACK, CAR, CARS, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
+import {
+  apiGetLeaderboard,
+  apiSubmitLap,
+  apiDeleteLeaderboardEntry,
+  apiClearLeaderboard,
+} from './net/leaderboardApi.js';
+import { hashLayout } from './sim/trackKey.js';
+import { TRACK, CAR, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
 import { isDevMode } from './devmode.js';
 import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
@@ -115,6 +122,14 @@ const trackSelect = document.getElementById('trackSelect');
 const lapsInput = document.getElementById('lapsInput');
 const carSelectEl = document.getElementById('carSelect');
 const physicsSelect = document.getElementById('physicsSelect');
+const leaderboardListEl = document.getElementById('leaderboardList');
+const btnClearLeaderboard = document.getElementById('btnClearLeaderboard');
+
+// A trackSelect "Alap pálya" (value="") opciójának is kell egy trackKey (a
+// beépített DEFAULT_LAYOUT hash-e), hogy a ranglista rá is tudjon szűrni —
+// a katalógusból jövő pályák trackKey-jét a szerver adja (lásd populateTrackSelect).
+const defaultTrackOption = trackSelect.querySelector('option[value=""]');
+if (defaultTrackOption) defaultTrackOption.dataset.trackKey = hashLayout(DEFAULT_LAYOUT);
 
 // Autó-választó: a CARS listából kattintható kártyák. A választás perzisztál, a
 // 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar).
@@ -212,10 +227,79 @@ async function populateTrackSelect() {
     const opt = document.createElement('option');
     opt.value = t.id;
     opt.textContent = t.name;
+    opt.dataset.trackKey = t.trackKey;
     if (t.name === activeName) opt.selected = true;
     trackSelect.appendChild(opt);
   }
+  // opt.selected = true nem vált ki 'change' eseményt — a ranglistát itt
+  // explicit újra kell rajzolni, ha időközben a katalógusból jött egy aktív pálya.
+  renderLeaderboard();
 }
+
+// A kiválasztott pálya-opció ranglista-azonosítója + neve (a trackSelect
+// dataset.trackKey mezőjéből — lásd populateTrackSelect és a defaultTrackOption).
+function currentTrackInfo() {
+  const opt = trackSelect.selectedOptions[0];
+  return {
+    trackKey: opt?.dataset.trackKey || hashLayout(DEFAULT_LAYOUT),
+    trackName: opt?.textContent || 'Alap pálya',
+  };
+}
+
+// A jelenleg választott pálya + fizika örök-ranglistájának betöltése és
+// kirajzolása a főmenübe. Dev módban törlés-gombok is megjelennek soronként,
+// illetve az egész tábla törlésére is (btnClearLeaderboard, lásd index.html).
+async function renderLeaderboard() {
+  const { trackKey, trackName } = currentTrackInfo();
+  const physics = chosenPhysics();
+  const dev = isDevMode();
+  btnClearLeaderboard.style.display = dev ? 'block' : 'none';
+  leaderboardListEl.textContent = 'Betöltés…';
+  let entries = [];
+  try {
+    entries = await apiGetLeaderboard(trackKey, physics);
+  } catch {
+    leaderboardListEl.innerHTML = '<p>Nem sikerült betölteni a ranglistát.</p>';
+    return;
+  }
+  // Időközben másik pályára/fizikára válthatott a felhasználó — eldobjuk a válasz.
+  const now = currentTrackInfo();
+  if (now.trackKey !== trackKey || chosenPhysics() !== physics) return;
+
+  if (entries.length === 0) {
+    leaderboardListEl.innerHTML = '<p>Még nincs rögzített köridő ehhez a pályához.</p>';
+  } else {
+    leaderboardListEl.innerHTML = entries
+      .map((e, i) => `
+        <div class="lbRow">
+          <span class="lbPos">${i + 1}.</span>
+          <span class="lbName">${escapeHtml(e.playerName)}</span>
+          <span class="lbTime">${fmtTime(e.lapTime)}</span>
+          ${dev ? `<button class="lbDel" data-name="${escapeHtml(e.playerName)}">✕</button>` : ''}
+        </div>
+      `)
+      .join('');
+    if (dev) {
+      leaderboardListEl.querySelectorAll('.lbDel').forEach((btn) => {
+        btn.onclick = async () => {
+          const { trackKey: tk } = currentTrackInfo();
+          await apiDeleteLeaderboardEntry(tk, chosenPhysics(), btn.dataset.name);
+          renderLeaderboard();
+        };
+      });
+    }
+  }
+}
+
+trackSelect.addEventListener('change', renderLeaderboard);
+physicsSelect.addEventListener('change', renderLeaderboard);
+btnClearLeaderboard.addEventListener('click', async () => {
+  const { trackKey, trackName } = currentTrackInfo();
+  if (!confirm(`Biztosan törlöd a(z) "${trackName}" pálya teljes ranglistáját?`)) return;
+  await apiClearLeaderboard(trackKey, chosenPhysics());
+  renderLeaderboard();
+});
+renderLeaderboard();
 
 // A kiválasztott pálya alkalmazása, majd a kért akció (egyjátékos / szoba).
 // Ha az új pálya eltér a jelenleg betöltöttől, elmentjük aktívnak és újratöltünk
@@ -276,7 +360,14 @@ function startSingleplayer() {
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
-  applyPhysicsPreset(chosenPhysics());
+  const physicsName = chosenPhysics();
+  applyPhysicsPreset(physicsName);
+
+  // ÖRÖK RANGLISTA: SP-ben nincs authoritative szerver, ezért a KLIENS küldi be
+  // a köridőt REST-en — csak akkor, ha az eddigi beküldötthöz képest javult
+  // (a tároló amúgy is csak jobb időt fogad el, ez csak a felesleges hívásokat spórolja meg).
+  const { trackKey, trackName } = currentTrackInfo();
+  let lastSubmittedBest = null;
 
   const world = createWorld();
   const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
@@ -299,6 +390,22 @@ function startSingleplayer() {
     // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → a kör érvénytelen.
     const offTrack = isFullyOffRoad(carBody, offRoadExcess);
     raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+
+    if (
+      race.bestLapTime !== null &&
+      (lastSubmittedBest === null || race.bestLapTime < lastSubmittedBest - 1e-6)
+    ) {
+      lastSubmittedBest = race.bestLapTime;
+      apiSubmitLap({
+        trackKey,
+        trackName,
+        physics: physicsName,
+        playerName: playerName(),
+        lapTime: race.bestLapTime,
+      })
+        .then(() => renderLeaderboard())
+        .catch(() => {});
+    }
   }
 
   onRestartClick = () => {
@@ -734,6 +841,7 @@ async function doCreate() {
       laps: chosenLaps(),
       carIdx: selectedCar,
       physics: chosenPhysics(),
+      trackName: getActiveTrackName() || 'Alap pálya',
     });
     startMultiplayer(room);
   } catch (e) {

@@ -27,6 +27,8 @@ import {
   isFullyOffRoad,
 } from '../src/sim/car.js';
 import { createRaceState, raceStep } from '../src/sim/race.js';
+import { hashLayout } from '../src/sim/trackKey.js';
+import { recordLap } from './leaderboardStore.js';
 
 const NEUTRAL = Object.freeze({ up: false, down: false, left: false, right: false, drift: false });
 
@@ -51,6 +53,12 @@ export class RaceRoom extends Room {
     // megosztott CAR mutálása összeakadna köztük (lásd config.js applyPhysicsPreset).
     this.physics = resolvePhysicsPreset(options?.physics);
     this.car = { ...CAR, ...PHYSICS_PRESETS[this.physics] };
+
+    // Az örök ranglistához: trackKey a layout GEOMETRIÁJÁHOZ kötött, névtől
+    // független azonosító (lásd src/sim/trackKey.js); trackName csak megjelenítés
+    // (a létrehozó kliens küldi — az ő "aktív pálya" neve, vagy egy alapértelmezés).
+    this.trackKey = hashLayout(layout);
+    this.trackName = String(options?.trackName || 'Egyedi pálya').slice(0, 40);
 
     this.trackState = createTrackState(layout, {
       tile: TRACK.tile,
@@ -170,6 +178,7 @@ export class RaceRoom extends Room {
       finished: false,
       totalTime: null,
       place: null, // hányadikként ért célba (1-től) — a célvonal átlépés sorrendje
+      lastSubmittedBest: null, // az örök ranglistára eddig beküldött legjobb kör (lásd afterStep)
     });
 
     // Az init-adatokat (pálya stb.) NEM itt küldjük, hanem a kliens 'ready'
@@ -213,6 +222,7 @@ export class RaceRoom extends Room {
       p.finished = false;
       p.totalTime = null;
       p.place = null;
+      p.lastSubmittedBest = null;
     }
     this.phase = 'countdown';
     this.countdownLeft = RACE.countdownSeconds;
@@ -267,6 +277,29 @@ export class RaceRoom extends Room {
         // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → érvénytelen.
         const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess, this.car);
         raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack, this.trackState.trackHeadingAt);
+
+        // ÖRÖK RANGLISTA: a szerver AUTHORITATIVE, ezért innen küldjük be a
+        // köridőt (nem a kliensből) — raceStep csak ÉRVÉNYES körnél frissíti
+        // bestLapTime-ot, úgyhogy elég azt figyelni, javult-e az e szobában eddig
+        // beküldötthöz képest (a tároló amúgy is csak jobb időt fogad el, ez itt
+        // csak a felesleges ismételt hívásokat spórolja meg).
+        if (
+          p.race.bestLapTime !== null &&
+          (p.lastSubmittedBest === null || p.race.bestLapTime < p.lastSubmittedBest - 1e-6)
+        ) {
+          p.lastSubmittedBest = p.race.bestLapTime;
+          recordLap(
+            {
+              trackKey: this.trackKey,
+              trackName: this.trackName,
+              physics: this.physics,
+              playerName: p.name,
+              lapTime: p.race.bestLapTime,
+            },
+            Date.now()
+          );
+        }
+
         if (p.race.phase === 'finished') {
           p.finished = true;
           p.totalTime = p.race.time;

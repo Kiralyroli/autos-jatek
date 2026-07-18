@@ -2,8 +2,9 @@
 // soha nem írja; a játék igazsága a sim/race.js-ben van.
 import { RACE } from './config.js';
 
-// Másodperc → "1:03.45" vagy "23.45 s" formátum.
-function fmt(seconds) {
+// Másodperc → "1:03.45" vagy "23.45 s" formátum. Exportálva — a ranglista
+// (main.js renderLeaderboard) is ezt használja a köridők megjelenítésére.
+export function fmt(seconds) {
   if (seconds === null || seconds === undefined) return '–';
   const m = Math.floor(seconds / 60);
   const s = seconds - m * 60;
