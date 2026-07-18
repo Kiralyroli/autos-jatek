@@ -238,6 +238,30 @@
       #restart:active {
         transform: translateX(-50%) scale(0.97);
       }
+      /* Verseny közben oldalt (bal alul) elérhető kilépés a főmenübe — nem
+         takar semmit (a HUD/versenyinfó felül, az élő állás jobb felül van). */
+      #btnQuitRace {
+        position: fixed;
+        left: 14px;
+        bottom: 14px;
+        display: none;
+        padding: 10px 16px;
+        font-family: var(--font);
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        cursor: pointer;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        transition: background 0.15s ease;
+      }
+      #btnQuitRace:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
       /* --- Főmenü + multiplayer lobby --- */
       .overlay {
         position: fixed;
@@ -333,7 +357,18 @@
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--accent-soft);
       }
-      .overlay select { cursor: pointer; }
+      .overlay select {
+        cursor: pointer;
+        /* A böngésző natívan rendereli a legördülő listát (nem éri el a fenti
+           CSS) — a color-scheme jelzi neki, hogy sötét háttérhez illő (nem
+           fehér) felugró listát rajzoljon; az option-szín ráadásul Chrome-ban
+           közvetlenül is stílusozható, ez a kettő együtt adja a jó kontrasztot. */
+        color-scheme: dark;
+      }
+      .overlay select option {
+        background: var(--panel);
+        color: var(--text);
+      }
       /* Autó-választó kártyák — a bal oldali sidepanelben, egy oszlopban. */
       #carSelect {
         display: flex;
@@ -528,6 +563,7 @@
     </div>
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
     <button id="restart">🔄 Új verseny</button>
+    <button id="btnQuitRace">← Főmenü</button>
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">

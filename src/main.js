@@ -340,7 +340,18 @@ async function playWithSelectedTrack(action) {
 
 // --- Üresjárati render (amíg a menüben vagyunk): lassan körbeforgó kamera ---
 let mode = 'menu'; // 'menu' | 'single' | 'multi'
+let currentRoom = null; // multiplayerben a Colyseus room — a Főmenü-gomb ebből lép ki
 let lastTime = performance.now();
+
+// Verseny közben (SP vagy MP) elérhető "vissza a főmenübe" gomb — MP-ben
+// tisztán kilép a szobából, utána (mindkét módban) egyszerűen újratöltjük az
+// oldalt: ez ugyanaz a minta, mint a lobby/eredmény "Kilépés"/"Vissza" gombjai
+// (btnLeave, btnResultsLeave) — pending session-adat nélkül a reload után a
+// főmenü jelenik meg.
+document.getElementById('btnQuitRace').onclick = () => {
+  if (currentRoom) currentRoom.leave();
+  window.location.reload();
+};
 
 function idleFrame(now) {
   if (mode !== 'menu') return;
@@ -358,6 +369,7 @@ function idleFrame(now) {
 function startSingleplayer() {
   mode = 'single';
   menuEl.style.display = 'none';
+  document.getElementById('btnQuitRace').style.display = 'block';
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
@@ -519,7 +531,9 @@ function ensureTrackMatches(init, roomCode) {
 
 async function startMultiplayer(room) {
   mode = 'multi';
+  currentRoom = room;
   menuEl.style.display = 'none';
+  document.getElementById('btnQuitRace').style.display = 'block';
 
   // Multiplayerben a helyi CAR-hangolás predikció-hibát okozna (a szerver az
   // ALAP értékekkel szimulál) — visszaállunk az alapra, a hangoló panel eltűnik.
