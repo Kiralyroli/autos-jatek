@@ -20,7 +20,12 @@ export function setupWheels(modelHolder) {
   const w = { fl: null, fr: null, bl: null, br: null };
   modelHolder.traverse((o) => {
     const n = norm(o.name);
-    if (!n.includes('wheel')) return;
+    // FONTOS: a kerék-CSOPORT node-ot vesszük (neve "wheel…"), NEM a GLTFLoader által
+    // létrehozott gyerek-mesh-eket ("Mesh_wheel…" → "meshwheel…"). A versenyautóknál
+    // a kerék több primitívre bomlik, a gyerek-mesh-ek az origón ülnek — ha azokat
+    // fognánk, a tengely-számítás (kerék-pozíciók különbsége) elfajulna, és a kerék
+    // nem forogna. A `startsWith('wheel')` kizárja a "mesh…"-előtagú gyerekeket.
+    if (!n.startsWith('wheel')) return;
     const f = n.includes('front');
     const b = n.includes('back') || n.includes('rear');
     const l = n.includes('left');
