@@ -296,6 +296,10 @@ export const RACE = {
   // Terelőkúpnak ütközés: ha az autó doboza (a CAR.length/width köré ennyi
   // méter ráhagyással) eléri egy 'pylon' dekoráció pozícióját, az AKTUÁLIS kör
   // érvénytelen lesz (ugyanúgy, mint a pályaelhagyásnál) — lásd sim/car.js hitsCone.
-  coneHitRadius: 1.3, // m — kb. az autó félszélessége + a kúp mérete + kis tűrés
+  // FONTOS: 1.3 m-es ráhagyással kiderült (élő hibajelentés — Hungaroring pálya),
+  // hogy a versenyvonalon álló, PUSZTÁN díszítésnek szánt kúpok is folyamatosan
+  // érvénytelenítették a kört, mert a nagyvonalú küszöb már a puszta közelségre
+  // is beütött — ezért ez csak a tényleges, közvetlen nekiütközésre szűkítve.
+  coneHitRadius: 0.35, // m — kis ráhagyás a kúp saját méretéhez, nem a közelségre
   // A checkpointok a pályából generálódnak (sim/track.js), a checkpointCount alapján.
 };
