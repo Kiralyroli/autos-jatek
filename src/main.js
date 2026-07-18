@@ -381,6 +381,7 @@ function startSingleplayer() {
   // (a tároló amúgy is csak jobb időt fogad el, ez csak a felesleges hívásokat spórolja meg).
   const { trackKey, trackName } = currentTrackInfo();
   let lastSubmittedBest = null;
+  let submitInFlight = false; // egyszerre csak egy beküldés — lásd recordState
 
   // Terelőkúpok VILÁG-koordinátái (lásd render3d/decorations.js ugyanezt a
   // world = dgx/dgy * TRACK.tile képletet) — a kör-érvényesség ellenőrzéséhez.
@@ -411,20 +412,33 @@ function startSingleplayer() {
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
     raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
 
+    // FONTOS: lastSubmittedBest CSAK sikeres válasz után frissül (nem rögtön a
+    // hívás előtt) — így ha egy beküldés elhasal (hálózati hiba, Railway "kihűlt"
+    // szerver lassú ébredése), a KÖVETKEZŐ fizika-lépés újra megpróbálja UGYANEZT
+    // az időt, amíg nem sikerül. A submitInFlight csak azt akadályozza meg, hogy
+    // egyetlen still-in-progress kérésre percenként 60x rákérdezzünk.
     if (
+      !submitInFlight &&
       race.bestLapTime !== null &&
       (lastSubmittedBest === null || race.bestLapTime < lastSubmittedBest - 1e-6)
     ) {
-      lastSubmittedBest = race.bestLapTime;
+      submitInFlight = true;
+      const timeToSubmit = race.bestLapTime;
       apiSubmitLap({
         trackKey,
         trackName,
         physics: physicsName,
         playerName: playerName(),
-        lapTime: race.bestLapTime,
+        lapTime: timeToSubmit,
       })
-        .then(() => renderLeaderboard())
-        .catch(() => {});
+        .then(() => {
+          lastSubmittedBest = timeToSubmit;
+          renderLeaderboard();
+        })
+        .catch(() => {})
+        .finally(() => {
+          submitInFlight = false;
+        });
     }
   }
 
