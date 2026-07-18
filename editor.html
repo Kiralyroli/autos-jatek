@@ -5,12 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pálya-szerkesztő</title>
     <style>
+      :root {
+        --bg: #0d0e13;
+        --panel: rgba(19, 20, 27, 0.86);
+        --panel-soft: rgba(255, 255, 255, 0.05);
+        --panel-border: rgba(255, 255, 255, 0.09);
+        --accent: #4f8dfd;
+        --accent-soft: rgba(79, 141, 253, 0.14);
+        --success: #2fae66;
+        --success-hover: #35bf71;
+        --danger: #e0505a;
+        --danger-hover: #e96570;
+        --gold: #e0b13d;
+        --text: #eef0f4;
+        --text-dim: #8b93a6;
+        --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
       html, body {
         margin: 0;
         padding: 0;
-        background: #1a1a1e;
-        color: #cfd2da;
-        font-family: system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
         overflow: hidden;
       }
       #layout {
@@ -25,66 +42,81 @@
         overflow: auto;
       }
       canvas {
-        background: #2a2d38;
-        border-radius: 8px;
+        background: #14161f;
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
         cursor: pointer;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
       }
       #panel {
         width: 300px;
-        padding: 16px;
-        background: #20222b;
-        border-left: 1px solid #33363f;
+        padding: 18px;
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border-left: 1px solid var(--panel-border);
         display: flex;
         flex-direction: column;
         gap: 12px;
         box-sizing: border-box;
         overflow-y: auto;
       }
+      #panel::-webkit-scrollbar { width: 8px; }
+      #panel::-webkit-scrollbar-track { background: transparent; }
+      #panel::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+      }
       h1 {
         font-size: 18px;
+        font-weight: 800;
         margin: 0 0 4px;
+        color: var(--text);
       }
       h2 {
-        font-size: 13px;
+        font-size: 12px;
         margin: 4px 0 0;
-        color: #a8adb8;
+        color: var(--text-dim);
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.07em;
+        font-weight: 700;
       }
       p {
         font-size: 13px;
         line-height: 1.5;
-        color: #a8adb8;
+        color: var(--text-dim);
         margin: 0;
       }
       button {
         font-size: 14px;
-        padding: 10px 14px;
+        font-family: var(--font);
+        font-weight: 700;
+        padding: 11px 14px;
         border: none;
-        border-radius: 8px;
+        border-radius: 9px;
         cursor: pointer;
-        background: #33363f;
-        color: #e8eaef;
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text);
+        transition: background 0.13s ease, transform 0.1s ease;
       }
       button:hover:not(:disabled) {
-        background: #40434f;
+        background: rgba(255, 255, 255, 0.11);
       }
+      button:active:not(:disabled) { transform: scale(0.98); }
       button:disabled {
         opacity: 0.4;
         cursor: default;
       }
       button.primary {
-        background: #2e7d32;
+        background: var(--success);
+        color: #fff;
       }
-      button.primary:hover:not(:disabled) {
-        background: #3a9d40;
-      }
+      button.primary:hover:not(:disabled) { background: var(--success-hover); }
       button.danger {
-        background: #5c2b2b;
+        background: var(--danger);
+        color: #fff;
       }
-      button.danger:hover:not(:disabled) {
-        background: #7a3838;
-      }
+      button.danger:hover:not(:disabled) { background: var(--danger-hover); }
       #modeToggle {
         display: flex;
         gap: 8px;
@@ -93,16 +125,17 @@
         flex: 1;
       }
       #modeToggle button.active {
-        background: #3a5a8f;
+        background: var(--accent);
+        color: #fff;
       }
       #modeToggle button.active:hover {
-        background: #45699e;
+        background: #6a9cfd;
       }
       .decorLayerHeader {
         font-size: 11px;
-        color: #a8adb8;
+        color: var(--text-dim);
         text-transform: uppercase;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.05em;
         margin: 8px 0 4px;
       }
       .decorLayerHeader:first-child {
@@ -119,24 +152,26 @@
         text-align: left;
       }
       .decorLayerGroup button.active {
-        background: #6a4a1e;
-        outline: 2px solid #d99a3f;
+        background: rgba(224, 177, 61, 0.16);
+        outline: 2px solid var(--gold);
+        color: var(--text);
       }
       #status {
         font-size: 13px;
         padding: 10px 12px;
-        border-radius: 8px;
-        background: #262a35;
-        border: 1px solid #33363f;
+        border-radius: 9px;
+        background: var(--panel-soft);
+        border: 1px solid var(--panel-border);
       }
       #status.closed {
-        border-color: #2e7d32;
-        color: #8fd693;
+        border-color: var(--success);
+        color: var(--success);
       }
       a.backlink {
-        color: #7fb0ff;
+        color: var(--accent);
         text-decoration: none;
         font-size: 13px;
+        font-weight: 600;
       }
       a.backlink:hover {
         text-decoration: underline;
@@ -146,7 +181,7 @@
         flex-direction: column;
         gap: 4px;
         font-size: 12px;
-        color: #a8adb8;
+        color: var(--text-dim);
       }
       .legend span.swatch {
         display: inline-block;
@@ -158,22 +193,25 @@
       }
       hr {
         border: none;
-        border-top: 1px solid #33363f;
+        border-top: 1px solid var(--panel-border);
         margin: 4px 0;
       }
       #trackNameInput {
         width: 100%;
         box-sizing: border-box;
-        padding: 9px 10px;
-        border-radius: 8px;
-        border: 1px solid #33363f;
-        background: #1a1c23;
-        color: #e8eaef;
+        padding: 10px 11px;
+        border-radius: 9px;
+        border: 1px solid var(--panel-border);
+        background: var(--panel-soft);
+        color: var(--text);
+        font-family: var(--font);
         font-size: 14px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
       }
       #trackNameInput:focus {
         outline: none;
-        border-color: #3a5a8f;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
       #savedTracksList {
         display: flex;
@@ -183,18 +221,20 @@
         overflow-y: auto;
       }
       #savedTracksList p {
-        color: #6f7580;
+        color: var(--text-dim);
         font-style: italic;
       }
       .savedTrackRow {
         display: flex;
         align-items: center;
         gap: 6px;
-        background: #262a35;
-        border: 1px solid #33363f;
-        border-radius: 8px;
+        background: var(--panel-soft);
+        border: 1px solid var(--panel-border);
+        border-radius: 9px;
         padding: 6px 6px 6px 10px;
+        transition: background 0.15s ease;
       }
+      .savedTrackRow:hover { background: rgba(255, 255, 255, 0.07); }
       .savedTrackName {
         flex: 1;
         font-size: 13px;

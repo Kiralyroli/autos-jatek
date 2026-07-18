@@ -5,88 +5,127 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Autós játék — Fázis 1</title>
     <style>
+      :root {
+        --bg: #0d0e13;
+        --panel: rgba(19, 20, 27, 0.86);
+        --panel-soft: rgba(255, 255, 255, 0.05);
+        --panel-border: rgba(255, 255, 255, 0.09);
+        --accent: #4f8dfd;
+        --accent-soft: rgba(79, 141, 253, 0.14);
+        --success: #2fae66;
+        --success-hover: #35bf71;
+        --danger: #e0505a;
+        --danger-hover: #e96570;
+        --gold: #e0b13d;
+        --text: #eef0f4;
+        --text-dim: #8b93a6;
+        --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
       html, body {
         margin: 0;
         padding: 0;
-        background: #1a1a1e;
+        background: var(--bg);
         overflow: hidden;
+        font-family: var(--font);
       }
       #game {
         width: 100vw;
         height: 100vh;
       }
+      /* Vékony scrollbar a sötét paneleknek. */
+      .overlay ::-webkit-scrollbar { width: 8px; }
+      .overlay ::-webkit-scrollbar-track { background: transparent; }
+      .overlay ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+      }
       #hud {
         position: fixed;
-        left: 12px;
-        top: 12px;
-        font-family: system-ui, sans-serif;
-        font-size: 13px;
-        color: #cfd2da;
-        background: rgba(0, 0, 0, 0.45);
-        padding: 8px 12px;
-        border-radius: 8px;
-        line-height: 1.5;
+        left: 14px;
+        top: 14px;
+        font-size: 12.5px;
+        color: var(--text-dim);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        padding: 10px 14px;
+        border-radius: 10px;
+        line-height: 1.6;
         pointer-events: none;
         user-select: none;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
-      #hud b { color: #fff; }
+      #hud b {
+        color: var(--text);
+        font-weight: 700;
+      }
       #hud kbd {
-        background: #2c2f3a;
-        border-radius: 4px;
-        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 5px;
+        padding: 1px 7px;
         font-family: ui-monospace, monospace;
+        color: var(--text);
       }
       #hud a {
-        color: #7fb0ff;
+        color: var(--accent);
         pointer-events: auto;
+        text-decoration: none;
+        font-weight: 600;
       }
+      #hud a:hover { text-decoration: underline; }
       /* Kör- és időkijelző — felül középen, jól látható. */
       #raceinfo {
         position: fixed;
-        top: 12px;
+        top: 14px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
         align-items: center;
-        gap: 18px;
-        font-family: system-ui, sans-serif;
-        color: #fff;
-        background: rgba(0, 0, 0, 0.5);
-        padding: 10px 20px;
-        border-radius: 12px;
+        gap: 20px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1px solid var(--panel-border);
+        padding: 12px 26px;
+        border-radius: 14px;
         pointer-events: none;
         user-select: none;
         font-variant-numeric: tabular-nums;
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
       }
       #raceinfo .ri-lap {
         font-size: 30px;
         font-weight: 800;
         line-height: 1;
         white-space: nowrap;
+        color: var(--text);
       }
       #raceinfo .ri-lap #lap { font-size: 34px; }
       #raceinfo .ri-times {
-        border-left: 1px solid rgba(255, 255, 255, 0.22);
-        padding-left: 18px;
+        border-left: 1px solid rgba(255, 255, 255, 0.12);
+        padding-left: 20px;
         display: flex;
         flex-direction: column;
-        gap: 3px;
+        gap: 4px;
       }
       #raceinfo .ri-row { font-size: 18px; }
       #raceinfo .ri-row b { font-weight: 700; }
-      #raceinfo .ri-best b { color: #ffd54a; }
+      #raceinfo .ri-best b { color: var(--gold); }
       #raceinfo .ri-label {
-        font-size: 12px;
-        letter-spacing: 0.06em;
-        color: #b6bac4;
+        font-size: 11px;
+        letter-spacing: 0.07em;
+        color: var(--text-dim);
         text-transform: uppercase;
       }
       /* Végeredmény-lista (a #results overlay panelben). */
       #resultsList {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 7px;
         margin: 4px 0 8px;
         font-variant-numeric: tabular-nums;
       }
@@ -94,12 +133,19 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        background: #262a35;
-        border-radius: 8px;
-        padding: 9px 12px;
+        background: var(--panel-soft);
+        border: 1px solid var(--panel-border);
+        border-radius: 9px;
+        padding: 10px 14px;
         font-size: 15px;
       }
-      #resultsList .res.me { background: #2e3a4f; outline: 1px solid #4a6a9e; }
+      #resultsList .res.me {
+        background: var(--accent-soft);
+        border-color: rgba(79, 141, 253, 0.4);
+      }
+      #resultsList .res:nth-child(1) .pos { color: var(--gold); }
+      #resultsList .res:nth-child(2) .pos { color: #c7cdda; }
+      #resultsList .res:nth-child(3) .pos { color: #c98a52; }
       #resultsList .res .pos {
         font-weight: 800;
         font-size: 17px;
@@ -107,8 +153,8 @@
         text-align: center;
       }
       #resultsList .res .rname { flex: 1; font-weight: 600; }
-      #resultsList .res .rtime { color: #b6bac4; }
-      #resultsList .res .dnf { color: #d9663f; }
+      #resultsList .res .rtime { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+      #resultsList .res .dnf { color: var(--danger); }
       #countdown {
         position: fixed;
         inset: 0;
@@ -116,10 +162,9 @@
         align-items: center;
         justify-content: center;
         text-align: center;
-        font-family: system-ui, sans-serif;
         font-weight: 800;
         color: #fff;
-        text-shadow: 0 4px 24px rgba(0, 0, 0, 0.65);
+        text-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
         pointer-events: none;
         user-select: none;
       }
@@ -132,11 +177,10 @@
         flex-direction: column;
         align-items: center;
         gap: 4px;
-        font-family: system-ui, sans-serif;
         font-size: 42px;
         font-weight: 800;
-        color: #ff4b3e;
-        text-shadow: 0 3px 16px rgba(0, 0, 0, 0.7);
+        color: var(--danger);
+        text-shadow: 0 3px 14px rgba(0, 0, 0, 0.6);
         pointer-events: none;
         user-select: none;
         animation: wrongway-blink 0.6s step-start infinite;
@@ -153,22 +197,21 @@
       /* Pálya-elhagyás → érvénytelen kör infó-szalag (felül, a kör-panel alatt). */
       #invalidlap {
         position: fixed;
-        top: 86px;
+        top: 90px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
         align-items: center;
         gap: 8px;
-        font-family: system-ui, sans-serif;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
         color: #fff;
-        background: rgba(200, 45, 30, 0.92);
-        padding: 8px 16px;
+        background: var(--danger);
+        padding: 9px 18px;
         border-radius: 10px;
         pointer-events: none;
         user-select: none;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
         white-space: nowrap;
       }
       #restart {
@@ -177,19 +220,20 @@
         top: 64%;
         transform: translateX(-50%);
         display: none;
-        padding: 13px 30px;
-        font-family: system-ui, sans-serif;
+        padding: 15px 34px;
+        font-family: var(--font);
         font-size: 20px;
         font-weight: 700;
         color: #fff;
-        background: #2e7d32;
+        background: var(--success);
         border: none;
-        border-radius: 10px;
+        border-radius: 11px;
         cursor: pointer;
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        transition: background 0.15s ease, transform 0.15s ease;
       }
       #restart:hover {
-        background: #3a9d40;
+        background: var(--success-hover);
       }
       #restart:active {
         transform: translateX(-50%) scale(0.97);
@@ -201,13 +245,13 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgba(10, 11, 16, 0.72);
-        font-family: system-ui, sans-serif;
+        background: rgba(5, 6, 10, 0.72);
+        font-family: var(--font);
         z-index: 20;
       }
-      /* A főmenü panelje + a mellette futó ranglista-sáv közös sora — a
-         ranglistát a #menu SAJÁT overlay-jén belül, de a fő panelen KÍVÜL, egy
-         külön oszlopban jelenítjük meg, hogy ne kelljen a szűk főmenübe zsúfolni. */
+      /* A főmenü paneljei — bal oldalt az autó-választó, középen a fő panel,
+         jobb oldalt a ranglista — mindhárom külön oszlopban, hogy egyik se
+         legyen zsúfolt (lásd .sidepanel). */
       #menu .menuLayout {
         display: flex;
         align-items: flex-start;
@@ -217,22 +261,24 @@
         width: 340px;
         max-height: 90vh;
         overflow-y: auto;
-        background: #20222b;
-        border: 1px solid #33363f;
-        border-radius: 14px;
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border: 1px solid var(--panel-border);
+        border-radius: 16px;
         padding: 24px;
-        color: #e8eaef;
+        color: var(--text);
         display: flex;
         flex-direction: column;
         gap: 12px;
-        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
       }
       .overlay .panel.sidepanel {
-        width: 260px;
+        width: 240px;
       }
-      /* Keskeny nézeten (mobil, kis ablak) a két panel egymás alá kerül,
-         különben kilógna a képernyőből. */
-      @media (max-width: 720px) {
+      /* Keskeny nézeten (mobil, kis ablak) a panelek egymás alá kerülnek,
+         különben kilógnának a képernyőből. */
+      @media (max-width: 900px) {
         #menu .menuLayout {
           flex-direction: column;
           align-items: stretch;
@@ -247,71 +293,88 @@
         }
       }
       .overlay h2 {
-        font-size: 13px;
+        font-size: 12px;
         margin: 4px 0 0;
-        color: #a8adb8;
+        color: var(--text-dim);
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.07em;
+        font-weight: 700;
       }
       .overlay h1 {
-        margin: 0 0 4px;
+        margin: 0 0 6px;
         font-size: 22px;
+        font-weight: 800;
         text-align: center;
+        color: var(--text);
       }
       .overlay label {
-        font-size: 13px;
-        color: #a8adb8;
+        font-size: 12.5px;
+        color: var(--text-dim);
+        font-weight: 600;
       }
       .overlay input,
       .overlay select {
         width: 100%;
         box-sizing: border-box;
-        padding: 10px 12px;
-        border-radius: 8px;
-        border: 1px solid #33363f;
-        background: #1a1c23;
-        color: #e8eaef;
+        padding: 11px 13px;
+        border-radius: 9px;
+        border: 1px solid var(--panel-border);
+        background: var(--panel-soft);
+        color: var(--text);
         font-size: 15px;
+        font-family: var(--font);
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .overlay input:hover,
+      .overlay select:hover { border-color: rgba(255, 255, 255, 0.18); }
+      .overlay input:focus,
+      .overlay select:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
       .overlay select { cursor: pointer; }
-      /* Autó-választó kártyák. */
+      /* Autó-választó kártyák — a bal oldali sidepanelben, egy oszlopban. */
       #carSelect {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
       }
       #carSelect .carswatch {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 9px 10px;
+        gap: 9px;
+        padding: 10px 12px;
         font-size: 14px;
-        border: 1px solid #33363f;
-        border-radius: 8px;
-        background: #1a1c23;
-        color: #e8eaef;
+        border: 1px solid var(--panel-border);
+        border-radius: 9px;
+        background: var(--panel-soft);
+        color: var(--text);
         cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
       }
-      #carSelect .carswatch:hover { background: #262a35; }
+      #carSelect .carswatch:hover {
+        border-color: rgba(255, 255, 255, 0.2);
+      }
       #carSelect .carswatch.active {
-        border-color: #3a9d40;
-        background: #223026;
+        border-color: var(--accent);
+        background: var(--accent-soft);
       }
       #carSelect .carswatch .dot {
         width: 15px;
         height: 15px;
         border-radius: 50%;
-        border: 1px solid rgba(255, 255, 255, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.35);
         flex-shrink: 0;
       }
       /* A szám-mező natív léptető-nyilai a sötét témához igazodjanak (ne fehér
          háttéren fehér nyilak legyenek). */
       .overlay input[type="number"] { color-scheme: dark; }
-      /* Örök ranglista — a mellette futó sidepanel saját listája. */
+      /* Örök ranglista — a jobb oldali sidepanel saját listája. */
       #leaderboardList {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 5px;
         max-height: 60vh;
         overflow-y: auto;
         /* flex-shrink nélkül a flex-column .panel a saját overflow-y:auto-nk miatt
@@ -321,7 +384,7 @@
         font-variant-numeric: tabular-nums;
       }
       #leaderboardList p {
-        color: #6f7580;
+        color: var(--text-dim);
         font-style: italic;
         font-size: 13px;
         margin: 0;
@@ -330,79 +393,110 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        background: #262a35;
+        background: var(--panel-soft);
+        border: 1px solid transparent;
         border-radius: 8px;
-        padding: 6px 10px;
+        padding: 7px 11px;
         font-size: 13px;
       }
-      .lbRow .lbPos { font-weight: 700; min-width: 20px; color: #a8adb8; }
+      .lbRow:nth-child(1) { border-color: rgba(224, 177, 61, 0.4); }
+      .lbRow:nth-child(1) .lbPos { color: var(--gold); }
+      .lbRow:nth-child(2) .lbPos { color: #c7cdda; }
+      .lbRow:nth-child(3) .lbPos { color: #c98a52; }
+      .lbRow .lbPos { font-weight: 700; min-width: 20px; color: var(--text-dim); }
       .lbRow .lbName { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .lbRow .lbTime { color: #ffd54a; font-weight: 600; }
+      .lbRow .lbTime { color: var(--gold); font-weight: 700; }
       .lbRow .lbDel {
-        padding: 3px 7px;
+        padding: 3px 8px;
         font-size: 12px;
         border: none;
         border-radius: 6px;
-        background: #33363f;
-        color: #e8eaef;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
         cursor: pointer;
         flex: none;
+        transition: background 0.15s ease, color 0.15s ease;
       }
-      .overlay button.danger { background: #7d2e2e; }
-      .overlay button.danger:hover:not(:disabled) { background: #9a3a3a; }
+      .lbRow .lbDel:hover { background: var(--danger); color: #fff; }
+      .overlay button.danger { background: var(--danger); color: #fff; }
+      .overlay button.danger:hover:not(:disabled) { background: var(--danger-hover); }
       .overlay button {
-        padding: 12px 14px;
+        padding: 13px 15px;
         font-size: 15px;
-        font-weight: 600;
+        font-weight: 700;
+        font-family: var(--font);
         border: none;
-        border-radius: 9px;
+        border-radius: 10px;
         cursor: pointer;
-        background: #33363f;
-        color: #e8eaef;
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text);
+        transition: background 0.13s ease, transform 0.1s ease;
       }
-      .overlay button:hover:not(:disabled) { background: #40434f; }
-      .overlay button:disabled { opacity: 0.45; cursor: default; }
-      .overlay button.primary { background: #2e7d32; }
-      .overlay button.primary:hover:not(:disabled) { background: #3a9d40; }
-      .overlay button.accent { background: #3a5a8f; }
-      .overlay button.accent:hover:not(:disabled) { background: #45699e; }
+      .overlay button:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.11);
+      }
+      .overlay button:active:not(:disabled) { transform: scale(0.98); }
+      .overlay button:disabled { opacity: 0.4; cursor: default; }
+      .overlay button.primary {
+        background: var(--success);
+        color: #fff;
+      }
+      .overlay button.primary:hover:not(:disabled) { background: var(--success-hover); }
+      .overlay button.accent {
+        background: var(--accent);
+        color: #fff;
+      }
+      .overlay button.accent:hover:not(:disabled) { background: #6a9cfd; }
       .overlay .joinrow { display: flex; gap: 8px; }
       .overlay .joinrow input { flex: 1; }
-      .overlay hr { border: none; border-top: 1px solid #33363f; margin: 2px 0; }
+      .overlay hr { border: none; border-top: 1px solid var(--panel-border); margin: 2px 0; }
       .overlay .status { font-size: 13px; color: #d9a03f; min-height: 17px; }
       #lobbyCode {
         font-family: ui-monospace, monospace;
         font-size: 26px;
+        font-weight: 700;
         text-align: center;
         letter-spacing: 2px;
-        background: #1a1c23;
-        border: 1px dashed #4a4e5c;
-        border-radius: 8px;
-        padding: 10px;
+        background: var(--panel-soft);
+        border: 1px dashed rgba(255, 255, 255, 0.2);
+        border-radius: 9px;
+        padding: 11px;
+        color: var(--text);
         user-select: all;
       }
       #lobbyPlayers { display: flex; flex-direction: column; gap: 6px; }
       #lobbyPlayers .p {
-        background: #262a35;
+        background: var(--panel-soft);
+        border: 1px solid var(--panel-border);
         border-radius: 8px;
         padding: 8px 12px;
         font-size: 14px;
       }
       #standings {
         position: fixed;
-        right: 12px;
-        top: 12px;
+        right: 14px;
+        top: 14px;
         display: none;
         flex-direction: column;
         gap: 4px;
-        font-family: system-ui, sans-serif;
-        font-size: 14px;
-        color: #e8eaef;
-        background: rgba(0, 0, 0, 0.45);
-        padding: 10px 14px;
-        border-radius: 8px;
+        font-size: 13.5px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        padding: 11px 15px;
+        border-radius: 10px;
         pointer-events: none;
         font-variant-numeric: tabular-nums;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+      }
+      #standings > div {
+        padding: 2px 0;
+      }
+      #standings > div:first-child {
+        color: var(--gold);
+        font-weight: 700;
       }
     </style>
   </head>
@@ -438,6 +532,10 @@
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">
       <div class="menuLayout">
+        <div class="panel sidepanel">
+          <h2>🚗 Autó</h2>
+          <div id="carSelect"></div>
+        </div>
         <div class="panel">
           <h1>🏎️ Autós játék</h1>
           <label for="playerName">Neved</label>
@@ -448,8 +546,6 @@
           </select>
           <label for="lapsInput">Körök száma</label>
           <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
-          <label>Autó</label>
-          <div id="carSelect"></div>
           <label for="physicsSelect">Autó-fizika</label>
           <select id="physicsSelect">
             <option value="realistic">Realisztikus</option>
