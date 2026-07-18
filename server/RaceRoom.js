@@ -24,6 +24,7 @@ import {
   createDriveState,
   speedKmh,
   corneringLoad,
+  isFullyOffRoad,
 } from '../src/sim/car.js';
 import { createRaceState, raceStep } from '../src/sim/race.js';
 
@@ -255,7 +256,9 @@ export class RaceRoom extends Room {
       const pos = p.body.getPosition();
       const curr = { x: pos.x, y: pos.y };
       if (!p.finished) {
-        raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints);
+        // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → érvénytelen.
+        const offTrack = isFullyOffRoad(p.body, this.trackState.offRoadExcess);
+        raceStep(p.race, p.prev, curr, dt, this.trackState.checkpoints, offTrack);
         if (p.race.phase === 'finished') {
           p.finished = true;
           p.totalTime = p.race.time;
@@ -320,6 +323,7 @@ export class RaceRoom extends Room {
         curLap: p.race.time - p.race.lapStartTime, // futó köridő (HUD)
         lastLap: p.race.lastLapTime,
         bestLap: p.race.bestLapTime,
+        lapValid: p.race.lapValid, // az aktuális kör érvényes-e (HUD-jelzés)
         wrongWay: p.race.wrongWay,
         finished: p.finished,
         totalTime: p.totalTime,

@@ -223,6 +223,9 @@ export const NET = {
 export const RACE = {
   laps: 3,
   countdownSeconds: 3,
+  // Kör-érvényesség: ha a TELJES autó elhagyja a pályát (mind a 4 sarok a burkolaton
+  // kívül — lásd sim/car.js isFullyOffRoad), az AKTUÁLIS kör érvénytelen lesz, és az
+  // ideje nem számít a legjobb körhöz. (Amíg akár egy kerék az úton van, még ér.)
   // Multiplayer: az ELSŐ célba érő után ennyi másodperccel a verseny akkor is
   // lezárul, ha valaki még nem ért célba (ő DNF) — egy AFK játékos ne tartsa
   // örökre nyitva a versenyt.

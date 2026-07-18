@@ -20,10 +20,13 @@ export function createRaceState(totalLaps) {
     nextCheckpoint: 1, // a KÖVETKEZŐ átszelendő checkpoint indexe (0 = célvonal)
     lapStartTime: 0, // s — az aktuális kör kezdete (versenyidőben)
     lastLapTime: null, // s — utolsó teljesített kör ideje
-    bestLapTime: null, // s — legjobb kör
+    lastLapValid: true, // az utolsó teljesített kör érvényes volt-e
+    bestLapTime: null, // s — legjobb kör (CSAK érvényes körökből)
     lapTimes: [], // s[] — az összes teljesített kör
     wrongWay: false, // épp rossz irányba megy-e (HUD jelzi)
     wrongWaySeconds: 0, // s — mióta halad elfelé (türelmi idő számláló)
+    lapValid: true, // az AKTUÁLIS kör érvényes-e — ha a kör alatt letér a pályáról
+    //                (fűre/sarokvágás), false lesz, és a köridő nem számít a legjobbhoz.
   };
 }
 
@@ -63,7 +66,11 @@ function segmentsCross(p1, p2, q1, q2) {
 //   {type:'go'} | {type:'checkpoint', index} | {type:'lap', lapTime} | {type:'finish', totalTime}
 // A `checkpoints` paraméterben kapja a pálya keresztvonalait (kliensen a track.js
 // singletonét, szerveren a szoba trackState-jét) — így a modul pálya-független.
-export function raceStep(state, prevPos, currPos, dt, checkpoints) {
+// `offTrack` (bool): a hívó adja meg, hogy az autó JELENLEG a pályán kívül van-e
+// (fűre tért / sarkot vágott). Ha a kör ALATT bármikor igaz, a kör érvénytelen lesz
+// (lapValid=false), és a köridő NEM számít a legjobbhoz. A hívó ezt az offRoadExcess-ből
+// számolja (kliensen track.js, szerveren a szoba trackState-je) egy tűréshatárral.
+export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = false) {
   const events = [];
 
   if (state.phase === 'countdown') {
@@ -79,6 +86,7 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints) {
   if (state.phase !== 'racing') return events; // finished: az idő áll
 
   state.time += dt;
+  if (offTrack) state.lapValid = false; // letért a pályáról → az egész kör érvénytelen
   updateWrongWay(state, prevPos, currPos, dt, checkpoints);
 
   // Csak a SORON KÖVETKEZŐ checkpoint átszelése számít — a sorrend így kikényszerített.
@@ -94,9 +102,12 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints) {
 
   // Célvonal, minden checkpointtal a zsebünkben: kör teljesítve.
   const lapTime = state.time - state.lapStartTime;
-  state.lapTimes.push(lapTime);
+  const valid = state.lapValid;
+  state.lapTimes.push({ time: lapTime, valid });
   state.lastLapTime = lapTime;
-  if (state.bestLapTime === null || lapTime < state.bestLapTime) {
+  state.lastLapValid = valid;
+  // A legjobb körhöz CSAK érvényes kör számít.
+  if (valid && (state.bestLapTime === null || lapTime < state.bestLapTime)) {
     state.bestLapTime = lapTime;
   }
 
@@ -107,7 +118,8 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints) {
     state.lap += 1;
     state.lapStartTime = state.time;
     state.nextCheckpoint = 1;
-    events.push({ type: 'lap', lapTime });
+    state.lapValid = true; // új kör → tiszta lap, újra érvényes
+    events.push({ type: 'lap', lapTime, valid });
   }
   return events;
 }

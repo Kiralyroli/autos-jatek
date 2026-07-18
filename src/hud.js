@@ -23,6 +23,7 @@ export function createHud(onRestart) {
   const bestEl = document.getElementById('bestlap');
   const cdEl = document.getElementById('countdown');
   const wrongWayEl = document.getElementById('wrongway');
+  const invalidLapEl = document.getElementById('invalidlap');
   const restartEl = document.getElementById('restart');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
@@ -38,7 +39,12 @@ export function createHud(onRestart) {
     lapEl.textContent = `${race.lap}/${race.totalLaps || RACE.laps}`;
     const current =
       race.phase === 'racing' ? race.time - race.lapStartTime : race.lastLapTime;
-    timeEl.textContent = fmt(current);
+    // Érvénytelen kör (letért a pályáról): a köridőt pirosan, ⚠-vel jelezzük, és
+    // egy infó-szalag is megjelenik — ez a kör nem számít a legjobbhoz.
+    const invalidLap = race.phase === 'racing' && race.lapValid === false;
+    timeEl.textContent = (invalidLap ? '⚠ ' : '') + fmt(current);
+    timeEl.style.color = invalidLap ? '#ff6b4a' : '';
+    invalidLapEl.style.display = invalidLap ? 'flex' : 'none';
     bestEl.textContent = fmt(race.bestLapTime);
 
     // Középső overlay: visszaszámlálás → GO! → (verseny közben semmi) → cél-eredmény.

@@ -150,6 +150,27 @@
           opacity: 0.15;
         }
       }
+      /* Pálya-elhagyás → érvénytelen kör infó-szalag (felül, a kör-panel alatt). */
+      #invalidlap {
+        position: fixed;
+        top: 86px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 8px;
+        font-family: system-ui, sans-serif;
+        font-size: 16px;
+        font-weight: 700;
+        color: #fff;
+        background: rgba(200, 45, 30, 0.92);
+        padding: 8px 16px;
+        border-radius: 10px;
+        pointer-events: none;
+        user-select: none;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+        white-space: nowrap;
+      }
       #restart {
         position: fixed;
         left: 50%;
@@ -332,6 +353,7 @@
       <span class="sign">⛔</span>
       <span>ROSSZ IRÁNY!</span>
     </div>
+    <div id="invalidlap">⚠️ Pálya elhagyva — érvénytelen kör!</div>
     <button id="restart">🔄 Új verseny</button>
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->

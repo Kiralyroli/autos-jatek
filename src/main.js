@@ -19,6 +19,7 @@ import {
   forwardSpeed,
   corneringLoad,
   createDriveState,
+  isFullyOffRoad,
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
@@ -269,7 +270,9 @@ function startSingleplayer() {
     curr.x = p.x;
     curr.y = p.y;
     curr.angle = carBody.getAngle();
-    raceStep(race, prev, curr, SIM.fixedDt, checkpoints);
+    // A TELJES autó elhagyta a pályát? (mind a 4 sarok a burkolaton kívül) → a kör érvénytelen.
+    const offTrack = isFullyOffRoad(carBody, offRoadExcess);
+    raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack);
   }
 
   onRestartClick = () => {
@@ -612,6 +615,7 @@ async function startMultiplayer(room) {
           lastLapTime: me.lastLap,
           bestLapTime: me.bestLap,
           wrongWay: !!me.wrongWay,
+          lapValid: me.lapValid !== false, // az aktuális kör érvényes-e (HUD-jelzés)
           place: me.place || null, // hányadikként értünk célba (a szervertől)
           hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
         };

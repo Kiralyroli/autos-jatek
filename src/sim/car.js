@@ -220,3 +220,28 @@ export function speedKmh(body) {
 export function corneringLoad(body) {
   return Math.abs(forwardSpeed(body) * body.getAngularVelocity());
 }
+
+// TELJESEN a pályán kívül van-e az autó? Az autó-doboz mind a 4 SARKÁT vizsgáljuk:
+// ha MINDEGYIK a burkolaton kívülre esik (offRoad(x,y) > 0), akkor a teljes autó
+// elhagyta a pályát (a kör-érvényességhez, race.js). Amíg akár egy sarok az úton
+// van, még nem számít. Az offRoad a hívó pályájából jön (kliens track.js / szerver
+// trackState) — így ez a modul pálya-független marad.
+export function isFullyOffRoad(body, offRoad) {
+  const p = body.getPosition();
+  const cos = Math.cos(body.getAngle());
+  const sin = Math.sin(body.getAngle());
+  const hl = CAR.length / 2;
+  const hw = CAR.width / 2;
+  const corners = [
+    [hl, hw],
+    [hl, -hw],
+    [-hl, hw],
+    [-hl, -hw],
+  ];
+  for (const [lx, ly] of corners) {
+    const wx = p.x + lx * cos - ly * sin;
+    const wy = p.y + lx * sin + ly * cos;
+    if (offRoad(wx, wy) <= 0) return false; // ez a sarok még a burkolaton van
+  }
+  return true;
+}
