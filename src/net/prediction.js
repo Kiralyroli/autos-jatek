@@ -36,17 +36,22 @@ import { createCarBody, updateCar, createDriveState } from '../sim/car.js';
 import { offRoadExcess, spawn } from '../sim/track.js';
 import { lerp, lerpAngle } from '../utils.js';
 
-const CORRECT_RATE = 9; // 1/s — nagy korrekció után a vizuális eltolás lecsengése
+const CORRECT_RATE = 7; // 1/s — nagy korrekció után a vizuális eltolás lecsengése
 const TELEPORT_DIST = 12; // m — CSAK valódi desync/teleport: teljes hitelesre állás
-const POS_BLEND = 0.15; // snapshot-onkénti lágy pozíció-konvergencia a hitelesre
+const POS_BLEND = 0.1; // snapshot-onkénti lágy pozíció-konvergencia a hitelesre
+//   (0.15→0.10: ütközésnél jobban bízunk a helyi fizikában, kisebb korrekciós rántás)
 
 // A többi játékos ütköző-testének hálózati-pozíció-követése. FONTOS: a korrekciót
 // KLAMPOLNI kell — a régi (pozíció-hiba / dt) sebesség ütközéskor felrobbant (a
 // kontakt eltolta a testet, a következő frame a hibát ×60-nal visszahajtotta a
 // kocsiba → mély átfedés → "szétrepülés"). Helyette a hálózati SEBESSÉG a bázis,
 // arra jön egy lágy, felülről korlátozott pozíció-korrekció.
-const OPP_CORRECT_GAIN = 8; // 1/s — pozíció-hiba → korrekciós sebesség
-const OPP_MAX_CORRECT = 6; // m/s — a korrekciós sebesség FELSŐ korlátja (nincs berántás)
+// Lágyabbra véve (8→5, 6→3.5): az ellenfél-báb finomabban követi a hálózati
+// pozíciót, így ütközéskor kisebb az átfedés-visszahajtó oszcilláció (ez adta a
+// "közel = folyamatos dobálás" érzetet). A 30 Hz-es sűrűbb snapshot miatt a báb
+// enélkül is pontosabban áll, tehát a gyengébb korrekció nem okoz lemaradást.
+const OPP_CORRECT_GAIN = 5; // 1/s — pozíció-hiba → korrekciós sebesség
+const OPP_MAX_CORRECT = 3.5; // m/s — a korrekciós sebesség FELSŐ korlátja (nincs berántás)
 const OPP_TELEPORT = 4; // m — e fölötti desync/penetráció után egyszeri áthelyezés
 
 export function createPredictor(room) {

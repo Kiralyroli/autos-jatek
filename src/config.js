@@ -268,8 +268,14 @@ export const NET = {
     typeof window !== 'undefined' && window.location.hostname !== 'localhost'
       ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
       : 'ws://localhost:2567',
-  snapshotHz: 20, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
-  interpDelayMs: 120, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
+  // 30 Hz (20 helyett): sűrűbb szerver-állapot → az ellenfél-kocsik pontosabb
+  // helyen vannak a te gépeden, kevesebb extrapolációs hiba ütközésnél. 2-4
+  // játékosnál a sávszélesség elhanyagolható.
+  snapshotHz: 30, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
+  // 100 ms (120 helyett): kevésbé a "múltban" renderelünk → amit LÁTSZ, közelebb
+  // van ahhoz, ahol az ellenfél tényleg van (kisebb vizuális-vs-ütközés eltérés).
+  // 30 Hz-nél (~33 ms/snapshot) ez még mindig ~3 snapshot puffer — nem szaggat.
+  interpDelayMs: 100, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
   maxPlayers: 4,
 };
 
