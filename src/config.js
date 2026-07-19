@@ -307,5 +307,17 @@ export const RACE = {
   // érvénytelenítették a kört, mert a nagyvonalú küszöb már a puszta közelségre
   // is beütött — ezért ez csak a tényleges, közvetlen nekiütközésre szűkítve.
   coneHitRadius: 0.35, // m — kis ráhagyás a kúp saját méretéhez, nem a közelségre
+  // AUTÓ-AUTÓ PUHA SZÉTNYOMÁS (multiplayer). A merev Box2D-ütközés helyett: két
+  // közeli kocsit egy gyengéd, átfedés-arányos POZÍCIÓ-korrekció told szét. Miért
+  // jobb hálózaton: a merev lökést a kliens-predikció nem tudja eltalálni, a szerver
+  // ~1 RTT-vel később másképp oldja fel → "kései szerver-lökés" (a felhasználó ezt
+  // érezte). A puha, determinisztikus (csak pozícióból számolt) szétnyomást a szerver
+  // ÉS a kliens is ugyanúgy számolja → alig van eltérés → nincs kései rántás. A
+  // kocsit körrel közelítjük (minDist a középpontok közti küszöb) — arcade-hoz elég.
+  carSeparation: {
+    minDist: 2.8, // m — e középpont-távolság alatt lép be a szétnyomás
+    blend: 0.2, // az átfedés ekkora hányadát oldjuk fel fizika-lépésenként
+    maxStep: 0.08, // m — a lépésenkénti maximális eltolás (nincs "kirántás")
+  },
   // A checkpointok a pályából generálódnak (sim/track.js), a checkpointCount alapján.
 };

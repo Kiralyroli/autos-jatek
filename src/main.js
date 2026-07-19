@@ -747,7 +747,12 @@ async function startMultiplayer(room) {
         // szervernek, sorszámozva, fix lépésenként).
         const racingMe = sampled.phase === 'racing' && !me.finished;
         const input = racingMe ? readInput() : NEUTRAL_INPUT;
-        predictor.syncOpponents(sampled.players, myId, dt);
+        // A többi kocsi középpontjai a puha szétnyomáshoz (a merev ütközés helyett).
+        const oppPoints = [];
+        for (const [id, p] of Object.entries(sampled.players)) {
+          if (id !== myId) oppPoints.push({ x: p.x, y: p.y });
+        }
+        predictor.setOpponents(oppPoints);
         predictor.frame(dt, input);
 
         // A saját autó a PREDIKÁLT állapotból renderelődik (azonnali reakció);

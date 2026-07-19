@@ -16,23 +16,20 @@
 //     ténylegesen NAGY divergenciát (ütközés/nemdeterminizmus) korrigáljuk — akkor is
 //     egy rövid, lecsengő vizuális eltolással (corr), hogy ne ugorjon a kép.
 //
-//  3) MÁSIK JÁTÉKOSOKKAL ÜTKÖZÉS: a saját autó privát fizika-világában eddig a
-//     TÖBBI kocsi egyáltalán nem létezett (csak a renderelt "szellem"-mesh a
-//     snapshot-interpolációból) — így a lokális ütközés hatása csak a szerver
-//     visszajelzése (hálózati kör + reconcile-simítás) UTÁN látszott, érezhető
-//     késéssel. Ezért a többi kocsit is felvesszük ebbe a világba (syncOpponents),
-//     a saját kocsival AZONOS tömegű DINAMIKUS testként — FONTOS: nem kinematikus,
-//     mert a kinematikus test végtelen tömegű/mozdíthatatlan a Box2D-ben, ütközéskor
-//     falba szaladásnak érződött (azonnal megállás, majd a reconcile nagy korrekciója
-//     miatt "szétrepülés"). Dinamikus testként a lökés arányosan (kb. fele-fele)
-//     oszlik meg — valódi autó-autó ütközés érzete. A pozícióját nem teleportáljuk
-//     (az kioltaná a fizikai lökést), hanem sebességgel HÚZZUK a hálózati célra —
-//     ütközés közben is önkorrigál, de nem "fal".
+//  3) MÁSIK JÁTÉKOSOKKAL ÜTKÖZÉS — PUHA SZÉTNYOMÁS: a merev Box2D-ütközés
+//     hálózaton "kései szerver-lökést" adott (a szerver ~1 RTT-vel később, másképp
+//     oldotta fel, mint a helyi predikció; a különbség utólag "húzódott rá" a
+//     kocsira — a felhasználó ezt érezte). Helyette a kocsik NEM ütköznek mereven
+//     (car.js filterGroupIndex −1), és minden fizika-lépésben a saját kocsit
+//     gyengéden ELTOLJUK a többi kocsi középpontjától (separateBodyFromPoints,
+//     config.RACE.carSeparation). Mivel ez tisztán a pozíciókból számol, a szerver
+//     és a kliens UGYANAZT kapja → alig van eltérés → nincs kései rántás. A többi
+//     kocsi pozícióját a snapshotból kapjuk (setOpponents), nem kell külön báb-test.
 // =============================================================================
-import { Vec2, Box } from 'planck';
-import { SIM, CAR } from '../config.js';
+import { Vec2 } from 'planck';
+import { SIM, RACE } from '../config.js';
 import { createWorld } from '../sim/world.js';
-import { createCarBody, updateCar, createDriveState } from '../sim/car.js';
+import { createCarBody, updateCar, createDriveState, separateBodyFromPoints } from '../sim/car.js';
 import { offRoadExcess, spawn } from '../sim/track.js';
 import { lerp, lerpAngle } from '../utils.js';
 
@@ -40,19 +37,6 @@ const CORRECT_RATE = 7; // 1/s — nagy korrekció után a vizuális eltolás le
 const TELEPORT_DIST = 12; // m — CSAK valódi desync/teleport: teljes hitelesre állás
 const POS_BLEND = 0.1; // snapshot-onkénti lágy pozíció-konvergencia a hitelesre
 //   (0.15→0.10: ütközésnél jobban bízunk a helyi fizikában, kisebb korrekciós rántás)
-
-// A többi játékos ütköző-testének hálózati-pozíció-követése. FONTOS: a korrekciót
-// KLAMPOLNI kell — a régi (pozíció-hiba / dt) sebesség ütközéskor felrobbant (a
-// kontakt eltolta a testet, a következő frame a hibát ×60-nal visszahajtotta a
-// kocsiba → mély átfedés → "szétrepülés"). Helyette a hálózati SEBESSÉG a bázis,
-// arra jön egy lágy, felülről korlátozott pozíció-korrekció.
-// Lágyabbra véve (8→5, 6→3.5): az ellenfél-báb finomabban követi a hálózati
-// pozíciót, így ütközéskor kisebb az átfedés-visszahajtó oszcilláció (ez adta a
-// "közel = folyamatos dobálás" érzetet). A 30 Hz-es sűrűbb snapshot miatt a báb
-// enélkül is pontosabban áll, tehát a gyengébb korrekció nem okoz lemaradást.
-const OPP_CORRECT_GAIN = 5; // 1/s — pozíció-hiba → korrekciós sebesség
-const OPP_MAX_CORRECT = 3.5; // m/s — a korrekciós sebesség FELSŐ korlátja (nincs berántás)
-const OPP_TELEPORT = 4; // m — e fölötti desync/penetráció után egyszeri áthelyezés
 
 export function createPredictor(room) {
   const world = createWorld();
@@ -67,38 +51,14 @@ export function createPredictor(room) {
   const curr = { x: spawn.x, y: spawn.y, a: 0 };
   const corr = { x: 0, y: 0, a: 0 };
 
-  // A többi játékos DINAMIKUS (azonos tömegű) ütköző-teste — lásd fenti 3. pont.
-  const opponents = new Map(); // id -> { body }
-
-  function ensureOpponent(id, x, y, angle) {
-    let o = opponents.get(id);
-    if (!o) {
-      const oBody = world.createBody({
-        type: 'dynamic',
-        position: Vec2(x, y),
-        angle,
-        linearDamping: 0,
-        angularDamping: 0,
-      });
-      oBody.createFixture({
-        shape: new Box(CAR.length / 2, CAR.width / 2),
-        density: CAR.density,
-        friction: 0.3,
-        restitution: 0, // NINCS pattanás — a "szétrepülés" egyik forrása kizárva
-      });
-      o = { body: oBody };
-      opponents.set(id, o);
-    }
-    return o;
-  }
-
-  function removeOpponent(id) {
-    const o = opponents.get(id);
-    if (o) {
-      world.destroyBody(o.body);
-      opponents.delete(id);
-    }
-  }
+  // A többi kocsi AKTUÁLIS középpontjai (a hálózati snapshotból, main.js tölti fel
+  // setOpponents-szel) — a PUHA SZÉTNYOMÁSHOZ (separateBodyFromPoints). Nincs többé
+  // külön ellenfél-fizikatest/báb: a merev ütközést kivettük (config.RACE.carSeparation),
+  // helyette minden fizika-lépésben a saját kocsit gyengéden eltoljuk ezektől a
+  // pontoktól — a SZERVER UGYANEZT a determinisztikus számítást végzi, így alig van
+  // eltérés → nincs kései "szerver-lökés" (ez volt a korábbi báb-alapú megoldás
+  // gyengéje: a merev ütközést a szerver ~1 RTT-vel később másképp oldotta fel).
+  let opponentPoints = [];
 
   const snap = () => ({ x: body.getPosition().x, y: body.getPosition().y, a: body.getAngle() });
 
@@ -149,42 +109,11 @@ export function createPredictor(room) {
       active = false;
     },
 
-    // A többi játékos ütköző-testének követése a hálózati állapothoz. A bázis a
-    // hálózati SEBESSÉG (vx,vy) — így fizikailag valós mozgásuk van —, arra jön egy
-    // LÁGY, KLAMPOLT pozíció-korrekció (nem a régi hiba/dt, ami ütközéskor robbant).
-    // Csak tényleg nagy desync/penetráció esetén teleportálunk egyszer. A testek
-    // láthatatlanok (a renderelt mesh a snapshot-interpolációból jön), így a kis
-    // pozíció-lemaradás nem látszik — csak a saját kocsi ütközés-válasza számít.
-    syncOpponents(players, myId, dt) {
-      const seen = new Set();
-      for (const [id, p] of Object.entries(players)) {
-        if (id === myId) continue;
-        seen.add(id);
-        const o = ensureOpponent(id, p.x, p.y, p.angle);
-        const cp = o.body.getPosition();
-        const ex = p.x - cp.x;
-        const ey = p.y - cp.y;
-        if (Math.hypot(ex, ey) > OPP_TELEPORT) {
-          // Nagy eltérés (spawn / teleport / mély átfedés utáni helyreállás).
-          o.body.setPosition(Vec2(p.x, p.y));
-          o.body.setLinearVelocity(Vec2(p.vx || 0, p.vy || 0));
-        } else {
-          // Hálózati sebesség + klampolt pozíció-korrekció.
-          let cx = ex * OPP_CORRECT_GAIN;
-          let cy = ey * OPP_CORRECT_GAIN;
-          const cs = Math.hypot(cx, cy);
-          if (cs > OPP_MAX_CORRECT) {
-            cx = (cx / cs) * OPP_MAX_CORRECT;
-            cy = (cy / cs) * OPP_MAX_CORRECT;
-          }
-          o.body.setLinearVelocity(Vec2((p.vx || 0) + cx, (p.vy || 0) + cy));
-        }
-        o.body.setAngle(p.angle);
-        o.body.setAngularVelocity(0);
-      }
-      for (const id of [...opponents.keys()]) {
-        if (!seen.has(id)) removeOpponent(id);
-      }
+    // A többi kocsi AKTUÁLIS középpontjai a snapshotból — a puha szétnyomáshoz.
+    // Csak eltároljuk (a saját id-t a hívó már kiszűri); a tényleges eltolás a
+    // frame() fix lépéseiben történik, hogy a szerverrel azonos ütemű legyen.
+    setOpponents(points) {
+      opponentPoints = points || [];
     },
 
     // Minden render-frame: annyi fix lépés, amennyi valós idő eltelt; a két utolsó
@@ -202,6 +131,9 @@ export function createPredictor(room) {
         if (pending.length > 120) pending.shift();
         room.send('input', { seq, ...input });
         simStep(input);
+        // Puha szétnyomás a többi kocsitól — a merev ütközés helyett (lásd fenti 3.
+        // pont). A szerver a beforeStep-ben UGYANEZT végzi, azonos paraméterekkel.
+        separateBodyFromPoints(body, opponentPoints, RACE.carSeparation);
         const s = snap();
         curr.x = s.x;
         curr.y = s.y;

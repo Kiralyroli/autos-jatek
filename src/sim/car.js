@@ -39,8 +39,44 @@ export function createCarBody(world, x, y, angle = 0, car = CAR) {
     shape: new Box(car.length / 2, car.width / 2),
     density: car.density,
     friction: 0.3,
+    // filterGroupIndex < 0: az azonos (negatív) csoportba tett testek SOHA nem
+    // ütköznek mereven egymással. Az autó-autó ütközést ezért NEM a Box2D merev
+    // solvere adja (az hálózaton "kései szerver-lökést" okozott), hanem a puha,
+    // determinisztikus szétnyomás (separateBodyFromPoints, RACE.carSeparation).
+    // Más fizikai test amúgy sincs a világban (a pálya falait az offRoad-modell
+    // helyettesíti), így ettől a kocsik semmivel sem ütköznek mereven.
+    filterGroupIndex: -1,
   });
   return body;
+}
+
+// AUTÓ-AUTÓ PUHA SZÉTNYOMÁS: a `body`-t gyengéden ELTOLJA a közeli `points`
+// (a többi kocsi középpontjai) irányából — a merev ütközés helyett (lásd
+// config.RACE.carSeparation). Csak POZÍCIÓT módosít (a sebességet nem), ezért nincs
+// pattanás/lendület-átvitel, és mivel tisztán a pozíciókból számol, a szerver és a
+// kliens-predikció is UGYANAZT az eredményt adja → nincs kései hálózati rántás.
+export function separateBodyFromPoints(body, points, sep) {
+  if (!points || points.length === 0) return;
+  const p = body.getPosition();
+  let cx = 0;
+  let cy = 0;
+  let any = false;
+  for (const pt of points) {
+    const dx = p.x - pt.x;
+    const dy = p.y - pt.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= sep.minDist) continue;
+    // Egészen egybeeső középpontnál (d≈0) egy tetszőleges, de STABIL irány.
+    const nx = d < 1e-4 ? 1 : dx / d;
+    const ny = d < 1e-4 ? 0 : dy / d;
+    const overlap = sep.minDist - Math.max(d, 0);
+    const step = Math.min(overlap * sep.blend, sep.maxStep);
+    cx += nx * step;
+    cy += ny * step;
+    any = true;
+  }
+  if (!any) return;
+  body.setPosition(Vec2(p.x + cx, p.y + cy));
 }
 
 // Az autó perzisztens vezetési állapota (kocsinként egy):

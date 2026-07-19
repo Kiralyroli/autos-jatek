@@ -26,6 +26,7 @@ import {
   corneringLoad,
   isFullyOffRoad,
   hitsCone,
+  separateBodyFromPoints,
 } from '../src/sim/car.js';
 import { createRaceState, raceStep } from '../src/sim/race.js';
 import { hashLayout } from '../src/sim/trackKey.js';
@@ -266,6 +267,21 @@ export class RaceRoom extends Room {
         updateCar(p.body, p.input, dt, p.drive, this.trackState.offRoadExcess, this.car);
       } else {
         coastToStop(p.body, this.car);
+      }
+    }
+
+    // AUTÓ-AUTÓ PUHA SZÉTNYOMÁS a merev ütközés helyett (lásd car.js/config). A
+    // pozíciókat ELŐSZÖR kiolvassuk, és mindenkit az ÍGY rögzített (lépés eleji)
+    // pozíciók alapján tolunk — így a szétnyomás szimmetrikus (nem függ a sorrendtől).
+    const cars = [...this.players.values()];
+    if (cars.length > 1) {
+      const pts = cars.map((p) => {
+        const pos = p.body.getPosition();
+        return { x: pos.x, y: pos.y };
+      });
+      for (let i = 0; i < cars.length; i++) {
+        const others = pts.filter((_, j) => j !== i);
+        separateBodyFromPoints(cars[i].body, others, RACE.carSeparation);
       }
     }
   }
