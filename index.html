@@ -262,6 +262,25 @@
       #btnQuitRace:hover {
         background: rgba(255, 255, 255, 0.1);
       }
+      /* Szerver-ping (RTT) — csak multiplayerben, jobb alul, diszkrét. */
+      #ping {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        display: none;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-dim);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        padding: 6px 11px;
+        border-radius: 9px;
+        pointer-events: none;
+        user-select: none;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+      }
       /* --- Főmenü + multiplayer lobby --- */
       .overlay {
         position: fixed;
@@ -564,6 +583,7 @@
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
     <button id="restart">🔄 Új verseny</button>
     <button id="btnQuitRace">← Főmenü</button>
+    <div id="ping"></div>
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">

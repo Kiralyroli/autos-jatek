@@ -315,9 +315,12 @@ export const RACE = {
   // ÉS a kliens is ugyanúgy számolja → alig van eltérés → nincs kései rántás. A
   // kocsit körrel közelítjük (minDist a középpontok közti küszöb) — arcade-hoz elég.
   carSeparation: {
-    minDist: 2.8, // m — e középpont-távolság alatt lép be a szétnyomás
-    blend: 0.2, // az átfedés ekkora hányadát oldjuk fel fizika-lépésenként
-    maxStep: 0.08, // m — a lépésenkénti maximális eltolás (nincs "kirántás")
+    minDist: 3.0, // m — e középpont-távolság alatt lép be a szétnyomás
+    blend: 0.4, // az átfedés ekkora hányadát oldjuk fel fizika-lépésenként
+    // 0.08→0.3: a korábbi cap túl gyenge volt a menetsebességhez képest (~40 m/s
+    // = 0.67 m/lépés záródás), ezért "át lehetett menni". 0.3 m/lépés (~18 m/s
+    // szétnyomás) érezhetően megtartja a kocsikat, de még nem "pattint el".
+    maxStep: 0.3, // m — a lépésenkénti maximális eltolás
   },
   // A checkpointok a pályából generálódnak (sim/track.js), a checkpointCount alapján.
 };

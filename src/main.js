@@ -7,9 +7,9 @@
 //   - MULTIPLAYER (3. fázis): a Colyseus szerver futtatja a fizikát/versenyt,
 //     mi inputot küldünk és a snapshot-okból renderelünk minden autót.
 // =============================================================================
-import { SIM, ASSETS, RACE } from './config.js';
+import { SIM, ASSETS, RACE, NET } from './config.js';
 import { createWorld, createStepper } from './sim/world.js';
-import { spawn, checkpoints, offRoadExcess, trackHeadingAt } from './sim/track.js';
+import { spawn, checkpoints, offRoadExcess, trackHeadingAt, trackState } from './sim/track.js';
 import {
   createCarBody,
   updateCar,
@@ -21,6 +21,7 @@ import {
   createDriveState,
   isFullyOffRoad,
   hitsCone,
+  separateBodyFromPoints,
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
@@ -36,7 +37,6 @@ import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
 import { createRoom, joinRoom, createSnapshotBuffer } from './net/mpClient.js';
-import { createPredictor } from './net/prediction.js';
 import {
   loadCustomLayout,
   loadCustomDecorations,
@@ -549,6 +549,22 @@ async function startMultiplayer(room) {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
 
+  // Szerver-ping (RTT) mérése + kijelzése: időbélyeget küldünk, a szerver azonnal
+  // visszaküldi ('pong'), a körbeérés ideje a késleltetés. Másodpercenként frissül.
+  const pingEl = document.getElementById('ping');
+  pingEl.style.display = 'block';
+  pingEl.textContent = 'Ping: … ms';
+  room.onMessage('pong', (t) => {
+    pingEl.textContent = `Ping: ${Math.max(0, Math.round(performance.now() - t))} ms`;
+  });
+  const pingTimer = setInterval(() => {
+    try {
+      room.send('ping', performance.now());
+    } catch {
+      /* a szoba már bezárt — a következő reload úgyis megszünteti */
+    }
+  }, 1000);
+
   // Multiplayerben a helyi CAR-hangolás predikció-hibát okozna (a szerver az
   // ALAP értékekkel szimulál) — visszaállunk az alapra, a hangoló panel eltűnik.
   resetCarToDefaults();
@@ -557,9 +573,63 @@ async function startMultiplayer(room) {
   const buffer = createSnapshotBuffer();
   const myId = room.sessionId;
   let mpTotalLaps = RACE.laps; // a szoba körszáma (az init üzenetből)
-  // Saját autó: client-side prediction — azonnal reagál a gombokra, a szerver
-  // hivatalos állapota a snapshotokon keresztül korrigálja (reconcile).
-  const predictor = createPredictor(room);
+
+  // KLIENS-AUTORITATÍV: a saját autót HELYBEN, a teljes egyjátékos-simmel számoljuk
+  // (nincs predikció/reconcile → a szerver SOHA nem korrigál/húz). A szerver csak
+  // relay: elküldjük neki a kész állapotot, ő szétküldi a többieknek.
+  const mpWorld = createWorld();
+  let mySpawn = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+  const mpCar = createCarBody(mpWorld, mySpawn.x, mySpawn.y, mySpawn.angle);
+  const mpStepper = createStepper();
+  const mpDrive = createDriveState();
+  const mpRace = createRaceState(mpTotalLaps);
+  const mpPrev = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
+  const mpCurr = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
+  // Terelőkúpok VILÁG-koordinátái (a kör-érvényességhez, mint egyjátékosban).
+  const mpConePoints = loadCustomDecorations()
+    .filter((d) => d.type === 'pylon')
+    .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
+  let mpPeerPoints = []; // a többi kocsi középpontjai (puha szétnyomáshoz)
+  let mpStartedRacing = false; // a szerver countdown→racing váltás egyszeri kezelése
+  let mpSentFinish = false; // a cél-jelzést egyszer küldjük
+  let mpLastStateSentAt = 0;
+
+  function mpPlaceAtSpawn() {
+    resetCar(mpCar, mySpawn.x, mySpawn.y, mySpawn.angle);
+    mpPrev.x = mpCurr.x = mySpawn.x;
+    mpPrev.y = mpCurr.y = mySpawn.y;
+    mpPrev.angle = mpCurr.angle = mySpawn.angle;
+  }
+
+  function mpResetForRace() {
+    Object.assign(mpRace, createRaceState(mpTotalLaps));
+    Object.assign(mpDrive, createDriveState());
+    mpStartedRacing = false;
+    mpSentFinish = false;
+    mpPlaceAtSpawn();
+  }
+
+  // A saját autó bejelentése a szervernek (relay) — throttle-olva ~snapshotHz-re.
+  function mpSendState(now) {
+    if (now - mpLastStateSentAt < 1000 / NET.snapshotHz) return;
+    mpLastStateSentAt = now;
+    const pos = mpCar.getPosition();
+    const vel = mpCar.getLinearVelocity();
+    room.send('state', {
+      x: pos.x, y: pos.y, angle: mpCar.getAngle(),
+      vx: vel.x, vy: vel.y, w: mpCar.getAngularVelocity(),
+      speed: speedKmh(mpCar), cornering: corneringLoad(mpCar),
+      lap: mpRace.lap,
+      progress: trackState.trackProgress(pos.x, pos.y),
+      curLap: mpRace.time - mpRace.lapStartTime,
+      lastLap: mpRace.lastLapTime,
+      bestLap: mpRace.bestLapTime,
+      lapValid: mpRace.lapValid,
+      wrongWay: mpRace.wrongWay,
+      finished: mpRace.phase === 'finished',
+      totalTime: mpRace.phase === 'finished' ? mpRace.time : null,
+    });
+  }
 
   // Távoli (és saját) autó-mesh-ek: id → THREE.Group. A sajátunk a meglévő carMesh.
   const meshes = new Map([[myId, carMesh]]);
@@ -663,27 +733,29 @@ async function startMultiplayer(room) {
     if (m.phase === 'lobby') lobbyEl.style.display = 'flex';
   });
 
+  // A többi kocsit (és a fázist/visszaszámlálást) a snapshotból rendereljük; a
+  // SAJÁT autónkat NEM innen (azt a helyi sim adja) — nincs szerver-korrekció.
   room.onMessage('snapshot', (s) => {
     buffer.push(s);
-    // A saját autónk hivatalos szerver-állapota → predikció indítás/korrekció.
-    const meNow = s.players[myId];
-    if (meNow) {
-      if (s.phase === 'racing' && !meNow.finished) {
-        if (!predictor.active) predictor.start(meNow);
-        else predictor.reconcile(meNow);
-      } else if (predictor.active) {
-        predictor.stop(); // cél után/újraindításkor vissza a snapshot-renderre
-      }
-    }
   });
 
-  // Az init (pálya-adatok) a 'ready' üzenetünkre érkezik — ha a szoba pályája
-  // eltér a lokálisan felépítettől, ensureTrackMatches ment + újratölt (rejoin).
+  // Rajt: a szerver kiosztja a rajt-slotokat — a SAJÁT pozíciónkra állunk, és
+  // nulláról indítjuk a helyi verseny-állapotot (a countdownt a szerver vezérli).
+  room.onMessage('raceStart', (m) => {
+    if (m.slots && m.slots[myId]) mySpawn = m.slots[myId];
+    if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
+    mpResetForRace();
+  });
+
+  // Az init (pálya-adatok + a saját rajt-slot) a 'ready' üzenetünkre érkezik — ha a
+  // szoba pályája eltér a lokálistól, ensureTrackMatches ment + újratölt (rejoin).
   room.onMessage('init', (init) => {
     if (Number.isFinite(init.laps)) mpTotalLaps = init.laps;
-    // A szoba TÉNYLEGESEN használt fizikáját alkalmazzuk (nem a saját menü-
-    // választásunkat) — a host dönt, a szerver validál/visszaküld; enélkül a
-    // helyi predikció eltérne a szerver-autoritatív szimulációtól.
+    if (init.slot) {
+      mySpawn = init.slot;
+      mpPlaceAtSpawn();
+    }
+    // A szoba fizikáját alkalmazzuk a HELYI simre (a host dönt, a szerver küldi).
     if (init.physics) applyPhysicsPreset(init.physics);
     ensureTrackMatches(init, room.roomId);
   });
@@ -694,6 +766,7 @@ async function startMultiplayer(room) {
     window.location.reload();
   };
   room.onLeave(() => {
+    clearInterval(pingTimer);
     // Szerver-oldali bontás (pl. szoba megszűnt) → vissza a menübe.
     if (mode === 'multi') window.location.reload();
   });
@@ -721,11 +794,32 @@ async function startMultiplayer(room) {
       if (sampled.phase !== 'lobby') lobbyEl.style.display = 'none';
 
       removeStaleMeshes(sampled.players);
+      // A saját autó AKTUÁLIS pozíciója — a peer-ek "meglökésének" vizuális
+      // referenciája (lásd lentebb). A helyi simből, azonnali.
+      const myPos = mpCar.getPosition();
       for (const [id, p] of Object.entries(sampled.players)) {
         ensureMesh(id, p.colorIdx, p.name);
         const mesh = meshes.get(id);
         if (!mesh) continue;
-        mesh.position.set(p.x, 0.12, p.y);
+        let px = p.x;
+        let py = p.y;
+        // VIZUÁLIS meglökés: ha egy PEER közelebb kerül a saját autómnál a
+        // szeparációs küszöbnél (nekimentem), a RENDERJÉT kitoljuk a küszöbre —
+        // így a te képernyődön azonnal látszik, hogy odébb csúszik, nem "szikla".
+        // Csak megjelenítés: a valós (bejelentett) pozícióját nem írja felül, és
+        // amint az ő gépe úgyis kitolta magát, a kettő egybeesik (nincs ugrás).
+        if (id !== myId) {
+          const dx = px - myPos.x;
+          const dy = py - myPos.y;
+          const d = Math.hypot(dx, dy);
+          const md = RACE.carSeparation.minDist;
+          if (d > 1e-4 && d < md) {
+            const k = md / d;
+            px = myPos.x + dx * k;
+            py = myPos.y + dy * k;
+          }
+        }
+        mesh.position.set(px, 0.12, py);
         mesh.rotation.y = -p.angle;
         // Távoli autók kerekei a snapshotból: gördülés az előre-sebességből,
         // kormányszög becslése a bicikli-modell inverzéből (δ ≈ atan(ω·L / v)).
@@ -741,89 +835,126 @@ async function startMultiplayer(room) {
         }
       }
 
-      const me = sampled.players[myId];
-      if (me) {
-        // Saját input + helyi predikció-lépések (az inputot a predictor küldi a
-        // szervernek, sorszámozva, fix lépésenként).
-        const racingMe = sampled.phase === 'racing' && !me.finished;
-        const input = racingMe ? readInput() : NEUTRAL_INPUT;
-        // A többi kocsi középpontjai a puha szétnyomáshoz (a merev ütközés helyett).
-        const oppPoints = [];
-        for (const [id, p] of Object.entries(sampled.players)) {
-          if (id !== myId) oppPoints.push({ x: p.x, y: p.y });
-        }
-        predictor.setOpponents(oppPoints);
-        predictor.frame(dt, input);
+      // --- SAJÁT autó: HELYI sim (kliens-autoritatív) ---
+      const serverPhase = sampled.phase;
+      const me = sampled.players[myId]; // csak a helyezéshez kell (a szerver osztja)
 
-        // A saját autó a PREDIKÁLT állapotból renderelődik (azonnali reakció);
-        // ha a predikció nem aktív (countdown/cél után), marad a snapshot-interp.
-        const own = predictor.active ? predictor.renderState(dt) : { x: me.x, y: me.y, angle: me.angle };
-        const myMesh = meshes.get(myId);
-        if (myMesh) {
-          myMesh.position.set(own.x, 0.12, own.y);
-          myMesh.rotation.y = -own.angle;
-        }
-        // Saját kerekek: a predikált (helyi) állapotból — azonnali, pontos.
-        if (predictor.active) {
-          carWheels.update(forwardSpeed(predictor.body), predictor.steerAngle, dt);
-        }
-
-        // Kamera a saját (predikált) autón.
-        if (window.__TOP) {
-          camera.position.set(own.x, window.__TOP, own.y + 0.001);
-          camera.lookAt(own.x, 0, own.y);
-        } else {
-          updateCamera(own.x, own.y, own.angle, dt);
-        }
-
-        // HUD: a sim-beli race-objektum "makettje" a saját snapshot-adatainkból.
-        // FONTOS: a `time` a TELJES versenyidő legyen (nem a köridő!) — a HUD a
-        // time<1-ből ismeri fel a rajt utáni "GO!" pillanatot, köridővel minden
-        // körváltásnál újra GO!-t villantana. A futó köridőt a lapStartTime adja
-        // ki (HUD: time - lapStartTime = curLap).
-        const totalTime = me.finished ? me.totalTime : sampled.raceTime ?? 0;
-        const fakeRace = {
-          phase: me.finished ? 'finished' : sampled.phase === 'lobby' ? 'countdown' : sampled.phase,
-          countdownLeft: sampled.countdownLeft,
-          lap: me.lap,
-          time: totalTime,
-          totalLaps: mpTotalLaps,
-          lapStartTime: me.finished ? 0 : totalTime - (me.curLap ?? 0),
-          lastLapTime: me.lastLap,
-          bestLapTime: me.bestLap,
-          wrongWay: !!me.wrongWay,
-          lapValid: me.lapValid !== false, // az aktuális kör érvényes-e (HUD-jelzés)
-          place: me.place || null, // hányadikként értünk célba (a szervertől)
-          hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
-        };
-        updateHud(fakeRace);
-
-        // Sebesség/hang a HELYI predikcióból, ha aktív (azonnali reakció) —
-        // különben a snapshotból (countdown/cél utáni kigurulás).
-        const ownSpeed = predictor.active ? speedKmh(predictor.body) : me.speed || 0;
-        const ownCornering = predictor.active
-          ? corneringLoad(predictor.body)
-          : me.finished
-            ? 0
-            : me.cornering || 0;
-
-        if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(ownSpeed)} km/h`;
-
-        // Countdown-bipek a fázisból.
-        if (sampled.phase === 'countdown') {
-          const c = Math.ceil(sampled.countdownLeft);
-          if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
-          lastCountInt = c;
-        }
-        if (lastPhase === 'countdown' && sampled.phase === 'racing') audio.beep(880, 0.35);
-        lastPhase = sampled.phase;
-
-        audio.update({
-          speedKmh: ownSpeed,
-          throttle: racingMe && input.up,
-          corneringLoad: ownCornering,
-        });
+      // A többi kocsi középpontjai a puha szétnyomáshoz.
+      mpPeerPoints = [];
+      for (const [id, p] of Object.entries(sampled.players)) {
+        if (id !== myId) mpPeerPoints.push({ x: p.x, y: p.y });
       }
+
+      // A szerver countdown→racing váltásakor (egyszer) elindítjuk a helyi versenyt.
+      if (serverPhase === 'racing' && !mpStartedRacing && mpRace.phase !== 'finished') {
+        mpStartedRacing = true;
+        mpRace.phase = 'racing';
+        mpRace.time = 0;
+        mpRace.lapStartTime = 0;
+        mpPlaceAtSpawn();
+      }
+
+      const myFinished = mpRace.phase === 'finished';
+      const racing = serverPhase === 'racing' && mpRace.phase === 'racing';
+      const input = racing ? readInput() : NEUTRAL_INPUT;
+
+      let alpha = 0;
+      if (racing || myFinished) {
+        alpha = mpStepper(
+          mpWorld,
+          dt,
+          (fixedDt) => {
+            if (myFinished) coastToStop(mpCar);
+            else updateCar(mpCar, input, fixedDt, mpDrive, offRoadExcess);
+            // Puha szétnyomás a többi kocsitól (a kapott pozíciók alapján).
+            separateBodyFromPoints(mpCar, mpPeerPoints, RACE.carSeparation);
+          },
+          () => {
+            mpPrev.x = mpCurr.x;
+            mpPrev.y = mpCurr.y;
+            mpPrev.angle = mpCurr.angle;
+            const pp = mpCar.getPosition();
+            mpCurr.x = pp.x;
+            mpCurr.y = pp.y;
+            mpCurr.angle = mpCar.getAngle();
+            if (mpRace.phase === 'racing') {
+              const offTrack =
+                isFullyOffRoad(mpCar, offRoadExcess) ||
+                hitsCone(mpCar, mpConePoints, RACE.coneHitRadius);
+              raceStep(mpRace, mpPrev, mpCurr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+            }
+          }
+        );
+      } else if (serverPhase === 'countdown' || serverPhase === 'lobby') {
+        // Rajt előtt parkolva a saját rajt-helyünkön (DNF/finished esetén marad ott).
+        mpPlaceAtSpawn();
+      }
+
+      // Célba érés → azonnali (egyszeri) állapot-küldés, hogy a szerver mielőbb
+      // megkapja a finished flaget (helyezés-sorrend + verseny-zárás).
+      if (myFinished && !mpSentFinish) {
+        mpSentFinish = true;
+        mpLastStateSentAt = 0;
+      }
+
+      // A saját autó a HELYI simből renderelődik (al-lépés-interpolálva) — nincs
+      // szerver-korrekció, tehát nincs "húzás".
+      const ownX = lerp(mpPrev.x, mpCurr.x, alpha);
+      const ownY = lerp(mpPrev.y, mpCurr.y, alpha);
+      const ownA = lerpAngle(mpPrev.angle, mpCurr.angle, alpha);
+      const myMesh = meshes.get(myId);
+      if (myMesh) {
+        myMesh.position.set(ownX, 0.12, ownY);
+        myMesh.rotation.y = -ownA;
+      }
+      carWheels.update(forwardSpeed(mpCar), mpDrive.steer, dt);
+
+      // Kamera a saját autón.
+      if (window.__TOP) {
+        camera.position.set(ownX, window.__TOP, ownY + 0.001);
+        camera.lookAt(ownX, 0, ownY);
+      } else {
+        updateCamera(ownX, ownY, ownA, dt);
+      }
+
+      // HUD a HELYI verseny-állapotból; a countdown-t a szerver fázisa/ideje adja.
+      const hudRace = {
+        phase: myFinished ? 'finished' : serverPhase === 'racing' ? 'racing' : 'countdown',
+        countdownLeft: sampled.countdownLeft,
+        lap: mpRace.lap,
+        time: mpRace.time,
+        totalLaps: mpTotalLaps,
+        lapStartTime: mpRace.lapStartTime,
+        lastLapTime: mpRace.lastLapTime,
+        bestLapTime: mpRace.bestLapTime,
+        wrongWay: mpRace.wrongWay,
+        lapValid: mpRace.lapValid,
+        place: me ? me.place || null : null, // hányadikként értünk célba (szervertől)
+        hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
+      };
+      updateHud(hudRace);
+
+      // A saját állapot bejelentése a szervernek (relay).
+      mpSendState(now);
+
+      const ownSpeed = speedKmh(mpCar);
+      const ownCornering = myFinished ? 0 : corneringLoad(mpCar);
+      if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(ownSpeed)} km/h`;
+
+      // Countdown-bipek a fázisból.
+      if (serverPhase === 'countdown') {
+        const c = Math.ceil(sampled.countdownLeft);
+        if (c !== lastCountInt && c > 0) audio.beep(520, 0.16);
+        lastCountInt = c;
+      }
+      if (lastPhase === 'countdown' && serverPhase === 'racing') audio.beep(880, 0.35);
+      lastPhase = serverPhase;
+
+      audio.update({
+        speedKmh: ownSpeed,
+        throttle: racing && input.up,
+        corneringLoad: ownCornering,
+      });
 
       // Az állás-lista DOM-ját elég 4x/mp újraépíteni (60x/mp felesleges terhelés).
       if (now - lastStandingsAt > 250) {
@@ -868,7 +999,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, predictor };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace };
   }
 }
 
