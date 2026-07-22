@@ -37,6 +37,18 @@ export async function joinRoom(code, { name, carIdx }) {
   return client.joinById(roomId, { name, carIdx });
 }
 
+// Visszatérés egy KORÁBBAN kapott `room.reconnectionToken`-nel — ez a Colyseus
+// natív reconnect-mechanizmusa: a SAJÁT (ugyanaz a sessionId-jű) helyünkre
+// térünk vissza, nem egy ÚJ csatlakozásba (mint a joinById/joinRoom). Ez kell
+// ahhoz, hogy a host/pálya/fizika-váltás miatti automatikus reload után NE
+// vesszen el a host-szerep / a szoba NE ürüljön ki átmenetileg (lásd
+// server/RaceRoom.js onLeave — a szerver `allowReconnection`-nel vár erre a
+// visszatérésre néhány másodpercig, mielőtt véglegesen törölné a helyünket).
+export async function reconnectRoom(reconnectionToken) {
+  const client = new Client(NET.serverUrl);
+  return client.reconnect(reconnectionToken);
+}
+
 // Snapshot-puffer: a pillanatképeket a SZERVER szimulációs időbélyegével (data.t)
 // rendezzük, és a renderelés a "becsült szerver-most − interpDelay" időpontra kér
 // interpolált állapotot. FONTOS: nem a fogadás helyi idejével dolgozunk — a hálózati

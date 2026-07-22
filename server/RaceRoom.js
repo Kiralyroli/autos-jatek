@@ -248,9 +248,39 @@ export class RaceRoom extends Room {
     this.broadcastLobby();
   }
 
-  onLeave(client) {
-    this.players.delete(client.sessionId);
-    if (client.sessionId === this.hostId) {
+  // A kapcsolat megszakadása NEM feltétlenül szándékos kilépés — pl. a
+  // pálya/fizika-váltás (hostSettings → roomSettings) miatt a kliens
+  // MAGA tölti újra az oldalt (lásd main.js ensureTrackMatches), ami a
+  // WebSocketet minden "leave" szándék nélkül, egyszerűen eldobja. Enélkül
+  // a javítás nélkül ez a régi kódban azonnal törölte a helyet (`onLeave`
+  // szinkron törlés) — ha a szoba emiatt átmenetileg kiürült (pl. a host
+  // egyedül tesztelt, vagy mindenki kb. egyszerre reload-olt), a Colyseus
+  // `autoDispose` AZONNAL megszüntette a szobát, mire bárki visszatért volna
+  // (élő hibajelentés: "szétdob, vagy beakad"). A `consented` csak a
+  // SZÁNDÉKOS "Kilépés"/"Vissza" gomboknál igaz (azok explicit `room.leave()`-
+  // et hívnak reload előtt) — egyébként (reload, hálózat-kiesés) néhány
+  // másodpercig várunk egy `reconnect()`-tel (NEM joinById-vel) érkező
+  // visszatérésre, ami UGYANAZT a helyet (sessionId, host-szerep, colorIdx)
+  // adja vissza, seat-vesztés nélkül.
+  async onLeave(client, consented) {
+    const wasHost = client.sessionId === this.hostId;
+    if (consented) {
+      this.removePlayer(client.sessionId, wasHost);
+      return;
+    }
+    try {
+      await this.allowReconnection(client, 20);
+      // Sikeres reconnect — a players Map bejegyzése (colorIdx, spawn, stb.)
+      // változatlan, csak frissítjük a lobbyt (pl. ha időközben más is változott).
+      this.broadcastLobby();
+    } catch {
+      this.removePlayer(client.sessionId, wasHost);
+    }
+  }
+
+  removePlayer(sessionId, wasHost) {
+    this.players.delete(sessionId);
+    if (wasHost) {
       this.hostId = this.players.keys().next().value || null;
     }
     if (this.players.size === 0) return; // a szoba magától megszűnik (autoDispose)

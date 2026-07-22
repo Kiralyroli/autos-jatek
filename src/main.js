@@ -38,7 +38,7 @@ import { createMinimap } from './minimap.js';
 import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
-import { createRoom, joinRoom, createSnapshotBuffer } from './net/mpClient.js';
+import { createRoom, joinRoom, reconnectRoom, createSnapshotBuffer } from './net/mpClient.js';
 import {
   loadCustomLayout,
   loadCustomDecorations,
@@ -576,14 +576,20 @@ function escapeHtml(s) {
 // A szoba pályája a MI lokálisan felépített pályánk-e? Ha nem, elmentjük a
 // szerverét aktívnak, és újratöltjük az oldalt (a pálya-render a betöltéskor
 // épül) — a sessionStorage-ba tett "rejoin" adattal automatikusan visszalépünk.
-function ensureTrackMatches(init, roomCode) {
+// A `room.reconnectionToken`-t IS elmentjük (nem csak a kódot): a visszatéréskor
+// ezzel `reconnect()`-elünk (lásd a fájl végén a rejoin-blokkot), ami a SAJÁT,
+// meglévő helyünkre tér vissza (host-szerep/colorIdx megmarad) — sima
+// joinRoom(code)-dal ez egy ÚJ csatlakozás lenne (elveszett host-szerep,
+// és a szerver `allowReconnection`-je se találná meg, mert az más
+// reconnectionTokent várna — lásd server/RaceRoom.js onLeave).
+function ensureTrackMatches(init, room) {
   const localLayout = JSON.stringify(TRACK.layout);
   const serverLayout = JSON.stringify(init.layout);
   if (localLayout === serverLayout) return true;
   saveCustomTrack(init.layout, init.decorations);
   sessionStorage.setItem(
     'autos-jatek:mp-rejoin',
-    JSON.stringify({ code: roomCode, name: playerName() })
+    JSON.stringify({ code: room.roomId, reconnectionToken: room.reconnectionToken, name: playerName() })
   );
   window.location.reload();
   return false;
@@ -839,7 +845,7 @@ async function startMultiplayer(room) {
     if (m.physics) {
       mpPhysicsName = applyPhysicsPreset(m.physics);
     }
-    if (!ensureTrackMatches(m, room.roomId)) return; // reload indult — a többi felesleges
+    if (!ensureTrackMatches(m, room)) return; // reload indult — a többi felesleges
     mpSettingsStatus.textContent = 'Beállítások alkalmazva.';
   });
 
@@ -904,7 +910,7 @@ async function startMultiplayer(room) {
     }
     // A szoba fizikáját alkalmazzuk a HELYI simre (a host dönt, a szerver küldi).
     if (init.physics) mpPhysicsName = applyPhysicsPreset(init.physics);
-    ensureTrackMatches(init, room.roomId);
+    ensureTrackMatches(init, room);
   });
 
   btnStart.onclick = () => room.send('start');
@@ -1199,6 +1205,22 @@ async function doJoin(code) {
   }
 }
 
+// Visszatérés egy pálya/fizika-váltás (vagy átmeneti hálózat-kiesés) miatti
+// reload UTÁN — a SAJÁT, meglévő helyünkre `reconnect()`-elünk (nem új
+// csatlakozás, lásd ensureTrackMatches/net/mpClient.js). Ha a token időközben
+// lejárt (a szerver ~20 mp után törli a helyet, lásd RaceRoom.js onLeave),
+// visszaesünk a sima `doJoin`-ra — ekkor új játékosként lépünk be (a
+// host-szerep elveszhet, de legalább nem ragadunk be a menüben).
+async function doReconnect(token, fallbackCode) {
+  menuStatus.textContent = 'Visszacsatlakozás…';
+  try {
+    const room = await reconnectRoom(token);
+    startMultiplayer(room);
+  } catch {
+    doJoin(fallbackCode);
+  }
+}
+
 // --- Indulás: rejoin / pending pálya-akció (reload után), vagy főmenü ---
 document.getElementById('btnSingle').onclick = () => playWithSelectedTrack('single');
 document.getElementById('btnCreate').onclick = () => playWithSelectedTrack('create');
@@ -1208,11 +1230,14 @@ document.getElementById('btnJoin').onclick = () =>
 const rejoinRaw = sessionStorage.getItem('autos-jatek:mp-rejoin');
 const pendingRaw = sessionStorage.getItem('autos-jatek:pending');
 if (rejoinRaw) {
-  // Multiplayer visszalépés a szoba pályájára váltó reload után.
+  // Multiplayer visszalépés a szoba pályájára váltó reload után — lehetőleg
+  // reconnectionToken-nel (a SAJÁT helyünkre, lásd doReconnect), ha az valamiért
+  // hiányzik (régebbi/sérült sessionStorage-bejegyzés), sima kóddal csatlakozunk.
   sessionStorage.removeItem('autos-jatek:mp-rejoin');
-  const { code, name } = JSON.parse(rejoinRaw);
+  const { code, name, reconnectionToken } = JSON.parse(rejoinRaw);
   nameInput.value = name;
-  doJoin(code);
+  if (reconnectionToken) doReconnect(reconnectionToken, code);
+  else doJoin(code);
 } else if (pendingRaw) {
   // A menüben választott pálya alkalmazása utáni reload — a config.js már az új
   // pályával épült, most lefuttatjuk a halasztott akciót.
