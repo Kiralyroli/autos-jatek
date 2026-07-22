@@ -42,8 +42,10 @@ export const ASSETS = {
   textures: {
     asphalt: '/assets/textures/asphalt.jpg',
     asphaltRepeat: 6, // hányszor ismétlődjön a textúra a pályán
-    // A fű most Kenney grass.glb-csempékből áll (render3d/grassField.js), nincs
-    // többé textúrázott fű-sík.
+    curb: '/assets/textures/curb.jpg', // fehér szegély-csík (render3d/trackRibbon.js)
+    sky: '/assets/textures/sky.jpg', // égbolt-panoráma (equirektangulár, render3d/scene.js)
+    grass: '/assets/textures/grass.jpg', // a Kenney grass.glb-csempék felülrétegzett textúrája
+    grassRepeat: 0.3, // hányszor ismétlődjön a textúra egy fű-csempén belül (1 alatt = "ránagyítás", nagyobb léptékű minta)
   },
   sounds: {
     engine: '/assets/sounds/engine.wav', // loopolható motorhang (pitch = sebesség)

@@ -26,6 +26,7 @@ import {
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
+import { loadTrackRibbon } from './render3d/trackRibbon.js';
 import { loadDecorations } from './render3d/decorations.js';
 import { addGrassField } from './render3d/grassField.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
@@ -99,7 +100,14 @@ async function setPlayerCar(idx) {
   carWheels = setupWheels(holder);
 }
 
-loadTrackTiles(scene);
+// Szabadvonalas (spline) pályánál `track.tiles` üres (lásd sim/trackFactory.js
+// buildSplineTrack) — ilyenkor a procedurális szalag-hálót rakjuk le a diszkrét
+// Kenney-csempék helyett; a régi (rács-alapú) pályáknál minden a régiben marad.
+if (trackState.track.tiles.length === 0) {
+  loadTrackRibbon(scene, trackState.track, trackState.roadHalf);
+} else {
+  loadTrackTiles(scene);
+}
 addGrassField(scene);
 loadDecorations(scene);
 const updateCamera = createChaseCamera(camera);

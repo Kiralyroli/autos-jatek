@@ -51,6 +51,14 @@ function persist() {
   }
 }
 
+// A layout KÉTFÉLE FORMÁTUMÚ lehet — lásd src/sim/trackFactory.js isSplineLayout
+// (ugyanaz az apró, importok nélküli diszkrimináló, mint ott és trackKey.js-ben):
+// a régi (rács/szegmens) minden eleme {type,...}, az új (szabadvonalas) csak
+// {x,z} kontrollpontokból áll.
+function isSplineLayoutArr(arr) {
+  return arr.length > 0 && arr[0] && typeof arr[0].x === 'number' && arr[0].type === undefined;
+}
+
 // A bejövő pálya-adat megtisztítása/validálása. Hibás adatra null-t ad.
 function sanitize({ name, layout, decorations, editorPath, editorDecorations }) {
   if (typeof name !== 'string') return null;
@@ -58,16 +66,34 @@ function sanitize({ name, layout, decorations, editorPath, editorDecorations }) 
   if (!cleanName) return null;
 
   if (!Array.isArray(layout) || layout.length === 0 || layout.length > MAX_LAYOUT) return null;
-  const cleanLayout = layout
-    .filter((s) => s && typeof s.type === 'string')
-    .map((s) => {
-      const seg = { type: s.type };
-      if (Number.isFinite(s.turn)) seg.turn = s.turn;
-      if (Number.isFinite(s.n)) seg.n = s.n;
-      if (Number.isFinite(s.size)) seg.size = s.size;
-      return seg;
-    });
-  if (cleanLayout.length === 0) return null;
+  let cleanLayout;
+  if (isSplineLayoutArr(layout)) {
+    cleanLayout = layout
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z))
+      .map((p) => {
+        const pt = { x: p.x, z: p.z };
+        // Szakaszonkénti pálya-szélesség (lásd src/sim/trackSpline.js) — opcionális,
+        // a régebbi (e funkció előtt mentett) pontoknál nincs, a trackFactory.js
+        // ilyenkor a pálya alap-szélességére (tile) esik vissza.
+        if (Number.isFinite(p.width) && p.width > 0) pt.width = p.width;
+        // Éles sarok (törésponttá teszi a görbét, lásd src/sim/trackSpline.js)
+        // — opcionális, csak akkor mentjük, ha ténylegesen be van kapcsolva.
+        if (p.sharp === true) pt.sharp = true;
+        return pt;
+      });
+    if (cleanLayout.length < 4) return null; // lásd src/sim/trackValidation.js MIN_CONTROL_POINTS
+  } else {
+    cleanLayout = layout
+      .filter((s) => s && typeof s.type === 'string')
+      .map((s) => {
+        const seg = { type: s.type };
+        if (Number.isFinite(s.turn)) seg.turn = s.turn;
+        if (Number.isFinite(s.n)) seg.n = s.n;
+        if (Number.isFinite(s.size)) seg.size = s.size;
+        return seg;
+      });
+    if (cleanLayout.length === 0) return null;
+  }
 
   const rawDecor = Array.isArray(decorations) ? decorations : [];
   if (rawDecor.length > MAX_DECOR) return null;

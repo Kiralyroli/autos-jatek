@@ -101,16 +101,21 @@ export function createDriveState() {
 export function updateCar(body, input, dt, drive, offRoad, car = CAR) {
   updateSteerAngle(input, dt, drive, car); // előbb a kormányszög, mert a gumik használják
   applyTireFriction(body, input, dt, drive, car);
-  updateOffRoadPenalty(body, drive, offRoad);
+  updateOffRoadPenalty(body, drive, offRoad, car);
   applyDrive(body, input, drive, car);
 }
 
 // Azonnali váltás: a füvön grassThrottle, az úton mindig teljes (1). Az útról a
 // fűre ÁTLÉPÉS pillanatában (nem folyamatosan!) a sebesség is egyszer megvágva
 // entrySpeedFactor-ra — ezért kell a wasOnGrass, hogy csak az átlépéskor süljön el.
-function updateOffRoadPenalty(body, drive, offRoad) {
-  const p = body.getPosition();
-  const onGrass = offRoad(p.x, p.y) > 0;
+//
+// A büntetés csak akkor lép életbe, ha az autó TELJESEN (mind a 4 kerékkel/
+// sarokkal) lehagyta az utat — ugyanazt az `isFullyOffRoad` ellenőrzést
+// használja, mint a kör-érvényesség (race.js). Amíg akár egy sarok még az
+// úton van, nincs lassítás — enélkül már egy kicsit kívülre csúszva is
+// visszavágná a sebességet, ami a felhasználó szerint túl szigorú volt.
+function updateOffRoadPenalty(body, drive, offRoad, car) {
+  const onGrass = isFullyOffRoad(body, offRoad, car);
   if (onGrass && !drive.wasOnGrass) {
     body.setLinearVelocity(Vec2.mul(body.getLinearVelocity(), OFFROAD.entrySpeedFactor));
   }

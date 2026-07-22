@@ -7,9 +7,9 @@
 //    sóder (a falig) → aszfalt (úton) → rázókő (csak kanyarban) → fal (sóder szélén).
 // =============================================================================
 import * as THREE from 'three';
-import { CAMERA } from '../config.js';
+import { CAMERA, ASSETS } from '../config.js';
 import { track } from '../sim/track.js';
-import { loadModel } from './assets.js';
+import { loadModel, loadEquirectTexture } from './assets.js';
 
 const COLORS = {
   sky: 0x87b5d9,
@@ -28,8 +28,15 @@ export function createScene3D(container) {
 
   const scene = new THREE.Scene();
   _scene = scene;
-  scene.background = new THREE.Color(COLORS.sky);
+  scene.background = new THREE.Color(COLORS.sky); // azonnali fallback, amíg a panoráma tölt
   scene.fog = new THREE.Fog(COLORS.sky, 220, 520);
+
+  // Valódi égbolt-panoráma (equirektangulár HDRI, tónuslekötött JPG-ként) —
+  // aszinkron, hogy ne blokkolja a jelenet azonnali indulását; sikertelen
+  // betöltésnél a fenti sima szín marad (soft fallback, lásd assets.js).
+  loadEquirectTexture(ASSETS.textures.sky).then((tex) => {
+    if (tex) scene.background = tex;
+  });
 
   const camera = new THREE.PerspectiveCamera(
     CAMERA.fov,

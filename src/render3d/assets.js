@@ -55,6 +55,25 @@ export function loadTexture(url, repeat = 1) {
   });
 }
 
+// Equirektangulár panoráma (pl. HDRI-ből tónuslekötött JPG) betöltése
+// `scene.background`-nak — NEM ismétlődő (a gömbi vetítés maga "körbeér"),
+// ezért `EquirectangularReflectionMapping`-et állít RepeatWrapping helyett.
+// Siker esetén THREE.Texture, különben null.
+export function loadEquirectTexture(url) {
+  return new Promise((resolve) => {
+    texLoader.load(
+      withBase(url),
+      (tex) => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        resolve(tex);
+      },
+      undefined,
+      () => resolve(null)
+    );
+  });
+}
+
 // Modell-atlasz textúra (pl. Kenney colormap). NEM ismétlődő, és flipY=false,
 // mert a glTF UV-k így várják. Siker esetén THREE.Texture, különben null.
 export function loadModelTexture(url) {

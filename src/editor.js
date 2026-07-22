@@ -1,30 +1,41 @@
 // =============================================================================
-//  PÁLYA-SZERKESZTŐ — rács-alapú útvonal-rajzoló + dekoráció-elhelyező.
+//  PÁLYA-SZERKESZTŐ — SZABADVONALAS útvonal-rajzoló + szabad dekoráció-elhelyező.
 //
-//  Két mód van ugyanazon a rácson:
-//   - "track": a felhasználó cellánként kattintva kijelöli a pálya középvonalát
-//     (mint egy kígyó-játékban). Ebből automatikusan levezetjük, hol legyen
-//     egyenes és hol kanyar, majd a sim/trackbuilder.js formátumában elmentjük.
-//   - "decor": a felhasználó egy kiválasztott Kenney-elemet (fal, fa, épület...)
-//     helyez le tetszőleges cellákra, forgatva. A dekorációk a PÁLYA RAJT-
-//     CELLÁJÁHOZ KÉPEST relatív rács-eltolásként mentődnek (dgx,dgy), hogy a
-//     játék egyszerűen világ-koordinátává tudja számolni: world = d*TRACK.tile.
+//  Két mód:
+//   - "track": a felhasználó tetszőleges helyre kattintva kontrollpontokat rak le
+//     (világ-méterben, NINCS rács-igazítás) — ezekből a sim/trackSpline.js
+//     UGYANAZZAL a görbe-illesztéssel épít sima, zárt pályát, mint a játék, ezért
+//     a szerkesztő élő előnézete garantáltan megegyezik a vezetett pályával
+//     (WYSIWYG). Zárás után a pontok húzhatók, a görbe mentén újak szúrhatók be,
+//     jobb-klikkel törölhetők.
+//   - "decor": a felhasználó egy kiválasztott Kenney-elemet helyez le PONTOSAN a
+//     kattintott helyre (nincs rács — minden dekoráció "szabad" elhelyezésű,
+//     mert a szabadvonalas pályához nincs értelmezhető rács-cella).
 //
-//  A "nincs cella-ismétlés" szabály miatt a kész útvonal MINDIG egyszerű
-//  (nem metsző önmagát) zárt sokszög — ezt nem kell külön ellenőrizni.
+//  A layout (kontrollpontok listája) MAGA a mentett formátum — nincs többé
+//  kanonikus-tájolás-forgatás vagy külön WYSIWYG "editor-nézet", mert egy
+//  ponthalmaznak nincs "kezdő iránya": bármilyen sorrendben/pozícióban ugyanazt
+//  a pályát adja (lásd sim/trackFactory.js isSplineLayout).
+//
+//  RÉGI (rács/szegmens) pályák betöltéskor AUTOMATIKUSAN átalakulnak szabad
+//  kontrollponttá (world = cella * TRACK.tile — pontosan ugyanaz a világ-pozíció,
+//  amit eddig a trackbuilder.js épített), így módosítás/migráció nélkül tovább
+//  szerkeszthetők — mentéskor már az új formátumban mentődnek.
 // =============================================================================
 import {
   saveCustomTrack,
   clearCustomLayout,
   loadCustomLayout,
   loadCustomDecorations,
-  loadEditorView,
   setActiveTrack,
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
-import { DECORATION_TYPES } from './config.js';
+import { DECORATION_TYPES, TRACK } from './config.js';
 import { isDevMode } from './devmode.js';
+import { isSplineLayout } from './sim/trackFactory.js';
+import { sampleSpline } from './sim/trackSpline.js';
+import { validateSplineTrack, MIN_CONTROL_POINTS, MIN_WIDTH, MAX_WIDTH } from './sim/trackValidation.js';
 
 // A pálya-szerkesztő CSAK dev módban érhető el (?dev=1 a játék URL-jén) —
 // enélkül vissza a játékhoz. A throw megállítja a modul további futását.
@@ -33,13 +44,19 @@ if (!isDevMode()) {
   throw new Error('A pálya-szerkesztő csak dev módban érhető el (?dev=1).');
 }
 
-const GRID_COLS = 20;
-const GRID_ROWS = 14;
-const CELL = 40; // px
+const CANVAS_W = 800;
+const CANVAS_H = 560;
+const PX_PER_METER = 2; // a látható vászon kb. ±200m × ±140m világot fed le
+const HIT_RADIUS_PX = 14; // egy kontrollpont "eltalálásának" képernyő-sugara
+const CLOSE_RADIUS_PX = 16; // az első pont közelébe kattintva zár a hurok
+const CURVE_HIT_RADIUS_PX = 10; // a görbe/akkord közelébe kattintva szúr be pontot
+const REMOVE_RADIUS_M = 3; // egy meglévő dekoráció közelébe kattintva törli
+const WIDTH_STEP = 2; // m — egy görgő-kattanás ennyivel változtatja egy pont szélességét
+const DEFAULT_WIDTH = TRACK.tile; // m — új kontrollpont alap-szélessége
 
 const canvas = document.getElementById('editorCanvas');
-canvas.width = GRID_COLS * CELL;
-canvas.height = GRID_ROWS * CELL;
+canvas.width = CANVAS_W;
+canvas.height = CANVAS_H;
 const ctx = canvas.getContext('2d');
 
 const statusEl = document.getElementById('status');
@@ -60,47 +77,82 @@ const savedTracksListEl = document.getElementById('savedTracksList');
 
 // --- Állapot ---
 
-// A pálya-útvonal: cellák sorozata {x, y} rács-koordinátában. path[0] = rajt.
-const path = [];
+// A pálya kontrollpontjai — {x,z} VILÁG-méterben (nincs rács). points[0]/[1]
+// köze a rajt/cél (ugyanaz a konvenció, mint a régi rács-rendszerben).
+const points = [];
 let closed = false;
-let hover = null; // az egér alatti cella
+let dragIndex = null; // az éppen húzott kontrollpont indexe, vagy null
+let hover = null; // { screenPt:{x,y}, worldPt:{x,z} } — a legutóbbi egér-pozíció
 
-// Dekorációk: {gx, gy, type, rot} — ABSZOLÚT rács-koordinátában (mentéskor
-// váltjuk a rajt-cellához képesti relatívra).
+// Dekorációk: {x, z, type, rot} — VILÁG-méterben. Mentéskor dgx=x/TRACK.tile,
+// dgy=z/TRACK.tile (a decorations.js render-kód EZT várja: world=dgx*tile) —
+// ugyanaz a konvenció, mint a régi "szabad" (free) elemeknél volt, csak
+// mostantól MINDEN dekoráció ezt az utat követi (nincs többé rács-igazítás).
 const decorations = [];
 const decorTypeKeys = Object.keys(DECORATION_TYPES);
 let activeDecorType = decorTypeKeys[0];
 let activeRot = 0;
 
 let mode = 'track'; // 'track' | 'decor'
+let problemPos = null; // { x, z } — az aktuális validációs hiba helye a vásznon (ha van)
 
-function cellsEqual(a, b) {
-  return a.x === b.x && a.y === b.y;
+// --- Koordináta-átváltás (világ-méter ⇄ vászon-pixel) ---
+
+function worldToScreen(p) {
+  return { x: CANVAS_W / 2 + p.x * PX_PER_METER, y: CANVAS_H / 2 + p.z * PX_PER_METER };
+}
+function screenToWorld(sx, sy) {
+  return { x: (sx - CANVAS_W / 2) / PX_PER_METER, z: (sy - CANVAS_H / 2) / PX_PER_METER };
+}
+function pixelToScreen(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((clientX - rect.left) / rect.width) * CANVAS_W,
+    y: ((clientY - rect.top) / rect.height) * CANVAS_H,
+  };
 }
 
-function isAdjacent(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+function findPointNear(screenPt) {
+  for (let i = 0; i < points.length; i++) {
+    const s = worldToScreen(points[i]);
+    if (Math.hypot(s.x - screenPt.x, s.y - screenPt.y) < HIT_RADIUS_PX) return i;
+  }
+  return -1;
 }
 
-function inPath(cell) {
-  return path.some((p) => cellsEqual(p, cell));
+function nearFirstPoint(screenPt) {
+  if (points.length < MIN_CONTROL_POINTS) return false;
+  const s = worldToScreen(points[0]);
+  return Math.hypot(s.x - screenPt.x, s.y - screenPt.y) < CLOSE_RADIUS_PX;
 }
 
-// Érvényes-e a `cell` mint a következő kattintás célja (track mód).
-function isValidNext(cell) {
-  if (path.length === 0) return true;
-  const last = path[path.length - 1];
-  if (!isAdjacent(last, cell)) return false;
-  if (path.length >= 4 && cellsEqual(cell, path[0])) return true; // zárás
-  return !inPath(cell); // nem ismételhető cella
+// Pont távolsága egy (a→b) szakasztól (a legközelebbi, szakaszra vetített pontig).
+function pointSegmentDistance(p, a, b) {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const lenSq = dx * dx + dz * dz;
+  const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / lenSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.z - (a.z + t * dz));
 }
 
-// Egy cellában EGY talaj- (pl. fű) ÉS EGY objektum-elem (fal, fa, épület...)
-// lehet EGYSZERRE, egymástól függetlenül — ezért réteg szerint kell keresni.
-function decorationAt(cell, layer) {
-  return decorations.find(
-    (d) => d.gx === cell.x && d.gy === cell.y && DECORATION_TYPES[d.type].layer === layer
-  );
+// A LEGKÖZELEBBI kontrollpont-akkord (nem a sima görbe — az egyszerűség kedvéért
+// a nyers kontrollpont-sokszög szakaszait nézzük) egy világ-pontból — ez adja meg,
+// MELYIK két kontrollpont közé szúrjunk be, ha a felhasználó a görbe közelébe
+// kattint. A résen (`dist`) a hívó dönti el, hogy elég közel van-e a beszúráshoz.
+function nearestChordSegment(worldPt) {
+  const n = points.length;
+  let best = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    const d = pointSegmentDistance(worldPt, a, b);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return { index: best, dist: bestDist };
 }
 
 // --- Mód váltás ---
@@ -113,8 +165,8 @@ function setMode(newMode) {
   trackLegendEl.style.display = isTrack ? 'flex' : 'none';
   decorControlsEl.style.display = isTrack ? 'none' : 'block';
   instructionsEl.textContent = isTrack
-    ? 'Kattints egy cellára a kezdéshez, majd a szomszédos cellákra, hogy megrajzold a pálya útvonalát. Ha eleget haladtál, kattints vissza az arany rajt-cellára a hurok zárásához. Zárt pálya esetén a kanyar-cellákra kattintva ciklikusan válthatod a kanyar sugarát (sima → nagy → extra nagy → sima...) — a méretet egy szám jelzi a cellán.'
-    : 'Válaszd ki az elemet lent, majd kattints egy cellára a lerakáshoz. Meglévő elemre kattintva eltávolítod. A "Forgatás" gomb az elem irányát állítja lerakás előtt — a fénykaput (útra helyezve) az útiránnyal egybe kell forgatni. A terelőkúp SZABADON, rácstól függetlenül pontosan a kattintott helyre kerül — a közelébe kattintva törölhető.';
+    ? 'Kattints bárhova a pálya rajzolásának megkezdéséhez, majd folytasd további pontokkal — a görbe automatikusan simán illeszkedik közéjük. Legalább 4 pont után kattints vissza az első (arany) pontra a hurok zárásához. Zárás után: húzd a pontokat az áthelyezéshez, kattints a görbe közelébe új pont beszúrásához, jobb-kattints egy pontra a törléséhez, görgess egy pont fölött a szélességének (a "Xm" felirat) állításához, vagy dupla kattints egy pontra, hogy éles sarokká (négyzet) váltson — így sikánok, hajtűk is rajzolhatók.'
+    : 'Válaszd ki az elemet lent, majd kattints a pálya bármely pontjára a lerakáshoz — pontosan oda kerül, ahova kattintasz. Egy meglévő elem közelébe kattintva eltávolítod. A "Forgatás" gomb az elem irányát állítja lerakás előtt.';
   hover = null;
   render();
   updateStatus();
@@ -124,10 +176,8 @@ modeTrackBtn.addEventListener('click', () => setMode('track'));
 modeDecorBtn.addEventListener('click', () => setMode('decor'));
 
 // Dekoráció-paletta felépítése a config.js DECORATION_TYPES alapján, réteg
-// szerint csoportosítva. Jelenleg csak 'object' réteg van használatban (a
-// 'ground' — a fű-folt — megszűnt, mióta a teljes pálya alapból fű, lásd
-// render3d/grassField.js) — a réteg-rendszer maga megmaradt, ha a jövőben
-// kellene újra talaj-típusú elem, de üres réteghez nem jelenít meg fejlécet.
+// szerint csoportosítva (a réteg-fogalom csak vizuális csoportosítás — a
+// tényleges elhelyezés minden típusnál azonos, szabad).
 const layerLabels = { ground: 'Talaj (a cella alapja)', object: 'Objektum (a talajra kerül)' };
 for (const layer of ['ground', 'object']) {
   const keys = decorTypeKeys.filter((k) => DECORATION_TYPES[k].layer === layer);
@@ -161,105 +211,473 @@ rotateBtn.addEventListener('click', () => {
   render();
 });
 
-// --- Layout levezetése az útvonalból ---
+// --- Interakció ---
 
-function computeSteps() {
-  const n = path.length;
-  const steps = [];
-  for (let i = 0; i < n; i++) {
-    const a = path[i];
-    const b = path[(i + 1) % n];
-    steps.push({ dx: b.x - a.x, dy: b.y - a.y });
+canvas.addEventListener('mousedown', (e) => {
+  if (mode !== 'track') return;
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  const worldPt = screenToWorld(screenPt.x, screenPt.y);
+
+  if (!closed) {
+    // A hurok zárása ELŐBB, mint az "eltaláltam egy pontot" ellenőrzés — az első
+    // pont ÚGY IS "pont", de itt kattintva zárni akarunk, nem húzni.
+    if (nearFirstPoint(screenPt)) {
+      closed = true;
+      render();
+      updateStatus();
+      return;
+    }
+    const hitIdx = findPointNear(screenPt);
+    if (hitIdx !== -1) {
+      dragIndex = hitIdx;
+      return;
+    }
+    // Új pont szélessége öröklődik az előzőtől (vagy alapérték az elsőnél) —
+    // így egy már beállított szélesség "tovább fut" a következő pontokra.
+    const width = points.length > 0 ? points[points.length - 1].width : DEFAULT_WIDTH;
+    points.push({ ...worldPt, width });
+    render();
+    updateStatus();
+    return;
   }
-  return steps;
+
+  // Zárt pálya: pont húzása, vagy új pont beszúrása a görbe közelébe kattintva.
+  const hitIdx = findPointNear(screenPt);
+  if (hitIdx !== -1) {
+    dragIndex = hitIdx;
+    return;
+  }
+  const { index, dist } = nearestChordSegment(worldPt);
+  if (dist * PX_PER_METER < CURVE_HIT_RADIUS_PX) {
+    // A beszúrt pont szélessége a két szomszédos kontrollpont átlaga — simán
+    // illeszkedik a már beállított szélesség-átmenetbe.
+    const a = points[index];
+    const b = points[(index + 1) % points.length];
+    const width = (a.width + b.width) / 2;
+    points.splice(index + 1, 0, { ...worldPt, width });
+    render();
+    updateStatus();
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  const worldPt = screenToWorld(screenPt.x, screenPt.y);
+  if (mode === 'track' && dragIndex !== null) {
+    // A pozíciót cseréljük, de a pont szélességét (width) megőrizzük — enélkül
+    // a húzás visszaállítaná a pontot alapértelmezett szélességre.
+    points[dragIndex] = { ...worldPt, width: points[dragIndex].width };
+    render();
+    updateStatus();
+    return;
+  }
+  hover = { screenPt, worldPt };
+  render();
+});
+
+canvas.addEventListener('mouseleave', () => {
+  hover = null;
+  render();
+});
+
+// A mouseup-ot az EGÉSZ ablakon figyeljük (nem csak a vásznon), hogy a húzás
+// akkor is helyesen véget érjen, ha a felhasználó közben kicsúszik a vászonból.
+window.addEventListener('mouseup', () => {
+  if (dragIndex !== null) {
+    dragIndex = null;
+    updateStatus();
+  }
+});
+
+// Jobb-klikk: egy kontrollpont törlése (track módban) — legalább MIN_CONTROL_POINTS
+// pontnak meg kell maradnia.
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (mode !== 'track') return;
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  const hitIdx = findPointNear(screenPt);
+  if (hitIdx === -1) return;
+  if (points.length <= MIN_CONTROL_POINTS) {
+    statusEl.textContent = `Legalább ${MIN_CONTROL_POINTS} pont kell — ez már nem törölhető.`;
+    statusEl.classList.remove('closed');
+    return;
+  }
+  points.splice(hitIdx, 1);
+  render();
+  updateStatus();
+});
+
+// Görgő egy kontrollpont fölött (track módban): az ADOTT PONT szélességének
+// állítása ±WIDTH_STEP méterrel, [MIN_WIDTH, MAX_WIDTH] közé szorítva — ez adja
+// a "szakaszonként állítható pályaszélesség" funkciót (a szélesség a
+// szomszédos pontok felé simán, Catmull-Rom-interpolációval vezet át, lásd
+// sim/trackSpline.js). Csak akkor preventDefault-olunk, ha TALÁLTUNK pontot —
+// egyébként a lap normál görgetése marad érintetlen.
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    if (mode !== 'track') return;
+    const screenPt = pixelToScreen(e.clientX, e.clientY);
+    const hitIdx = findPointNear(screenPt);
+    if (hitIdx === -1) return;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? WIDTH_STEP : -WIDTH_STEP;
+    const p = points[hitIdx];
+    p.width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, p.width + delta));
+    render();
+    updateStatus();
+  },
+  { passive: false }
+);
+
+// Dupla kattintás egy kontrollponton (track módban): ki/be kapcsolja, hogy a
+// pont ÉLES SAROK legyen-e (törésponttá teszi a görbét, egyenes be/kifutással
+// — lásd sim/trackSpline.js) vagy sima Catmull-Rom-átmenet (alapértelmezett).
+// Nem ütközik a mousedown/mouseup húzás-logikával — egy dblclick két külön,
+// mozgás nélküli kattintásból áll, ez az esemény azok UTÁN, külön fut le.
+canvas.addEventListener('dblclick', (e) => {
+  if (mode !== 'track') return;
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  const hitIdx = findPointNear(screenPt);
+  if (hitIdx === -1) return;
+  points[hitIdx].sharp = !points[hitIdx].sharp;
+  render();
+  updateStatus();
+});
+
+// Dekoráció-elhelyezés/törlés (csak decor módban — a 'click' a mousedown+mouseup
+// PÁRJÁRA fut le húzás nélkül, így nem ütközik a fenti track-mód húzás-logikával).
+canvas.addEventListener('click', (e) => {
+  if (mode !== 'decor') return;
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  const worldPt = screenToWorld(screenPt.x, screenPt.y);
+  const existing = decorations.find((d) => Math.hypot(d.x - worldPt.x, d.z - worldPt.z) < REMOVE_RADIUS_M);
+  if (existing) {
+    decorations.splice(decorations.indexOf(existing), 1);
+  } else {
+    decorations.push({ x: worldPt.x, z: worldPt.z, type: activeDecorType, rot: activeRot });
+  }
+  render();
+  updateStatus();
+});
+
+undoBtn.addEventListener('click', () => {
+  if (mode === 'decor') {
+    decorations.pop();
+  } else if (closed) {
+    closed = false;
+  } else {
+    points.pop();
+  }
+  render();
+  updateStatus();
+});
+
+clearBtn.addEventListener('click', () => {
+  points.length = 0;
+  closed = false;
+  decorations.length = 0;
+  render();
+  updateStatus();
+});
+
+function gotoGame() {
+  // Gyökér-relatív útvonal helyett BASE_URL-lel prefixelve, hogy GitHub Pages
+  // al-útvonalán (/autos-jatek/) is a helyes index.html-re navigáljon.
+  window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
 }
 
-// Minden csempéhez (path[k]) megállapítja: egyenes, vagy kanyar (+irány).
-// A bejövő irány a k-1-edik lépés, a kimenő a k-adik (körkörösen).
-function computeTileTypes() {
-  const steps = computeSteps();
-  const n = steps.length;
-  const types = [];
-  for (let k = 0; k < n; k++) {
-    const din = steps[(k - 1 + n) % n];
-    const dout = steps[k];
-    if (din.dx === dout.dx && din.dy === dout.dy) {
-      types.push({ type: 'straight' });
-    } else {
-      const cross = din.dx * dout.dy - din.dy * dout.dx; // ±1 (90°-os lépés)
-      types.push({ type: 'corner', turn: cross > 0 ? 1 : -1 });
+// A jelenlegi kontrollpontokból a MENTETT layout (ha a hurok zárva van) — a
+// pontok MAGUK a formátum, nincs szükség kanonikus-tájolás átalakításra (egy
+// ponthalmaznak nincs "kezdő iránya" — lásd sim/trackFactory.js isSplineLayout).
+function currentLayout() {
+  if (!closed || points.length < MIN_CONTROL_POINTS) return null;
+  return points.map((p) => ({ x: p.x, z: p.z, width: p.width, sharp: !!p.sharp }));
+}
+
+// A dekorációk mentésre kész alakja: dgx/dgy = world/TRACK.tile — a
+// render3d/decorations.js EZT várja (world = dgx*tile), változatlanul.
+function decorationsForSave() {
+  return decorations.map((d) => ({
+    type: d.type,
+    dgx: d.x / TRACK.tile,
+    dgy: d.z / TRACK.tile,
+    rot: d.rot || 0,
+  }));
+}
+
+saveBtn.addEventListener('click', async () => {
+  const layout = currentLayout();
+  if (!layout) return;
+  const relDecorations = decorationsForSave();
+  const name = trackNameInput.value.trim();
+  // Ez a pálya induljon a játékban (lokális átadás a config.js felé). Nincs
+  // külön "editor-nézet" — a layout maga a WYSIWYG forrás (lásd fenti komment).
+  setActiveTrack(name, layout, relDecorations);
+  // Ha van neve, GLOBÁLISAN is elmentjük a szerverre (minden gépről elérhető).
+  // Ha a szerver nem elérhető, akkor is elindul lokálisan — csak nem lesz globális.
+  if (name) {
+    saveBtn.disabled = true;
+    try {
+      await apiSaveTrack({ name, layout, decorations: relDecorations });
+    } catch (e) {
+      statusEl.textContent = `⚠️ Globális mentés sikertelen (${e.message}). Lokálisan indítom.`;
+      statusEl.classList.remove('closed');
     }
   }
-  return types;
-}
+  gotoGame();
+});
 
-// Hány egymást követő 'straight' cella van közvetlenül `idx` előtt/után (a `dir`
-// irányban lépkedve, körkörösen), és melyik kanyar-cellánál ér véget ez a futás
-// (ha egyáltalán kanyarnál — pl. egy teljesen kör alakú, csupa-kanyaros pálya
-// esetén elméletileg az egész úton nincs straight, ekkor length=0 minden határon).
-function straightRunInfo(idx, types, dir) {
-  const n = types.length;
-  let count = 0;
-  let i = (idx + dir + n) % n;
-  while (types[i].type === 'straight' && count < n) {
-    count++;
-    i = (i + dir + n) % n;
+resetDefaultBtn.addEventListener('click', () => {
+  clearCustomLayout();
+  points.length = 0;
+  closed = false;
+  decorations.length = 0;
+  trackNameInput.value = '';
+  render();
+  renderSavedTracksList();
+  statusEl.textContent = 'Az alap pálya visszaállítva (törölve az aktív egyéni pálya és dekoráció — a névvel mentett pályák megmaradnak).';
+  statusEl.classList.remove('closed');
+});
+
+function updateStatus() {
+  saveBtn.disabled = true;
+  statusEl.classList.remove('closed');
+  problemPos = null;
+  if (points.length === 0) {
+    statusEl.textContent = 'Kattints valahova a pálya rajzolásának megkezdéséhez.';
+    return;
   }
-  return { length: count, otherCornerIdx: types[i].type === 'corner' ? i : null };
+  if (!closed) {
+    const hint =
+      points.length >= MIN_CONTROL_POINTS
+        ? ' Vagy zárd a hurkot: kattints vissza az első (arany) pontra.'
+        : ` (legalább ${MIN_CONTROL_POINTS} kell a záráshoz)`;
+    statusEl.textContent = `${points.length} kontrollpont kijelölve.${hint}`;
+    return;
+  }
+  const result = validateSplineTrack(points);
+  if (!result.valid) {
+    const err = result.errors[0];
+    statusEl.textContent = `⚠️ ${err.message}${err.pos ? ' (lásd a piros jelölést a pályán)' : ''}`;
+    if (err.pos) problemPos = err.pos;
+    render(); // a piros jelölőt azonnal kirajzoljuk, nem várva a következő egérmozdulatra
+    return;
+  }
+  const decorNote = decorations.length ? `, ${decorations.length} dekoráció` : '';
+  statusEl.textContent = `Kész! ${points.length} kontrollpont, érvényes zárt pálya${decorNote}.`;
+  statusEl.classList.add('closed');
+  saveBtn.disabled = false;
 }
 
-// Egy kanyar-cella LEGNAGYOBB megengedhető mérete (1/2/3) — a nagyobb sugarú
-// kanyar (size-1) csempényit "belenyúlik" MINDKÉT szomszédos egyenesbe (lásd
-// sim/trackbuilder.js applyCornerSizeCompensation), ezért csak akkora méret
-// engedhető meg, amennyit a szomszédos egyenesek (mínusz amit a TÚLOLDALI
-// kanyaruk esetleg már lefoglalt belőle) még elbírnak — különben a pálya nem
-// zárna vissza pontosan a kiinduló pontra.
-function maxFeasibleCornerSize(idx) {
-  const types = computeTileTypes();
-  if (types[idx].type !== 'corner') return 1;
-  const before = straightRunInfo(idx, types, -1);
-  const after = straightRunInfo(idx, types, 1);
-  const otherBefore = before.otherCornerIdx != null ? path[before.otherCornerIdx].cornerSize || 1 : 1;
-  const otherAfter = after.otherCornerIdx != null ? path[after.otherCornerIdx].cornerSize || 1 : 1;
-  const availBefore = before.length - (otherBefore - 1);
-  const availAfter = after.length - (otherAfter - 1);
-  // size <= availBefore/availAfter kell (NEM +1) — a kanyar mérete (size-1)
-  // csempét von el, a szomszédos egyenesnek pedig legalább 1 csempének kell
-  // maradnia utána: run.length - (size-1) >= 1  <=>  size <= run.length.
-  return Math.max(1, Math.min(3, availBefore, availAfter));
-}
+// --- Renderelés ---
 
-// Egyenes-futásokat összevonja {type:'straight', n} formába (lásd config.js RECT).
-function computeLayout() {
-  if (!closed || path.length < 4) return null;
-  const types = computeTileTypes();
-  const layout = [];
-  let i = 0;
-  while (i < types.length) {
-    if (types[i].type === 'straight') {
-      let n = 0;
-      while (i < types.length && types[i].type === 'straight') {
-        n++;
-        i++;
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Halvány referencia-rács — CSAK vizuális tájékozódás, nincs hozzá igazítás.
+  ctx.strokeStyle = '#22252e';
+  ctx.lineWidth = 1;
+  const stepPx = 20 * PX_PER_METER; // 20 méterenként
+  for (let x = CANVAS_W / 2; x <= CANVAS_W; x += stepPx) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+  }
+  for (let x = CANVAS_W / 2 - stepPx; x >= 0; x -= stepPx) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+  }
+  for (let y = CANVAS_H / 2; y <= CANVAS_H; y += stepPx) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+  }
+  for (let y = CANVAS_H / 2 - stepPx; y >= 0; y -= stepPx) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+  }
+
+  // Zárt pályánál a SAJÁT görbe-mintavételező (sampleSpline) adja az előnézetet —
+  // ugyanaz a modul, amit a játék is használ, tehát garantáltan WYSIWYG.
+  let sampled = null;
+  if (closed && points.length >= MIN_CONTROL_POINTS) {
+    try {
+      sampled = sampleSpline(points, 2);
+    } catch {
+      sampled = null;
+    }
+  }
+
+  if (sampled) {
+    // Aszfalt-sáv előnézet (kitöltött sokszög a bal/jobb élek közt) — PONTONKÉNT
+    // a saját width-jével (nem egy fix konstanssal), hogy a szakaszonként
+    // állított szélesség élőben látszódjon.
+    ctx.beginPath();
+    sampled.forEach((p, i) => {
+      const halfPx = (p.width / 2) * PX_PER_METER;
+      const s = worldToScreen(p);
+      const lx = s.x - Math.sin(p.dir) * halfPx;
+      const ly = s.y + Math.cos(p.dir) * halfPx;
+      if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+    });
+    for (let i = sampled.length - 1; i >= 0; i--) {
+      const p = sampled[i];
+      const halfPx = (p.width / 2) * PX_PER_METER;
+      const s = worldToScreen(p);
+      const rx = s.x + Math.sin(p.dir) * halfPx;
+      const ry = s.y - Math.cos(p.dir) * halfPx;
+      ctx.lineTo(rx, ry);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(130,130,140,0.4)';
+    ctx.fill();
+
+    // Középvonal.
+    ctx.strokeStyle = '#5c8fd6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    sampled.forEach((p, i) => {
+      const s = worldToScreen(p);
+      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+  } else if (points.length >= 1) {
+    // Nyitott (még nem zárt) útvonal: egyszerű, egyenes szakaszos előnézet.
+    ctx.strokeStyle = '#5c8fd6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const s = worldToScreen(p);
+      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+    });
+    ctx.stroke();
+  }
+
+  // Kontrollpontok — az első kettő (a rajt/cél-kapu) arany, a többi kék. Az
+  // ÉLES SAROKKÉNT megjelölt pontok (dupla kattintás, lásd a dblclick-
+  // listenert) NÉGYZET alakúak (nem kör) — így látszik, hol törik meg a görbe.
+  // Mellettük a pont szélessége (görgővel állítható, lásd a wheel-listenert).
+  points.forEach((p, i) => {
+    const s = worldToScreen(p);
+    ctx.beginPath();
+    if (p.sharp) {
+      ctx.rect(s.x - 6, s.y - 6, 12, 12);
+    } else {
+      ctx.arc(s.x, s.y, 7, 0, Math.PI * 2);
+    }
+    ctx.fillStyle = i === 0 || i === 1 ? '#f2c14e' : '#5c8fd6';
+    ctx.fill();
+    ctx.strokeStyle = '#12141a';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#9aa2b4';
+    ctx.fillText(`${Math.round(p.width)}m`, s.x, s.y + 10);
+  });
+
+  // Rajt/cél jelölő ikon az első két kontrollpont közt.
+  if (points.length >= 2) {
+    const a = worldToScreen(points[0]);
+    const b = worldToScreen(points[1]);
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e8eaef';
+    ctx.fillText('🏁', (a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+
+  // A jelenlegi validációs hiba pontos helye (ha van) — enélkül a #status
+  // szövegben szereplő "X. mintapontnál" a felhasználó számára megfoghatatlan
+  // (élő visszajelzés alapján ez volt a fő panasz: "nem egyértelmű, hol").
+  if (problemPos) {
+    const s = worldToScreen(problemPos);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 16, 0, Math.PI * 2);
+    ctx.strokeStyle = '#e05a5a';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e05a5a';
+    ctx.fillText('⚠', s.x, s.y - 24);
+  }
+
+  // Hover-visszajelzés (track mód): zárás-jelölő / pont-kijelölés / beszúrás-előnézet.
+  if (hover && mode === 'track') {
+    const hitIdx = findPointNear(hover.screenPt);
+    if (!closed && nearFirstPoint(hover.screenPt)) {
+      const s = worldToScreen(points[0]);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 12, 0, Math.PI * 2);
+      ctx.strokeStyle = '#f2c14e';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (hitIdx !== -1) {
+      const s = worldToScreen(points[hitIdx]);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 11, 0, Math.PI * 2);
+      ctx.strokeStyle = '#8fd693';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (closed && points.length >= MIN_CONTROL_POINTS) {
+      const { dist } = nearestChordSegment(hover.worldPt);
+      if (dist * PX_PER_METER < CURVE_HIT_RADIUS_PX) {
+        const s = worldToScreen(hover.worldPt);
+        ctx.font = 'bold 18px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#d99a3f';
+        ctx.fillText('+', s.x, s.y);
       }
-      layout.push({ type: 'straight', n });
-    } else {
-      // A kanyar mérete (1=sima, 2=Large, 3=Larger) a path-cellán tárolva —
-      // lásd a canvas click-kezelőt (zárt pályán a kanyar-cellára kattintva váltható).
-      layout.push({ type: 'corner', turn: types[i].turn, size: path[i].cornerSize || 1 });
-      i++;
+    } else if (!closed) {
+      const s = worldToScreen(hover.worldPt);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(92,143,214,0.5)';
+      ctx.fill();
     }
   }
-  return layout;
+
+  // Dekorációk — mind szabad elhelyezésűek (ikon + forgás-jelző vonal).
+  for (const d of decorations) {
+    const s = worldToScreen(d);
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(DECORATION_TYPES[d.type].icon, s.x, s.y);
+    const angle = (d.rot * Math.PI) / 2 - Math.PI / 2;
+    ctx.strokeStyle = '#d99a3f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(s.x + Math.cos(angle) * 16, s.y + Math.sin(angle) * 16);
+    ctx.stroke();
+  }
+
+  // Hover-visszajelzés (decor mód): törlés-célpont (piros gyűrű) / lerakás-előnézet.
+  if (hover && mode === 'decor') {
+    const existing = decorations.find((d) => Math.hypot(d.x - hover.worldPt.x, d.z - hover.worldPt.z) < REMOVE_RADIUS_M);
+    const s = worldToScreen(hover.worldPt);
+    if (existing) {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 14, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e05a5a';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.5;
+      ctx.font = '20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(DECORATION_TYPES[activeDecorType].icon, s.x, s.y);
+      ctx.globalAlpha = 1;
+    }
+  }
 }
 
-// A computeLayout() INVERZE: egy mentett layout-ból visszaépíti a cella-sorozatot,
-// hogy a szerkesztő megnyitásakor a jelenlegi pálya legyen betöltve (ne kelljen
-// mindig előről kezdeni). A kezdő irány tetszőleges (mindig kelet, dx=1,dy=0) —
-// ez csak az EGÉSZ alakzat elforgatását/eltolását befolyásolja, a layout maga
-// (és így a dekorációk path[0]-hoz képesti relatív pozíciója is) INVARIÁNS erre,
-// mert a computeTileTypes() a lépések EGYMÁSHOZ KÉPESTI irányából, nem abszolút
-// tájolásból számol. (Ellenőrizve: layoutToPath(L) → computeLayout() === L.)
+// A computeLayout()-hoz hasonló INVERZ, csak a RÉGI (rács/szegmens) formátumhoz —
+// egy mentett szegmens-layout-ból visszaépíti a kanonikus (kelet-kezdésű)
+// cella-sorozatot. CSAK a régi pályák betöltésekor kell (lásd loadLayoutIntoEditor).
 function layoutToPath(layout) {
   let x = 0;
   let y = 0;
@@ -274,14 +692,7 @@ function layoutToPath(layout) {
         cells.push({ x, y });
       }
     } else {
-      // FONTOS: computeTileTypes() a kanyar-cellát a FORDULÁS ELŐTTI utolsó
-      // cellaként azonosítja (ahol a bejövő és kimenő lépésirány eltér) — ez a
-      // cells tömb JELENLEGI utolsó eleme, NEM az itt lentebb frissen felvett
-      // (fordulás UTÁNI) cella. A cornerSize-t ezért a MEGLÉVŐ utolsó cellára
-      // kell írni, mielőtt továbblépünk — különben mentés/betöltés után a méret
-      // egy szomszédos (rossz) cellára "csúszna át".
       const turn = seg.turn;
-      if (seg.size && seg.size !== 1) cells[cells.length - 1].cornerSize = seg.size;
       const ndx = turn === 1 ? -dy : dy;
       const ndy = turn === 1 ? dx : -dx;
       dx = ndx;
@@ -295,497 +706,35 @@ function layoutToPath(layout) {
   return cells;
 }
 
-// --- Interakció ---
-
-function pixelToCell(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const x = Math.floor(((clientX - rect.left) / rect.width) * GRID_COLS);
-  const y = Math.floor(((clientY - rect.top) / rect.height) * GRID_ROWS);
-  return { x, y };
-}
-
-// Rács-igazítás NÉLKÜLI, folytonos pozíció ("free" dekorációkhoz) — a kattintás
-// PONTOS helyét adja vissza rács-egységben (pl. x=6.35 = a 6. cella 35%-ánál).
-function pixelToPoint(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const x = ((clientX - rect.left) / rect.width) * GRID_COLS;
-  const y = ((clientY - rect.top) / rect.height) * GRID_ROWS;
-  return { x, y };
-}
-
-// FONTOS: a kirajzolt cella-négyzet (p.x*CELL .. (p.x+1)*CELL) NEM ugyanott van,
-// mint a valódi útburkolat! A pálya középvonala a rács-EGÉSZ értékeken fut (ott
-// van a track.center), az út pedig ROAD_HALF (=fél csempe) távolságra terjed ki
-// MINDKÉT irányban a középvonaltól — vagyis a burkolat a p.x-0.5..p.x+0.5 sávban
-// van, NEM a p.x..p.x+1 sávban, amit a kirajzolt kék négyzet mutat! Emiatt a kék
-// cella "második fele" valójában már a füvön van. A "free" elemeknél ezért a
-// nyers kattintás-pozíciót (pixelToPoint) -0.5-tel el kell tolni MENTÉS előtt,
-// hogy a kattintott pont a burkolathoz (nem a kék négyzethez) legyen igazítva —
-// a megjelenítéskor (render) ugyanezt +0.5-tel visszatoljuk, hogy a jelölő
-// PONTOSAN ott jelenjen meg, ahova kattintottunk (WYSIWYG).
-function freeClickToGrid(pt) {
-  return { gx: pt.x - 0.5, gy: pt.y - 0.5 };
-}
-function freeGridToPx(d) {
-  return { px: (d.gx + 0.5) * CELL, py: (d.gy + 0.5) * CELL };
-}
-
-function isFreeType(type) {
-  return !!DECORATION_TYPES[type]?.free;
-}
-
-canvas.addEventListener('mousemove', (e) => {
-  if (mode === 'track') {
-    const cell = pixelToCell(e.clientX, e.clientY);
-    hover = isValidNext(cell) ? cell : null;
-  } else {
-    // Dekoráció-módban bárhova lehet; "free" elemnél folytonos pozíció (nincs
-    // rács-igazítás), különben a szokásos cella.
-    hover = isFreeType(activeDecorType)
-      ? pixelToPoint(e.clientX, e.clientY)
-      : pixelToCell(e.clientX, e.clientY);
-  }
-  render();
-});
-
-canvas.addEventListener('mouseleave', () => {
-  hover = null;
-  render();
-});
-
-// "Free" elemnél a törléshez nem cella-egyezés kell, hanem a legközelebbi
-// azonos típusú elem a kattintás egy kis sugarú környezetében.
-const FREE_REMOVE_RADIUS = 0.35; // rács-egységben
-
-canvas.addEventListener('click', (e) => {
-  if (mode === 'decor') {
-    if (isFreeType(activeDecorType)) {
-      // Rács-igazítás NÉLKÜL, pontosan a kattintott helyre kerül — nem függ
-      // attól, melyik cellába esik, és egy cellán belül is bárhová tehető.
-      // (freeClickToGrid: lásd fent, a kék cella-négyzet és a valódi burkolat
-      // fél-cellás eltérése miatt szükséges korrekció.)
-      const g = freeClickToGrid(pixelToPoint(e.clientX, e.clientY));
-      const existing = decorations.find(
-        (d) => d.type === activeDecorType && Math.hypot(d.gx - g.gx, d.gy - g.gy) < FREE_REMOVE_RADIUS
-      );
-      if (existing) {
-        decorations.splice(decorations.indexOf(existing), 1);
-      } else {
-        decorations.push({ gx: g.gx, gy: g.gy, type: activeDecorType, rot: activeRot });
-      }
-      render();
-      updateStatus();
-      return;
-    }
-
-    const cell = pixelToCell(e.clientX, e.clientY);
-    // A kijelölt elem RÉTEGÉBEN (talaj vagy objektum) nézzük, van-e már valami
-    // ebben a cellában — a másik réteg (pl. az odarakott fű) érintetlen marad.
-    const layer = DECORATION_TYPES[activeDecorType].layer;
-    const existing = decorationAt(cell, layer);
-    if (existing) {
-      decorations.splice(decorations.indexOf(existing), 1);
-    } else {
-      decorations.push({ gx: cell.x, gy: cell.y, type: activeDecorType, rot: activeRot });
-    }
-    render();
-    updateStatus();
-    return;
-  }
-
-  const cell = pixelToCell(e.clientX, e.clientY);
-
-  if (closed) {
-    // Zárt pályán a kanyar-cellákra kattintva ciklikusan váltható a kanyar
-    // sugara: 1 (sima) → 2 (Large) → 3 (Larger) → 1... (lásd render3d/scene.js).
-    // A ciklus CSAK a szomszédos egyenesek hossza által megengedett méretig megy
-    // (maxFeasibleCornerSize) — enélkül a nagyobb kanyar "belenyúlna" a szomszédos
-    // egyenesekbe és a pálya nem zárna vissza pontosan a kiinduló pontra.
-    const idx = path.findIndex((p) => cellsEqual(p, cell));
-    if (idx === -1) return;
-    if (computeTileTypes()[idx].type !== 'corner') return;
-    const maxSize = maxFeasibleCornerSize(idx);
-    const cur = path[idx].cornerSize || 1;
-    path[idx].cornerSize = cur >= maxSize ? 1 : cur + 1;
-    if (maxSize === 1) {
-      statusEl.textContent = 'Ehhez a kanyarhoz a szomszédos egyenesek túl rövidek a nagyobb sugárhoz — hosszabbítsd meg őket, vagy válassz másik kanyart.';
-    } else {
-      updateStatus();
-    }
-    render();
-    return;
-  }
-  if (!isValidNext(cell)) return;
-
-  if (path.length >= 4 && cellsEqual(cell, path[0])) {
-    closed = true;
-  } else {
-    path.push(cell);
-  }
-  hover = null;
-  render();
-  updateStatus();
-});
-
-undoBtn.addEventListener('click', () => {
-  if (mode === 'decor') {
-    decorations.pop();
-  } else if (closed) {
-    closed = false;
-  } else {
-    path.pop();
-  }
-  render();
-  updateStatus();
-});
-
-clearBtn.addEventListener('click', () => {
-  path.length = 0;
-  closed = false;
-  decorations.length = 0;
-  render();
-  updateStatus();
-});
-
-// Egységvektor → irányindex (kelet=0, dél=1, nyugat=2, észak=3). A rot90 lentebb
-// ezt eggyel növeli.
-function dirIndex(dx, dy) {
-  if (dx > 0) return 0;
-  if (dy > 0) return 1;
-  if (dx < 0) return 2;
-  return 3;
-}
-
-// (x,y) rács-vektor forgatása k negyed-fordulattal: lépésenként (x,y) -> (-y,x).
-function rot90(x, y, k) {
-  let vx = x;
-  let vy = y;
-  const n = ((k % 4) + 4) % 4;
-  for (let i = 0; i < n; i++) {
-    const nx = -vy;
-    const ny = vx;
-    vx = nx;
-    vy = ny;
-  }
-  return { x: vx, y: vy };
-}
-
-// A dekorációkat a rajt-cellához (path[0]) képesti relatív rács-eltolásként mentjük,
-// a KANONIKUS (kelet-kezdésű) tájolásba forgatva.
-//
-// MIÉRT: a szerkesztőben tetszőleges irányba rajzolhatod a pályát, de mentéskor/
-// újranyitáskor (layoutToPath) ÉS a játékban (trackbuilder, TRACK.start.dir=0) a
-// pálya MINDIG kelet-kezdésűre épül fel. Ha a dekorációkat a nyers (rajzolt)
-// eltolással mentenénk, a pálya "elfordulna" a dekorációkhoz képest (a rajzolt
-// pálya és a kanonikus ugyanaz az ALAK, csak elforgatva). Ezért a dekorációkat
-// ugyanazzal a k·90°-os forgatással forgatjuk, amivel a rajzolt pálya kelet-
-// kezdésűre fordul — a forgatás mértékét az ELSŐ lépés iránykülönbségéből olvassuk ki.
-function computeRelDecorations(layout) {
-  const raw = decorations.map((d) => ({
-    type: d.type,
-    dgx: d.gx - path[0].x,
-    dgy: d.gy - path[0].y,
-    rot: d.rot || 0,
-  }));
-  const canon = layoutToPath(layout);
-  if (canon.length < 2 || path.length < 2) return raw;
-  const drawn = dirIndex(path[1].x - path[0].x, path[1].y - path[0].y);
-  const canonical = dirIndex(canon[1].x - canon[0].x, canon[1].y - canon[0].y);
-  const k = ((canonical - drawn) % 4 + 4) % 4;
-  if (k === 0) return raw;
-  return raw.map((d) => {
-    const r = rot90(d.dgx, d.dgy, k);
-    // A pozíció +k negyed-fordulattal forog (rot90); a Three.js Y-forgatás
-    // ellentétes előjelű, ezért a dekoráció TÁJOLÁSA (rot) -k-val változik.
-    return { type: d.type, dgx: r.x, dgy: r.y, rot: (((d.rot || 0) - k) % 4 + 4) % 4 };
-  });
-}
-
-function gotoGame() {
-  // Gyökér-relatív útvonal helyett BASE_URL-lel prefixelve, hogy GitHub Pages
-  // al-útvonalán (/autos-jatek/) is a helyes index.html-re navigáljon.
-  window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
-}
-
-// A szerkesztő PONTOS rajzolt állapota (WYSIWYG) — újranyitáskor ez áll vissza
-// változatlanul (a pálya nem forog el / nem ugrik a sarokba). A játék ezt nem
-// használja, csak a kanonikus layout + decorations adatot.
-function captureEditorView() {
-  return {
-    path: path.map((c) => (c.cornerSize ? { x: c.x, y: c.y, cornerSize: c.cornerSize } : { x: c.x, y: c.y })),
-    decorations: decorations.map((d) => ({ gx: d.gx, gy: d.gy, type: d.type, rot: d.rot })),
-  };
-}
-
-saveBtn.addEventListener('click', async () => {
-  const layout = computeLayout();
-  if (!layout) return;
-  const relDecorations = computeRelDecorations(layout);
-  const editorView = captureEditorView();
-  const name = trackNameInput.value.trim();
-  // Ez a pálya induljon a játékban (lokális átadás a config.js felé) — a szerkesztő
-  // WYSIWYG-nézetét is elmentjük, hogy visszatérve ugyanígy jelenjen meg.
-  setActiveTrack(name, layout, relDecorations, editorView);
-  // Ha van neve, GLOBÁLISAN is elmentjük a szerverre (minden gépről elérhető).
-  // Ha a szerver nem elérhető, akkor is elindul lokálisan — csak nem lesz globális.
-  if (name) {
-    saveBtn.disabled = true;
-    try {
-      await apiSaveTrack({
-        name,
-        layout,
-        decorations: relDecorations,
-        editorPath: editorView.path,
-        editorDecorations: editorView.decorations,
-      });
-    } catch (e) {
-      statusEl.textContent = `⚠️ Globális mentés sikertelen (${e.message}). Lokálisan indítom.`;
-      statusEl.classList.remove('closed');
-    }
-  }
-  gotoGame();
-});
-
-resetDefaultBtn.addEventListener('click', () => {
-  clearCustomLayout();
-  path.length = 0;
-  closed = false;
-  decorations.length = 0;
-  trackNameInput.value = '';
-  render();
-  renderSavedTracksList();
-  statusEl.textContent = 'Az alap pálya visszaállítva (törölve az aktív egyéni pálya és dekoráció — a névvel mentett pályák megmaradnak).';
-  statusEl.classList.remove('closed');
-});
-
-function updateStatus() {
-  saveBtn.disabled = true;
-  statusEl.classList.remove('closed');
-  if (path.length === 0) {
-    statusEl.textContent = 'Kattints egy cellára a kezdéshez.';
-  } else if (!closed) {
-    const hint = path.length >= 4 ? ' Vagy zárd a hurkot a rajt-cellára kattintva.' : '';
-    statusEl.textContent = `${path.length} cella kijelölve.${hint}`;
-  } else {
-    const layout = computeLayout();
-    const straights = layout.filter((s) => s.type === 'straight').length;
-    const corners = layout.filter((s) => s.type === 'corner').length;
-    const decorNote = decorations.length ? `, ${decorations.length} dekoráció` : '';
-    statusEl.textContent = `Kész! ${path.length} cella, zárt hurok (${straights} egyenes szakasz, ${corners} kanyar${decorNote}).`;
-    statusEl.classList.add('closed');
-    saveBtn.disabled = false;
-  }
-}
-
-// --- Renderelés ---
-
-function render() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Rácsvonalak.
-  ctx.strokeStyle = '#33363f';
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= GRID_COLS; x++) {
-    ctx.beginPath();
-    ctx.moveTo(x * CELL, 0);
-    ctx.lineTo(x * CELL, canvas.height);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= GRID_ROWS; y++) {
-    ctx.beginPath();
-    ctx.moveTo(0, y * CELL);
-    ctx.lineTo(canvas.width, y * CELL);
-    ctx.stroke();
-  }
-
-  // Kijelölt útvonal-cellák. Az első KÉT cella a rajt/cél-KAPU helye (a Kenney
-  // roadStart.glb modell 2 csempényi hosszú — lásd render3d/scene.js), ezért
-  // mindkettő a rajt-színnel jelölve, nem csak path[0].
-  path.forEach((p, i) => {
-    let color = '#5c8fd6';
-    if (i === 0 || i === 1) color = '#f2c14e';
-    ctx.fillStyle = color;
-    ctx.fillRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
-  });
-
-  // Kanyar-méret jelvény: zárt pályán, ha egy kanyar-cella mérete >1 (Large/Larger),
-  // egy kis szám mutatja rajta (1-nél nincs jelvény, az az alapértelmezett sima kanyar).
-  // A nagyobb kanyar (size-1) csempényit "belenyúlik" mindkét szomszédos egyenesbe
-  // (lásd sim/trackbuilder.js applyCornerSizeCompensation) — ezeket a "bekebelezett"
-  // cellákat sraffozott mintával jelöljük, hogy a felhasználó lássa a valódi
-  // helyfoglalást (ne csak 1 cellának tűnjön a nagy kanyar).
-  if (closed && path.length >= 4) {
-    const types = computeTileTypes();
-    const n = path.length;
-    path.forEach((p, i) => {
-      if (types[i].type !== 'corner') return;
-      const size = p.cornerSize || 1;
-      if (size <= 1) return;
-
-      ctx.font = 'bold 15px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#1a1a1a';
-      ctx.fillText(String(size), p.x * CELL + CELL / 2, p.y * CELL + CELL / 2);
-
-      const extra = size - 1;
-      for (const dir of [-1, 1]) {
-        for (let s = 1; s <= extra; s++) {
-          const j = (i + dir * s + n) % n;
-          if (types[j].type !== 'straight') break; // kanyarba ütköztünk, nincs több hely
-          const cp = path[j];
-          ctx.fillStyle = 'rgba(217,154,63,0.4)';
-          ctx.fillRect(cp.x * CELL + 6, cp.y * CELL + 6, CELL - 12, CELL - 12);
-        }
-      }
-    });
-  }
-
-  // Rajt/cél-kapu jelölő ikon a két rajt-cella közös élén.
-  if (path.length >= 2) {
-    const a = path[0];
-    const b = path[1];
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillText('🏁', (a.x + b.x + 1) * CELL / 2, (a.y + b.y + 1) * CELL / 2);
-  }
-
-  // Kapcsoló élek (nyilak) a cellák között.
-  ctx.strokeStyle = '#e8eaef';
-  ctx.lineWidth = 2;
-  const n = path.length;
-  const edgeCount = closed ? n : n - 1;
-  for (let i = 0; i < edgeCount; i++) {
-    const a = path[i];
-    const b = path[(i + 1) % n];
-    drawArrow(a, b);
-  }
-
-  // Hover-jelölés az érvényes következő cellára / dekoráció-célra.
-  if (hover) {
-    if (mode === 'track' && !closed) {
-      const isClose = path.length >= 4 && cellsEqual(hover, path[0]);
-      ctx.fillStyle = isClose ? 'rgba(242,193,78,0.5)' : 'rgba(58,90,58,0.7)';
-      ctx.fillRect(hover.x * CELL + 3, hover.y * CELL + 3, CELL - 6, CELL - 6);
-    } else if (mode === 'decor' && isFreeType(activeDecorType)) {
-      // "Free" elem: nincs cella-fillRect, csak egy kis kör a pontos helyen.
-      ctx.beginPath();
-      ctx.arc(hover.x * CELL, hover.y * CELL, 9, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(217,154,63,0.5)';
-      ctx.fill();
-    } else if (mode === 'decor') {
-      ctx.fillStyle = 'rgba(217,154,63,0.35)';
-      ctx.fillRect(hover.x * CELL + 3, hover.y * CELL + 3, CELL - 6, CELL - 6);
-    }
-  }
-
-  // Dekorációk: előbb a TALAJ-réteg (halvány zöld cella-alap), utána az
-  // OBJEKTUM-réteg (ikon + forgás-jelző) — így mindkét réteg látszik egy cellán.
-  for (const d of decorations) {
-    if (DECORATION_TYPES[d.type].layer !== 'ground') continue;
-    ctx.fillStyle = 'rgba(90,160,90,0.55)';
-    ctx.fillRect(d.gx * CELL + 2, d.gy * CELL + 2, CELL - 4, CELL - 4);
-  }
-  for (const d of decorations) {
-    if (DECORATION_TYPES[d.type].layer !== 'object') continue;
-    // "Free" elemnél d.gx/d.gy a burkolathoz igazított (fél cellával eltolt)
-    // tárolt érték — a megjelenítéshez freeGridToPx-szel visszaalakítjuk arra a
-    // pixelre, ahova a felhasználó ténylegesen kattintott (WYSIWYG).
-    const free = DECORATION_TYPES[d.type].free;
-    const freePx = free ? freeGridToPx(d) : null;
-    const cx = free ? freePx.px : d.gx * CELL + CELL / 2;
-    const cy = free ? freePx.py : d.gy * CELL + CELL / 2;
-    ctx.font = '20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(DECORATION_TYPES[d.type].icon, cx, cy);
-    // Forgás-jelző: rövid vonal a cella szélétől a rot szerinti irányba.
-    const angle = (d.rot * Math.PI) / 2 - Math.PI / 2;
-    ctx.strokeStyle = '#d99a3f';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(angle) * (CELL / 2 - 4), cy + Math.sin(angle) * (CELL / 2 - 4));
-    ctx.stroke();
-  }
-}
-
-function drawArrow(a, b) {
-  const ax = a.x * CELL + CELL / 2;
-  const ay = a.y * CELL + CELL / 2;
-  const bx = b.x * CELL + CELL / 2;
-  const by = b.y * CELL + CELL / 2;
-  ctx.beginPath();
-  ctx.moveTo(ax, ay);
-  ctx.lineTo(bx, by);
-  ctx.stroke();
-  const angle = Math.atan2(by - ay, bx - ax);
-  const headLen = 7;
-  ctx.beginPath();
-  ctx.moveTo(bx, by);
-  ctx.lineTo(bx - headLen * Math.cos(angle - Math.PI / 6), by - headLen * Math.sin(angle - Math.PI / 6));
-  ctx.lineTo(bx - headLen * Math.cos(angle + Math.PI / 6), by - headLen * Math.sin(angle + Math.PI / 6));
-  ctx.closePath();
-  ctx.fillStyle = '#e8eaef';
-  ctx.fill();
-}
-
-// Egy {layout, decorations} pályaadatot tölt be SZERKESZTÉSRE — kiüríti a
-// jelenlegi path/decorations állapotot, majd a layoutToPath inverzzel
-// visszaépíti a cella-sorozatot, és a mentett (path[0]-hoz relatív) dekorációkat
-// is elhelyezi. Ugyanezt a logikát használja az induláskori "utoljára aktív
-// pálya" betöltés ÉS a mentett pályák listájának "Betöltés" gombja is.
-function loadLayoutIntoEditor(savedLayout, savedDecorations, editorView) {
-  path.length = 0;
+// Egy {layout, decorations} pályaadatot tölt be SZERKESZTÉSRE. RÉGI (rács)
+// formátumnál a kanonikus cella-sorozatot VILÁG-méterre váltjuk (world = cella *
+// TRACK.tile — pontosan az a világ-pozíció, amit eddig a trackbuilder.js épített),
+// így a pálya alakja nem változik, csak mostantól szabadon szerkeszthető ponttá
+// alakul. ÚJ (szabadvonalas) formátumnál a pontok közvetlenül betöltődnek.
+function loadLayoutIntoEditor(savedLayout, savedDecorations) {
+  points.length = 0;
   decorations.length = 0;
   closed = false;
   if (!savedLayout) return;
 
-  // WYSIWYG: ha van elmentett szerkesztő-nézet (a rajzolt path + dekorációk), azt
-  // állítjuk vissza VÁLTOZATLANUL — így a pálya pontosan ott és úgy jelenik meg,
-  // ahogy rajzolták (nem forog el kelet-kezdésűre, nem ugrik a sarokba).
-  if (editorView && Array.isArray(editorView.path) && editorView.path.length > 0) {
-    for (const c of editorView.path) {
-      const cell = { x: c.x, y: c.y };
-      if (c.cornerSize) cell.cornerSize = c.cornerSize;
-      path.push(cell);
+  if (isSplineLayout(savedLayout)) {
+    for (const p of savedLayout) {
+      points.push({
+        x: p.x,
+        z: p.z,
+        width: Number.isFinite(p.width) && p.width > 0 ? p.width : DEFAULT_WIDTH,
+        sharp: !!p.sharp,
+      });
     }
-    closed = true;
-    for (const d of editorView.decorations || []) {
-      if (!DECORATION_TYPES[d.type]) continue;
-      decorations.push({ gx: d.gx, gy: d.gy, type: d.type, rot: d.rot });
-    }
-    return;
+  } else {
+    const cells = layoutToPath(savedLayout);
+    for (const c of cells) points.push({ x: c.x * TRACK.tile, z: c.y * TRACK.tile, width: DEFAULT_WIDTH });
   }
+  closed = points.length >= MIN_CONTROL_POINTS;
 
-  // Visszaesés (régi, editor-nézet nélküli pálya): a layoutból kanonikus
-  // (kelet-kezdésű) alakban építjük vissza — a dekorációk a kanonikus frame-ben.
-  const restored = layoutToPath(savedLayout);
-
-  // A rács-igazítás: a legkisebb x/y (a pálya VAGY a dekorációk közül) kapjon
-  // egy kis margót, hogy semmi ne essen a látható rácson kívülre (negatívba).
-  const rawStartX = restored[0].x;
-  const rawStartY = restored[0].y;
-  const minX = Math.min(...restored.map((c) => c.x), ...savedDecorations.map((d) => rawStartX + d.dgx));
-  const minY = Math.min(...restored.map((c) => c.y), ...savedDecorations.map((d) => rawStartY + d.dgy));
-  const offX = 2 - minX;
-  const offY = 2 - minY;
-
-  for (const c of restored) {
-    c.x += offX;
-    c.y += offY;
-  }
-  path.push(...restored);
-  closed = true;
-
-  for (const d of savedDecorations) {
-    // Egy korábban mentett, azóta megszűnt típusú elemet (pl. a törölt "grass"
-    // fű-folt) kihagyunk — enélkül a DECORATION_TYPES[d.type] undefined lenne,
-    // és a render/kattintás-kezelő elszállna rajta.
-    if (!DECORATION_TYPES[d.type]) continue;
-    decorations.push({ gx: path[0].x + d.dgx, gy: path[0].y + d.dgy, type: d.type, rot: d.rot });
+  for (const d of savedDecorations || []) {
+    if (!DECORATION_TYPES[d.type]) continue; // megszűnt típus — kihagyjuk
+    decorations.push({ x: d.dgx * TRACK.tile, z: d.dgy * TRACK.tile, type: d.type, rot: d.rot || 0 });
   }
 }
 
@@ -832,12 +781,9 @@ async function renderSavedTracksList() {
     loadBtn.addEventListener('click', async () => {
       try {
         const entry = await apiGetTrack(t.id);
-        const editorView = entry.editorPath
-          ? { path: entry.editorPath, decorations: entry.editorDecorations || [] }
-          : null;
-        loadLayoutIntoEditor(entry.layout, entry.decorations, editorView);
+        loadLayoutIntoEditor(entry.layout, entry.decorations);
         trackNameInput.value = entry.name;
-        setActiveTrack(entry.name, entry.layout, entry.decorations, editorView);
+        setActiveTrack(entry.name, entry.layout, entry.decorations);
         render();
         updateStatus();
         renderSavedTracksList();
@@ -877,24 +823,23 @@ saveAsBtn.addEventListener('click', async () => {
     statusEl.classList.remove('closed');
     return;
   }
-  const layout = computeLayout();
+  const layout = currentLayout();
   if (!layout) {
     statusEl.textContent = 'A pálya még nincs lezárva — előbb zárd a hurkot.';
     statusEl.classList.remove('closed');
     return;
   }
-  const relDecorations = computeRelDecorations(layout);
-  const editorView = captureEditorView();
+  const result = validateSplineTrack(points);
+  if (!result.valid) {
+    statusEl.textContent = `⚠️ ${result.errors[0].message}`;
+    statusEl.classList.remove('closed');
+    return;
+  }
+  const relDecorations = decorationsForSave();
   saveAsBtn.disabled = true;
   try {
-    await apiSaveTrack({
-      name,
-      layout,
-      decorations: relDecorations,
-      editorPath: editorView.path,
-      editorDecorations: editorView.decorations,
-    });
-    setActiveTrack(name, layout, relDecorations, editorView);
+    await apiSaveTrack({ name, layout, decorations: relDecorations });
+    setActiveTrack(name, layout, relDecorations);
     renderSavedTracksList();
     statusEl.textContent = `✅ "${name}" elmentve globálisan (minden gépről elérhető).`;
     statusEl.classList.add('closed');
@@ -906,9 +851,9 @@ saveAsBtn.addEventListener('click', async () => {
   }
 });
 
-// Induláskor: az utoljára aktív pálya betöltése szerkesztésre (ne kelljen
-// mindig előről kezdeni), és a globális katalógus lekérése a szerverről.
-loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations(), loadEditorView());
+// Induláskor: az utoljára aktív pálya betöltése szerkesztésre (ne kelljen mindig
+// előről kezdeni), és a globális katalógus lekérése a szerverről.
+loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations());
 const activeNameOnLoad = getActiveTrackName();
 if (activeNameOnLoad) trackNameInput.value = activeNameOnLoad;
 renderSavedTracksList();
@@ -919,13 +864,10 @@ updateStatus();
 // Fejlesztői debug-hozzáférés a böngésző-konzolból.
 if (import.meta.env.DEV) {
   window.__EDITOR = {
-    path,
+    points,
     decorations,
     get closed() { return closed; },
     get mode() { return mode; },
-    computeLayout,
-    CELL,
-    GRID_COLS,
-    GRID_ROWS,
+    validate: () => validateSplineTrack(points),
   };
 }

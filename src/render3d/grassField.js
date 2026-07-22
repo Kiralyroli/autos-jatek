@@ -1,16 +1,20 @@
 // A teljes talaj Kenney grass.glb csempékből — a korábbi textúrázott sík
 // helyett. A pálya (track.center) befoglaló téglalapja köré, margóval kitöltve,
-// hogy a kamera normál vezetés közben sose lásson "szélét" a mezőnek.
+// hogy a kamera normál vezetés közben sose lásson "szélét" a mezőnek. A
+// csempék saját (egyszerű, sima színű) Kenney-anyaga fölé egy valós fű-fotó
+// textúra kerül (ASSETS.textures.grass), hogy a felület részletesebbnek tűnjön.
 import * as THREE from 'three';
 import { track } from '../sim/track.js';
-import { loadModel } from './assets.js';
+import { loadModel, loadTexture } from './assets.js';
+import { ASSETS } from '../config.js';
 
 const MARGIN = 150; // m — ennyivel nyúlik túl a fű-mező a pálya befoglalóján
-const GRASS_TILE = 32; // m — egy fű-csempe mérete (nagyobb, mint az útcsempe, kevesebb elem)
+const GRASS_TILE = 64; // m — egy fű-csempe mérete (nagyobb, mint az útcsempe, kevesebb elem)
 
 export async function addGrassField(scene) {
   const grass = await loadModel('/assets/track/grass.glb');
   if (!grass) return;
+  const grassTex = await loadTexture(ASSETS.textures.grass, ASSETS.textures.grassRepeat);
 
   const box0 = new THREE.Box3().setFromObject(grass);
   const anchorX = (box0.min.x + box0.max.x) / 2;
@@ -28,7 +32,15 @@ export async function addGrassField(scene) {
     for (let z = minZ; z <= maxZ; z += GRASS_TILE) {
       const inner = grass.clone(true);
       inner.traverse((o) => {
-        if (o.isMesh) o.receiveShadow = true;
+        if (o.isMesh) {
+          o.receiveShadow = true;
+          if (grassTex) {
+            o.material = o.material.clone();
+            o.material.map = grassTex;
+            o.material.color.set(0xffffff);
+            o.material.needsUpdate = true;
+          }
+        }
       });
       inner.position.x -= anchorX;
       inner.position.z -= anchorZ;

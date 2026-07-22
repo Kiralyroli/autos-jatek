@@ -8,18 +8,60 @@
 //  pályával tudja meghívni (a kliens track.js-e pedig a config-belivel).
 // =============================================================================
 import { buildTrackLayout, offsetPoint } from './trackbuilder.js';
+import { sampleSpline } from './trackSpline.js';
+
+// A LAYOUT KÉTFÉLE FORMÁTUMÚ lehet — a régi (rács/szegmens-alapú, trackbuilder.js)
+// és az új (szabadvonalas, trackSpline.js) pályák visszamenőlegesen, migráció
+// nélkül élnek egymás mellett. Megkülönböztetés: a régi formátum minden eleme
+// {type:'straight'|'corner', ...}, az új csak {x,z} kontrollpontokból áll (nincs
+// `type` mező). Ez a diszkrimináló olcsó és a meglévő mentett pályákra biztosan
+// működik (azoknak MINDIG van type mezőjük).
+export function isSplineLayout(layout) {
+  return (
+    Array.isArray(layout) &&
+    layout.length > 0 &&
+    layout[0] &&
+    typeof layout[0].x === 'number' &&
+    layout[0].type === undefined
+  );
+}
+
+// Szabadvonalas pálya "csempe nélküli" építése: a sampleSpline már megadja a
+// {x,z,dir,nx,nz,width} középvonalat — a többi mező (tiles üres, start=end=
+// center[0]) csak azért kell, hogy a buildTrackLayout()-tal AZONOS alakot adjon
+// vissza. A pontok szélessége (width) OPCIONÁLIS a mentett layoutban — a régebbi
+// (e funkció előtt mentett) pályáknál nincs ilyen mező, ezért itt kapják meg a
+// pálya alap-szélességét (tile) mielőtt a spline-ba kerülnek; a trackSpline.js
+// maga elvárja, hogy MINDEN pontnak legyen numerikus width-je.
+function buildSplineTrack(points, tile) {
+  const normalized = points.map((p) => ({
+    x: p.x,
+    z: p.z,
+    width: Number.isFinite(p.width) && p.width > 0 ? p.width : tile,
+    sharp: !!p.sharp,
+  }));
+  const center = sampleSpline(normalized, 2);
+  const p0 = center[0];
+  const start = { x: p0.x, z: p0.z, dir: p0.dir };
+  return { center, tiles: [], start, end: start, tile };
+}
 
 // opts: { tile, curbWidth, gravelWidth, checkpointCount, start? }
 export function createTrackState(layout, opts) {
   const { tile, curbWidth, gravelWidth, checkpointCount } = opts;
   const start = opts.start || { x: 0, z: 0, dir: 0 };
 
-  const track = buildTrackLayout(layout, start, tile);
+  const track = isSplineLayout(layout)
+    ? buildSplineTrack(layout, tile)
+    : buildTrackLayout(layout, start, tile);
 
   const roadHalf = tile / 2;
   const curbEdge = roadHalf + curbWidth;
   // A checkpoint-vonalak félszélessége — elég széles ahhoz, hogy a fűre letérve
-  // is átszelje az autó (nincs fizikai fal, ami az úton tartaná).
+  // is átszelje az autó (nincs fizikai fal, ami az úton tartaná). Ez a globális
+  // (fallback) érték — szabadvonalas pályánál minden checkpoint a SAJÁT
+  // pontjának width-jéből számol (lásd lent), csempés pályánál (nincs width a
+  // center-pontokon) ez marad a tényleges érték.
   const checkpointHalfWidth = roadHalf + curbWidth + gravelWidth;
 
   // A rajt/cél Kenney-kapu (roadStart.glb) 2 csempényi hosszú, és a festett
@@ -43,8 +85,9 @@ export function createTrackState(layout, opts) {
     const cps = [];
     for (let i = 0; i < checkpointCount; i++) {
       const p = track.center[(startIdx + Math.round((i * n) / checkpointCount)) % n];
-      const a = offsetPoint(p, checkpointHalfWidth);
-      const b = offsetPoint(p, -checkpointHalfWidth);
+      const localHalfWidth = Number.isFinite(p.width) ? p.width / 2 + curbWidth + gravelWidth : checkpointHalfWidth;
+      const a = offsetPoint(p, localHalfWidth);
+      const b = offsetPoint(p, -localHalfWidth);
       cps.push({ a: { x: a.x, y: a.z }, b: { x: b.x, y: b.z } });
     }
     return cps;
@@ -62,17 +105,25 @@ export function createTrackState(layout, opts) {
   }
 
   // Mennyivel van az (x,z) pont az útszélen KÍVÜL (0, ha az úton van) — a
-  // fű-büntetéshez (sim/car.js updateOffRoadPenalty).
+  // fű-büntetéshez (sim/car.js updateOffRoadPenalty). A LEGKÖZELEBBI szakasz
+  // két végpontjának width-átlagából számolt félszélességet vonjuk le — így a
+  // szélesebb/keskenyebb szakaszokon máshol kezdődik a fű (szabadvonalas
+  // pályánál); csempés pályánál (nincs width a center-pontokon) a globális
+  // roadHalf marad, változatlanul.
   function offRoadExcess(x, z) {
     const pts = track.center;
     let minDist = Infinity;
+    let localHalf = roadHalf;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i];
       const b = pts[(i + 1) % pts.length];
       const d = pointSegmentDistance(x, z, a.x, a.z, b.x, b.z);
-      if (d < minDist) minDist = d;
+      if (d < minDist) {
+        minDist = d;
+        localHalf = Number.isFinite(a.width) && Number.isFinite(b.width) ? (a.width + b.width) / 4 : roadHalf;
+      }
     }
-    return Math.max(0, minDist - roadHalf);
+    return Math.max(0, minDist - localHalf);
   }
 
   // --- Ívhossz-paraméterezés a középvonal mentén ---
