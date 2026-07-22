@@ -262,6 +262,21 @@
       #btnQuitRace:hover {
         background: rgba(255, 255, 255, 0.1);
       }
+      /* Mini-térkép — versenyközben bal alul, a pálya + minden autó pozíciója. */
+      #minimap {
+        position: fixed;
+        left: 14px;
+        bottom: 66px; /* a "← Főmenü" gomb (bottom:14px) fölé, ne takarja azt */
+        display: none;
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        opacity: 0.82; /* enyhe átlátszóság, hogy a 3D nézetet ne takarja el túlzottan */
+        pointer-events: none;
+      }
       /* Szerver-ping (RTT) — csak multiplayerben, jobb alul, diszkrét. */
       #ping {
         position: fixed;
@@ -594,6 +609,7 @@
     <button id="restart">🔄 Új verseny</button>
     <button id="btnQuitRace">← Főmenü</button>
     <div id="ping"></div>
+    <canvas id="minimap" width="150" height="150"></canvas>
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">

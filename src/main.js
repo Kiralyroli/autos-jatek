@@ -34,6 +34,7 @@ import { setupWheels } from './render3d/wheels.js';
 import { createNameplate } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { createHud, fmt as fmtTime } from './hud.js';
+import { createMinimap } from './minimap.js';
 import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
@@ -118,6 +119,11 @@ const speedEl = document.getElementById('speed');
 // A restart gomb viselkedése módfüggő — a dispatcher az aktív mód kezelőjét hívja.
 let onRestartClick = () => {};
 const updateHud = createHud(() => onRestartClick());
+// Kis felülnézeti pálya-rajz versenyközben (lásd minimap.js) — a jelenleg
+// aktív pálya középvonalából épül fel, EGYSZER (a pálya csak reloaddal
+// változik, lásd ensureTrackMatches), mind SP, mind MP frame-loop ezt hívja.
+const minimapEl = document.getElementById('minimap');
+const minimap = createMinimap(minimapEl, trackState.track.center);
 
 // --- Menü / lobby DOM ---
 const menuEl = document.getElementById('menu');
@@ -408,6 +414,7 @@ function startSingleplayer() {
   mode = 'single';
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
+  minimapEl.style.display = 'block';
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
@@ -540,13 +547,14 @@ function startSingleplayer() {
 
     if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(speedKmh(carBody))} km/h`;
     updateHud(race);
+    minimap.draw([{ x, z, color: CARS[selectedCar]?.color, isMe: true }]);
 
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
   if (import.meta.env.DEV) {
-    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive };
+    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap };
   }
 }
 
@@ -586,6 +594,7 @@ async function startMultiplayer(room) {
   currentRoom = room;
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
+  minimapEl.style.display = 'block';
 
   // Szerver-ping (RTT) mérése + kijelzése: időbélyeget küldünk, a szerver azonnal
   // visszaküldi ('pong'), a körbeérés ideje a késleltetés. Másodpercenként frissül.
@@ -1071,6 +1080,17 @@ async function startMultiplayer(room) {
         hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
       };
       updateHud(hudRace);
+      minimap.draw(
+        Object.entries(sampled.players).map(([id, p]) => ({
+          // A SAJÁT pozíciónk a simított (nem a nyers snapshot-beli, ami a
+          // kliens-oldali interpolációs késleltetés miatt "a múltban" van) —
+          // a többieké a snapshotból, ugyanúgy, mint a 3D jelenetben.
+          x: id === myId ? ownX : p.x,
+          z: id === myId ? ownY : p.y,
+          color: carColor(p.colorIdx),
+          isMe: id === myId,
+        }))
+      );
 
       // A saját állapot bejelentése a szervernek (relay).
       mpSendState(now);
@@ -1143,7 +1163,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap };
   }
 }
 
