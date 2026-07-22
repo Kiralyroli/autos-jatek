@@ -600,6 +600,7 @@ async function startMultiplayer(room) {
   let mpPeerPoints = []; // a többi kocsi középpontjai (puha szétnyomáshoz)
   let mpStartedRacing = false; // a szerver countdown→racing váltás egyszeri kezelése
   let mpSentFinish = false; // a cél-jelzést egyszer küldjük
+  let mpRaceGen = 0; // a szerver raceStart-jából kapott verseny-generáció (lásd RaceRoom.js)
   let mpLastStateSentAt = 0;
 
   function mpPlaceAtSpawn() {
@@ -636,6 +637,7 @@ async function startMultiplayer(room) {
       wrongWay: mpRace.wrongWay,
       finished: mpRace.phase === 'finished',
       totalTime: mpRace.phase === 'finished' ? mpRace.time : null,
+      raceGen: mpRaceGen,
     });
   }
 
@@ -752,6 +754,7 @@ async function startMultiplayer(room) {
   room.onMessage('raceStart', (m) => {
     if (m.slots && m.slots[myId]) mySpawn = m.slots[myId];
     if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
+    if (Number.isFinite(m.raceGen)) mpRaceGen = m.raceGen;
     mpResetForRace();
   });
 

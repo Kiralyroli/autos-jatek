@@ -74,12 +74,22 @@ export class RaceRoom extends Room {
     this.countdownLeft = 0;
     this.hostId = null;
     this.simTime = 0; // szerver-óra (s) — a snapshot időbélyege + laza össz-versenyidő
+    // Verseny-generáció: minden startRace() növeli, és a kliens minden 'state'
+    // üzenetben visszaküldi (lásd main.js mpSendState). Így az ELŐZŐ versenyből
+    // még hálón lévő (pl. `finished: true`-t tartalmazó) elkésett üzenetek nem
+    // tudják tévesen újra "célba ért"-nek jelölni a játékost rögtön az új
+    // visszaszámlálás/rajt elején (élő hibajelentés: emiatt állt le azonnal az
+    // új verseny, mielőtt elindulhatott volna).
+    this.raceGen = 0;
 
     // KLIENS-AUTORITATÍV állapot fogadása: átvesszük a kliens által számolt autó-
     // állapotot (számokra szűrve — a szerver nem hisz el NaN-t/hiányzó mezőt).
     this.onMessage('state', (client, msg) => {
       const p = this.players.get(client.sessionId);
       if (!p || this.phase === 'lobby') return;
+      // Elkésett üzenet egy KORÁBBI versenyből (lásd raceGen fenti kommentje) —
+      // eldobjuk, nehogy stale `finished`/kör-adat szennyezze az új versenyt.
+      if (intOr(msg?.raceGen, -1) !== this.raceGen) return;
       const s = p.state;
       s.x = num(msg?.x); s.y = num(msg?.y); s.angle = num(msg?.angle);
       s.vx = num(msg?.vx); s.vy = num(msg?.vy); s.w = num(msg?.w);
@@ -93,7 +103,11 @@ export class RaceRoom extends Room {
 
       // Cél: a kliens jelzi, a HELYEZÉST a szerver osztja a beérkezés sorrendjében
       // (ez a "mindenki a sajátját számolja" modellben a tisztességes rangsor).
-      if (msg?.finished && !p.finished) {
+      // CSAK 'racing' fázisban fogadjuk el — a kliens csak akkor jelezhetne
+      // valódi célba érést, ha a verseny ténylegesen fut; 'countdown' alatt ez
+      // mindig elkésett/idő előtti jelzés (lásd raceGen fenti kommentje), ami
+      // NÉLKÜLE azonnal "vége a versenynek"-et okozna, amint a fázis 'racing'-ra vált.
+      if (msg?.finished && !p.finished && this.phase === 'racing') {
         p.finished = true;
         s.finished = true;
         s.totalTime = num(msg?.totalTime);
@@ -209,9 +223,10 @@ export class RaceRoom extends Room {
     this.finishTimeout = 0;
     this.finishedCount = 0;
     this.simTime = 0;
+    this.raceGen++;
     this.lock(); // verseny közben nem csatlakozhat új játékos
     // A klienseknek: rajt-slotok — a helyi sim ebből tudja, hova pozicionáljon.
-    this.broadcast('raceStart', { slots, laps: this.laps });
+    this.broadcast('raceStart', { slots, laps: this.laps, raceGen: this.raceGen });
     this.broadcastLobby();
   }
 
