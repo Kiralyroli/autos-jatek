@@ -10,15 +10,31 @@ import { Client } from 'colyseus.js';
 import { NET } from '../config.js';
 import { lerp, lerpAngle } from '../utils.js';
 
+const API_BASE = NET.serverUrl.replace(/^ws(s?):\/\//, 'http$1://');
+
 // Csatlakozás + szoba létrehozás/belépés. Visszatérés: a Colyseus room objektum.
 export async function createRoom({ name, layout, decorations, laps, carIdx, physics, trackName }) {
   const client = new Client(NET.serverUrl);
   return client.create('race', { name, layout, decorations, laps, carIdx, physics, trackName });
 }
 
+// A `code` a felhasználó által bemondott RÖVID, SZÁMOKBÓL álló csatlakozási
+// kód (lásd server/roomCodes.js) — ebből egy HTTP-hívással kérdezzük le a
+// tényleges Colyseus roomId-t. Ha a bevitt érték NEM csupa számjegy, azt a
+// BELSŐ rejoin-mechanizmus (lásd main.js ensureTrackMatches/roomSettings —
+// ott már a valódi roomId-t ismerjük egy reload utáni automatikus
+// visszalépéshez) adja át közvetlenül — ilyenkor nincs szükség feloldásra.
 export async function joinRoom(code, { name, carIdx }) {
   const client = new Client(NET.serverUrl);
-  return client.joinById(code.trim(), { name, carIdx });
+  const trimmed = code.trim();
+  let roomId = trimmed;
+  if (/^\d+$/.test(trimmed)) {
+    const res = await fetch(`${API_BASE}/api/room-code/${encodeURIComponent(trimmed)}`);
+    if (!res.ok) throw new Error('Nincs ilyen szoba-kód.');
+    const data = await res.json();
+    roomId = data.roomId;
+  }
+  return client.joinById(roomId, { name, carIdx });
 }
 
 // Snapshot-puffer: a pillanatképeket a SZERVER szimulációs időbélyegével (data.t)

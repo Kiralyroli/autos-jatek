@@ -23,6 +23,7 @@ import { TRACK, RACE, NET, DEFAULT_LAYOUT, resolvePhysicsPreset } from '../src/c
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
 import { hashLayout } from '../src/sim/trackKey.js';
 import { recordLap } from './leaderboardStore.js';
+import { registerJoinCode, unregisterJoinCode } from './roomCodes.js';
 
 const num = (v) => (Number.isFinite(v) ? v : 0);
 const intOr = (v, d) => (Number.isInteger(v) ? v : d);
@@ -81,6 +82,9 @@ export class RaceRoom extends Room {
     // visszaszámlálás/rajt elején (élő hibajelentés: emiatt állt le azonnal az
     // új verseny, mielőtt elindulhatott volna).
     this.raceGen = 0;
+    // Rövid, számokból álló csatlakozási kód (lásd roomCodes.js) — a hosszú
+    // belső Colyseus roomId helyett ezt mondja be egymásnak a felhasználó.
+    this.joinCode = registerJoinCode(this.roomId);
 
     // KLIENS-AUTORITATÍV állapot fogadása: átvesszük a kliens által számolt autó-
     // állapotot (számokra szűrve — a szerver nem hisz el NaN-t/hiányzó mezőt).
@@ -140,6 +144,56 @@ export class RaceRoom extends Room {
       this.startRace();
     });
 
+    // Autó-választás — BÁRMELYIK kliens, BÁRMIKOR (csatlakozás után és két
+    // verseny közt is, hogy ne kelljen kilépni/újra-csatlakozni a váltáshoz).
+    // Csak a színt/modellt jelöli (colorIdx) — a KÖVETKEZŐ raceStart-nál (vagy
+    // a lobby/állás-listán) érvényesül.
+    this.onMessage('setCar', (client, carIdx) => {
+      const p = this.players.get(client.sessionId);
+      if (!p || !Number.isInteger(carIdx) || carIdx < 0 || carIdx >= 32) return;
+      p.colorIdx = carIdx;
+      this.broadcastLobby();
+    });
+
+    // Host-beállítások (pálya/körök/fizika) — CSAK a host, és csak akkor, ha
+    // épp nem fut verseny (lobby vagy finished között) — így nem lehet egy
+    // aktív futam közepén alatta cserélni a pályát. Ugyanez az üzenet teszi
+    // lehetővé, hogy két verseny közt (a végeredmény-panelről is) újra
+    // választhasson pályát/fizikát anélkül, hogy bárkinek ki kéne lépnie.
+    this.onMessage('hostSettings', (client, msg) => {
+      if (client.sessionId !== this.hostId) return;
+      if (this.phase === 'countdown' || this.phase === 'racing') return;
+      if (Array.isArray(msg?.layout) && msg.layout.length > 0) {
+        this.layout = msg.layout;
+        this.decorations = Array.isArray(msg?.decorations) ? msg.decorations : [];
+        this.trackName = String(msg?.trackName || 'Egyedi pálya').slice(0, 40);
+        this.trackKey = hashLayout(this.layout);
+        this.trackState = createTrackState(this.layout, {
+          tile: TRACK.tile,
+          curbWidth: TRACK.curbWidth,
+          gravelWidth: TRACK.gravelWidth,
+          checkpointCount: TRACK.checkpointCount,
+          start: TRACK.start,
+        });
+      }
+      if (Number.isFinite(msg?.laps)) {
+        this.laps = Math.max(1, Math.min(50, Math.round(msg.laps)));
+      }
+      if (msg?.physics) this.physics = resolvePhysicsPreset(msg.physics);
+      // Mindenki (a hostot is beleértve) ugyanabból az üzenetből frissít — így
+      // egységes a viselkedés: ha a pálya változott, a kliens (lásd main.js
+      // roomSettings kezelő) elmenti aktívnak + újratölti magát (a rejoin-
+      // mintával automatikusan visszalép ugyanebbe a szobába).
+      this.broadcast('roomSettings', {
+        trackName: this.trackName,
+        layout: this.layout,
+        decorations: this.decorations,
+        laps: this.laps,
+        physics: this.physics,
+      });
+      this.broadcastLobby();
+    });
+
     // Ping-mérés: a kliens időbélyeget küld, mi azonnal visszaküldjük — a kliens a
     // körbeérésből (RTT) számolja a szerver-kliens késleltetést (lásd main.js).
     this.onMessage('ping', (client, t) => client.send('pong', t));
@@ -153,7 +207,8 @@ export class RaceRoom extends Room {
         decorations: this.decorations,
         laps: this.laps,
         physics: this.physics,
-        code: this.roomId,
+        trackName: this.trackName,
+        code: this.joinCode,
         slot: p ? p.spawn : null, // a SAJÁT rajtpozíció (x,y,angle) a helyi simhez
       });
       this.broadcastLobby();
@@ -200,6 +255,10 @@ export class RaceRoom extends Room {
     }
     if (this.players.size === 0) return; // a szoba magától megszűnik (autoDispose)
     this.broadcastLobby();
+  }
+
+  onDispose() {
+    unregisterJoinCode(this.joinCode);
   }
 
   // --- Verseny-vezérlés ---
@@ -269,7 +328,7 @@ export class RaceRoom extends Room {
 
   broadcastLobby() {
     this.broadcast('lobby', {
-      code: this.roomId,
+      code: this.joinCode,
       hostId: this.hostId,
       phase: this.phase,
       players: [...this.players.entries()].map(([id, p]) => ({

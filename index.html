@@ -388,13 +388,14 @@
         background: var(--panel);
         color: var(--text);
       }
-      /* Autó-választó kártyák — a bal oldali sidepanelben, egy oszlopban. */
-      #carSelect {
+      /* Autó-választó kártyák — a bal oldali sidepanelben ÉS a multiplayer
+         beállítások panelen (lásd #mpCarSelect) is, egy oszlopban. */
+      .carSelectGrid {
         display: flex;
         flex-direction: column;
         gap: 7px;
       }
-      #carSelect .carswatch {
+      .carSelectGrid .carswatch {
         display: flex;
         align-items: center;
         gap: 9px;
@@ -407,20 +408,22 @@
         cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease;
       }
-      #carSelect .carswatch:hover {
+      .carSelectGrid .carswatch:hover {
         border-color: rgba(255, 255, 255, 0.2);
       }
-      #carSelect .carswatch.active {
+      .carSelectGrid .carswatch.active {
         border-color: var(--accent);
         background: var(--accent-soft);
       }
-      #carSelect .carswatch .dot {
+      .carSelectGrid .carswatch .dot {
         width: 15px;
         height: 15px;
         border-radius: 50%;
         border: 1px solid rgba(255, 255, 255, 0.35);
         flex-shrink: 0;
       }
+      #mpSettings .panel { max-width: 420px; }
+      #mpSettings h1 { font-size: 20px; }
       /* A szám-mező natív léptető-nyilai a sötét témához igazodjanak (ne fehér
          háttéren fehér nyilak legyenek). */
       .overlay input[type="number"] { color-scheme: dark; }
@@ -597,7 +600,7 @@
       <div class="menuLayout">
         <div class="panel sidepanel">
           <h2>🚗 Autó</h2>
-          <div id="carSelect"></div>
+          <div id="carSelect" class="carSelectGrid"></div>
         </div>
         <div class="panel">
           <h1>🏎️ Autós játék</h1>
@@ -639,6 +642,7 @@
         <div id="lobbyCode"></div>
         <div id="lobbyPlayers"></div>
         <button id="btnStart" class="primary" style="display:none">🚦 Verseny indítása</button>
+        <button id="btnLobbySettings">⚙️ Autó / pálya / fizika</button>
         <div id="lobbyStatus" class="status">Várakozás a játékosokra…</div>
         <button id="btnLeave">← Kilépés a szobából</button>
       </div>
@@ -653,7 +657,36 @@
         <h1>🏁 Végeredmény</h1>
         <div id="resultsList"></div>
         <button id="btnResultsAgain" class="primary" style="display:none">🔄 Új verseny</button>
+        <button id="btnResultsSettings">⚙️ Autó / pálya / fizika</button>
         <button id="btnResultsLeave">← Vissza a menübe</button>
+      </div>
+    </div>
+
+    <!-- Multiplayer beállítások: autó BÁRKI, pálya/körök/fizika CSAK a host —
+         a lobbiból ÉS a végeredmény-panelről is előhozható, csatlakozás
+         megszakítása / új szoba nélkül (lásd main.js openMpSettings). -->
+    <div id="mpSettings" class="overlay">
+      <div class="panel">
+        <h1>⚙️ Beállítások</h1>
+        <label>Autód</label>
+        <div id="mpCarSelect" class="carSelectGrid"></div>
+        <div id="mpHostSettings" style="display:none">
+          <hr />
+          <label for="mpTrackSelect">Pálya (host)</label>
+          <select id="mpTrackSelect">
+            <option value="">🏁 Alap pálya (beépített)</option>
+          </select>
+          <label for="mpLapsInput">Körök száma (host)</label>
+          <input id="mpLapsInput" type="number" min="1" max="50" step="1" value="3" />
+          <label for="mpPhysicsSelect">Autó-fizika (host)</label>
+          <select id="mpPhysicsSelect">
+            <option value="realistic">Realisztikus</option>
+            <option value="light">Könnyített (arcade)</option>
+          </select>
+          <button id="btnMpApplySettings" class="primary">Alkalmaz</button>
+        </div>
+        <div id="mpSettingsStatus" class="status"></div>
+        <button id="btnMpSettingsClose">← Vissza</button>
       </div>
     </div>
 

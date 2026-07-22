@@ -134,6 +134,20 @@ const physicsSelect = document.getElementById('physicsSelect');
 const leaderboardListEl = document.getElementById('leaderboardList');
 const btnClearLeaderboard = document.getElementById('btnClearLeaderboard');
 
+// --- Multiplayer beállítások panel (autó BÁRKI, pálya/körök/fizika a host) —
+// a lobbiból ÉS a végeredmény-panelről is előhozható (lásd startMultiplayer). ---
+const mpSettingsEl = document.getElementById('mpSettings');
+const mpCarSelectEl = document.getElementById('mpCarSelect');
+const mpHostSettingsEl = document.getElementById('mpHostSettings');
+const mpTrackSelect = document.getElementById('mpTrackSelect');
+const mpLapsInput = document.getElementById('mpLapsInput');
+const mpPhysicsSelect = document.getElementById('mpPhysicsSelect');
+const btnMpApplySettings = document.getElementById('btnMpApplySettings');
+const mpSettingsStatus = document.getElementById('mpSettingsStatus');
+const btnMpSettingsClose = document.getElementById('btnMpSettingsClose');
+const btnLobbySettings = document.getElementById('btnLobbySettings');
+const btnResultsSettings = document.getElementById('btnResultsSettings');
+
 // A trackSelect "Alap pálya" (value="") opciójának is kell egy trackKey (a
 // beépített DEFAULT_LAYOUT hash-e), hogy a ranglista rá is tudjon szűrni —
 // a katalógusból jövő pályák trackKey-jét a szerver adja (lásd populateTrackSelect).
@@ -141,9 +155,16 @@ const defaultTrackOption = trackSelect.querySelector('option[value=""]');
 if (defaultTrackOption) defaultTrackOption.dataset.trackKey = hashLayout(DEFAULT_LAYOUT);
 
 // Autó-választó: a CARS listából kattintható kártyák. A választás perzisztál, a
-// 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar).
-function renderCarSelect() {
-  carSelectEl.innerHTML = '';
+// 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar). A
+// FŐMENÜBEN (carSelectEl) ÉS a multiplayer beállítások panelen (mpCarSelectEl,
+// lásd startMultiplayer) is ugyanez jelenik meg — mindkét konténer újrarajzolódik,
+// bármelyikben választva (`carSelectContainers`), és multiplayerben a választás
+// a szervernek is elküldődik (`onCarChanged`, csak ott van beállítva).
+const carSelectContainers = [carSelectEl];
+let onCarChanged = null;
+
+function renderCarSelectInto(container) {
+  container.innerHTML = '';
   CARS.forEach((c, i) => {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -155,9 +176,13 @@ function renderCarSelect() {
       localStorage.setItem('autos-jatek:carIdx', String(i));
       renderCarSelect();
       setPlayerCar(i);
+      if (onCarChanged) onCarChanged(i);
     };
-    carSelectEl.appendChild(btn);
+    container.appendChild(btn);
   });
+}
+function renderCarSelect() {
+  for (const el of carSelectContainers) renderCarSelectInto(el);
 }
 renderCarSelect();
 
@@ -223,26 +248,31 @@ const initialTrackSig = JSON.stringify({
   d: loadCustomDecorations(),
 });
 
-// A főmenü pálya-választójának feltöltése a globális katalógusból.
-async function populateTrackSelect() {
+// A pálya-választó feltöltése a globális katalógusból. Alapból a főmenü
+// trackSelect-jét tölti fel; a multiplayer beállítások panel saját
+// mpTrackSelect-je (lásd startMultiplayer) is ugyanezt hívja, más `select`
+// paraméterrel és `preselectName`-mel (ott nem a lokális aktív pálya, hanem a
+// SZOBA jelenlegi pályája számít).
+async function populateTrackSelect(select = trackSelect, preselectName = getActiveTrackName()) {
   let tracks = [];
   try {
     tracks = await apiListTracks();
   } catch {
     return; // szerver nem elérhető — marad csak az "Alap pálya" opció
   }
-  const activeName = getActiveTrackName();
   for (const t of tracks) {
     const opt = document.createElement('option');
     opt.value = t.id;
     opt.textContent = t.name;
     opt.dataset.trackKey = t.trackKey;
-    if (t.name === activeName) opt.selected = true;
-    trackSelect.appendChild(opt);
+    if (t.name === preselectName) opt.selected = true;
+    select.appendChild(opt);
   }
-  // opt.selected = true nem vált ki 'change' eseményt — a ranglistát itt
-  // explicit újra kell rajzolni, ha időközben a katalógusból jött egy aktív pálya.
-  renderLeaderboard();
+  if (select === trackSelect) {
+    // opt.selected = true nem vált ki 'change' eseményt — a ranglistát itt
+    // explicit újra kell rajzolni, ha időközben a katalógusból jött egy aktív pálya.
+    renderLeaderboard();
+  }
 }
 
 // A kiválasztott pálya-opció ranglista-azonosítója + neve (a trackSelect
@@ -723,8 +753,94 @@ async function startMultiplayer(room) {
     resultsEl.style.display = 'none';
   }
 
+  // --- Multiplayer beállítások panel (autó BÁRKI, pálya/körök/fizika a host) ---
+  // A lobbiból ÉS a végeredmény-panelről is előhozható (btnLobbySettings /
+  // btnResultsSettings) — ez teszi lehetővé, hogy két verseny közt (vagy már
+  // csatlakozás UTÁN, rajt előtt) autót/pályát/fizikát váltsunk anélkül, hogy
+  // ki kellene lépni a szobából és újra csatlakozni.
+  let mpTrackName = '';
+  let mpPhysicsName = DEFAULT_PHYSICS;
+  let mpTrackListLoaded = false;
+
+  carSelectContainers.push(mpCarSelectEl);
+  onCarChanged = (i) => room.send('setCar', i);
+
+  function openMpSettings() {
+    mpSettingsStatus.textContent = '';
+    mpHostSettingsEl.style.display = isHost ? 'block' : 'none';
+    renderCarSelect();
+    if (isHost) {
+      if (!mpTrackListLoaded) {
+        mpTrackListLoaded = true;
+        populateTrackSelect(mpTrackSelect, mpTrackName);
+      }
+      mpLapsInput.value = String(mpTotalLaps);
+      mpPhysicsSelect.value = mpPhysicsName;
+    }
+    mpSettingsEl.style.display = 'flex';
+  }
+  function closeMpSettings() {
+    mpSettingsEl.style.display = 'none';
+  }
+  btnLobbySettings.onclick = openMpSettings;
+  btnResultsSettings.onclick = openMpSettings;
+  btnMpSettingsClose.onclick = closeMpSettings;
+
+  btnMpApplySettings.onclick = async () => {
+    if (!isHost) return;
+    mpSettingsStatus.textContent = 'Alkalmazás…';
+    btnMpApplySettings.disabled = true;
+    try {
+      const id = mpTrackSelect.value;
+      let layout;
+      let decorations;
+      let trackName;
+      if (id) {
+        const t = await apiGetTrack(id);
+        layout = t.layout;
+        decorations = t.decorations;
+        trackName = t.name;
+      } else {
+        layout = DEFAULT_LAYOUT;
+        decorations = [];
+        trackName = 'Alap pálya';
+      }
+      const n = parseInt(mpLapsInput.value, 10);
+      room.send('hostSettings', {
+        layout,
+        decorations,
+        trackName,
+        laps: Number.isFinite(n) && n >= 1 && n <= 50 ? n : mpTotalLaps,
+        physics: mpPhysicsSelect.value,
+      });
+    } catch (e) {
+      mpSettingsStatus.textContent = `Nem sikerült a pálya betöltése: ${e.message || 'ismeretlen hiba'}`;
+    } finally {
+      btnMpApplySettings.disabled = false;
+    }
+  };
+
+  // A host módosítást (vagy a saját magunk induló state-jét) MINDENKI innen
+  // kapja — ha a pálya (layout) eltér a nálunk épp betöltöttől, ugyanaz a
+  // ment+újratölt+visszalép mintát követjük, mint csatlakozáskor
+  // (ensureTrackMatches) — a kör/fizika-váltás nem igényel reloadot.
+  room.onMessage('roomSettings', (m) => {
+    mpTrackName = m.trackName || mpTrackName;
+    if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
+    if (m.physics) {
+      mpPhysicsName = applyPhysicsPreset(m.physics);
+    }
+    if (!ensureTrackMatches(m, room.roomId)) return; // reload indult — a többi felesleges
+    mpSettingsStatus.textContent = 'Beállítások alkalmazva.';
+  });
+
   room.onMessage('lobby', (m) => {
     isHost = m.hostId === myId;
+    // Guestnek csak az autó-választás elérhető itt, a gomb felirata ezt tükrözze
+    // (a host-specifikus vezérlők úgyis rejtve maradnak, lásd openMpSettings).
+    const settingsLabel = isHost ? '⚙️ Autó / pálya / fizika' : '⚙️ Autó';
+    btnLobbySettings.textContent = settingsLabel;
+    btnResultsSettings.textContent = settingsLabel;
     roomPhase = m.phase;
     lobbyCodeEl.textContent = m.code;
     lobbyPlayersEl.innerHTML = '';
@@ -755,6 +871,16 @@ async function startMultiplayer(room) {
     if (m.slots && m.slots[myId]) mySpawn = m.slots[myId];
     if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
     if (Number.isFinite(m.raceGen)) mpRaceGen = m.raceGen;
+    // A TÖBBI játékos mesh-ét eldobjuk (a sajátunkat nem) — ha valaki két
+    // verseny közt (lobby/finished állapotban) autót váltott, az `ensureMesh`
+    // különben megtartaná a RÉGI modellt (csak ÚJ id-re tölt be, lásd ott),
+    // így e nélkül a váltás csak a KÖVETKEZŐ szoba/rejoin után látszódna.
+    for (const [id, mesh] of meshes.entries()) {
+      if (id === myId) continue;
+      scene.remove(mesh);
+      meshes.delete(id);
+      wheelAnims.delete(id);
+    }
     mpResetForRace();
   });
 
@@ -762,12 +888,13 @@ async function startMultiplayer(room) {
   // szoba pályája eltér a lokálistól, ensureTrackMatches ment + újratölt (rejoin).
   room.onMessage('init', (init) => {
     if (Number.isFinite(init.laps)) mpTotalLaps = init.laps;
+    mpTrackName = init.trackName || mpTrackName;
     if (init.slot) {
       mySpawn = init.slot;
       mpPlaceAtSpawn();
     }
     // A szoba fizikáját alkalmazzuk a HELYI simre (a host dönt, a szerver küldi).
-    if (init.physics) applyPhysicsPreset(init.physics);
+    if (init.physics) mpPhysicsName = applyPhysicsPreset(init.physics);
     ensureTrackMatches(init, room.roomId);
   });
 

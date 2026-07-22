@@ -22,6 +22,7 @@ const cors = require('cors');
 import { RaceRoom } from './RaceRoom.js';
 import { listTracks, getTrack, saveTrack, deleteTrack } from './trackStore.js';
 import { listEntries, recordLap, deleteEntry, clearBoard } from './leaderboardStore.js';
+import { resolveJoinCode } from './roomCodes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = join(__dirname, '..', 'dist');
@@ -31,6 +32,14 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// A rövid, számokból álló csatlakozási kód (lásd roomCodes.js) feloldása a
+// tényleges Colyseus roomId-ra — a kliens ezt hívja meg join előtt.
+app.get('/api/room-code/:code', (req, res) => {
+  const roomId = resolveJoinCode(req.params.code);
+  if (!roomId) return res.status(404).json({ error: 'Nincs ilyen szoba-kód.' });
+  res.json({ roomId });
+});
 
 // --- Globális pálya-katalógus REST API (szerkesztő + főmenü pálya-választó) ---
 // A pályák a szerveren élnek (trackStore), így minden gépről elérhetők.
