@@ -36,6 +36,7 @@ import { isDevMode } from './devmode.js';
 import { isSplineLayout } from './sim/trackFactory.js';
 import { sampleSpline } from './sim/trackSpline.js';
 import { validateSplineTrack, MIN_CONTROL_POINTS, MIN_WIDTH, MAX_WIDTH } from './sim/trackValidation.js';
+import { getFootprint } from './render3d/decorFootprint.js';
 
 // A pálya-szerkesztő CSAK dev módban érhető el (?dev=1 a játék URL-jén) —
 // enélkül vissza a játékhoz. A throw megállítja a modul további futását.
@@ -50,7 +51,8 @@ const PX_PER_METER = 2; // a látható vászon kb. ±200m × ±140m világot fed
 const HIT_RADIUS_PX = 14; // egy kontrollpont "eltalálásának" képernyő-sugara
 const CLOSE_RADIUS_PX = 16; // az első pont közelébe kattintva zár a hurok
 const CURVE_HIT_RADIUS_PX = 10; // a görbe/akkord közelébe kattintva szúr be pontot
-const REMOVE_RADIUS_M = 3; // egy meglévő dekoráció közelébe kattintva törli
+const REMOVE_RADIUS_M = 3; // egy meglévő dekoráció közelébe kattintva törli (csak ha nincs ismert mérete)
+const SNAP_DISTANCE_M = 3; // egy `snap` típusú elem élétől ennyin belül illeszkedik rá lerakáskor
 const WIDTH_STEP = 2; // m — egy görgő-kattanás ennyivel változtatja egy pont szélességét
 const DEFAULT_WIDTH = TRACK.tile; // m — új kontrollpont alap-szélessége
 
@@ -139,6 +141,147 @@ function pointSegmentDistance(p, a, b) {
 // a nyers kontrollpont-sokszög szakaszait nézzük) egy világ-pontból — ez adja meg,
 // MELYIK két kontrollpont közé szúrjunk be, ha a felhasználó a görbe közelébe
 // kattint. A résen (`dist`) a hívó dönti el, hogy elég közel van-e a beszúráshoz.
+// --- Dekoráció-méret (footprint) és élillesztés ---
+//
+// A `footprints[type]` a modell TÉNYLEGES (Box3-ból számolt) világ-méretét
+// tartalmazza {width, depth}-ként (lásd render3d/decorFootprint.js) — ugyanaz
+// a konvenció, mint a játékban ténylegesen renderelt méret, tehát amit itt
+// látunk/illesztünk, PONTOSAN az kerül a pályára (WYSIWYG). Betöltés
+// aszinkron (glTF-et kell beolvasni), ezért induláskor még lehet `undefined`
+// egy típusra — eddig a méret/illesztés egyszerűen nem aktív rá, a szabad
+// (korábbi) elhelyezés marad érvényben.
+const footprints = {};
+
+// Egy dekoráció LOKÁLIS (rot=0) x/z-eltolását világ-koordinátává forgatja a
+// SAJÁT (d.rot * 90°) elforgatásával.
+function localToWorld(d, lx, lz) {
+  const a = (d.rot || 0) * (Math.PI / 2);
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  return { x: d.x + lx * cos - lz * sin, z: d.z + lx * sin + lz * cos };
+}
+function localDirToWorld(d, lx, lz) {
+  const a = (d.rot || 0) * (Math.PI / 2);
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  return { x: lx * cos - lz * sin, z: lx * sin + lz * cos };
+}
+
+// A dekoráció négy sarka világ-koordinátában (a rajzoláshoz).
+function footprintCorners(d, fp) {
+  const hw = fp.width / 2;
+  const hd = fp.depth / 2;
+  return [
+    localToWorld(d, -hw, -hd),
+    localToWorld(d, hw, -hd),
+    localToWorld(d, hw, hd),
+    localToWorld(d, -hw, hd),
+  ];
+}
+
+// A dekoráció négy élének középpontja + kifelé mutató (egység-)normálisa
+// világ-koordinátában — az illesztés ezekhez a pontokhoz keres közelséget.
+// `axis`: melyik LOKÁLIS méret (width/depth) mentén áll ki ez az él — ez a
+// FORGATÁS ELŐTTI tengely, tehát rot=1/3 (90°/270°) esetén is helyesen jelzi,
+// melyik fél-méret (nem a világ-térbeli normális iránya!) számít a kifelé
+// tolásnál — enélkül egy 90°-kal elforgatott fal/kerítés illesztésekor a
+// (világ-normálisból tévesen visszafejtett) rossz fél-méretet használnánk.
+function footprintEdges(d, fp) {
+  const hw = fp.width / 2;
+  const hd = fp.depth / 2;
+  return [
+    { mid: localToWorld(d, 0, -hd), normal: localDirToWorld(d, 0, -1), axis: 'depth' },
+    { mid: localToWorld(d, 0, hd), normal: localDirToWorld(d, 0, 1), axis: 'depth' },
+    { mid: localToWorld(d, hw, 0), normal: localDirToWorld(d, 1, 0), axis: 'width' },
+    { mid: localToWorld(d, -hw, 0), normal: localDirToWorld(d, -1, 0), axis: 'width' },
+  ];
+}
+
+// worldPt a `d` dekoráció (rot-tal elforgatott) téglalapján BELÜL esik-e —
+// inverz forgatással a lokális keretbe transzformálva (a forgatás
+// ortonormált, tehát az inverz a transzponáltja).
+function pointInFootprint(worldPt, d, fp) {
+  const a = (d.rot || 0) * (Math.PI / 2);
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const dx = worldPt.x - d.x;
+  const dz = worldPt.z - d.z;
+  const lx = dx * cos + dz * sin;
+  const lz = -dx * sin + dz * cos;
+  return Math.abs(lx) <= fp.width / 2 && Math.abs(lz) <= fp.depth / 2;
+}
+
+// A kattintott/hover világ-pont ALATT/KÖZELÉBEN lévő meglévő dekoráció —
+// ha ismert a mérete, a TÉNYLEGES (elforgatott) téglalapján belülre kell
+// esni (így egy nagy épület bárhonnan törölhető, nem csak a középpontja
+// közeléből); ha még nincs betöltve a mérete, a régi kör-alapú közelségre
+// esik vissza.
+function findDecorationNear(worldPt) {
+  return decorations.find((d) => {
+    const fp = footprints[d.type];
+    if (fp) return pointInFootprint(worldPt, d, fp);
+    return Math.hypot(d.x - worldPt.x, d.z - worldPt.z) < REMOVE_RADIUS_M;
+  });
+}
+
+// `snap` típusú elem lerakásakor: megkeresi a legközelebbi (SNAP_DISTANCE_M-en
+// belüli) élét egy MÁSIK, szintén `snap` típusú és ismert méretű dekorációnak,
+// és ha talál, visszaadja azt a pozíciót, ahol az ÚJ elem PONTOSAN (rés/
+// átfedés nélkül) illeszkedik hozzá. FONTOS: a `rot` mindig a HÍVÓ által
+// átadott (a "Forgatás" gombbal beállított) forgás marad — CSAK a pozíció
+// igazodik, a forgatás sosem íródik felül a szomszédéra. Enélkül (korábbi
+// hiba) a forgatás-gomb hatástalannak tűnt, mert lerakáskor mindig a szomszéd
+// forgása "nyert": fal/kerítés így csak egyenesen tudott folytatódni, sarkot/
+// derékszögű csatlakozást (a felhasználó saját forgatásával) nem lehetett
+// vele építeni. A javított logika: a MEGADOTT forgással kiszámolja az új elem
+// 4 saját élét egy origó-központú próbapéldányon, és azt választja, amelyiknek
+// a normálisa leginkább SZEMBEN áll a megtalált szomszéd-éllel (tehát "felé
+// néz") — így egyenes folytatásnál (0° eltérés) ugyanúgy simán illeszkedik,
+// de 90°-kal elforgatva egy derékszögű sarkot is pontosan zár.
+function computeSnap(worldPt, type, rot) {
+  const def = DECORATION_TYPES[type];
+  const fp = footprints[type];
+  if (!def?.snap || !fp) return null;
+
+  let bestEdge = null;
+  let bestDist = SNAP_DISTANCE_M;
+  for (const d of decorations) {
+    const ndef = DECORATION_TYPES[d.type];
+    const nfp = footprints[d.type];
+    if (!ndef?.snap || !nfp) continue;
+    for (const edge of footprintEdges(d, nfp)) {
+      const dist = Math.hypot(edge.mid.x - worldPt.x, edge.mid.z - worldPt.z);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestEdge = edge;
+      }
+    }
+  }
+  if (!bestEdge) return null;
+
+  // Az új elem saját élei (a MEGADOTT forgással, egy képzeletbeli origóban álló
+  // példányon) — azt választjuk, amelyiknek a normálisa a legjobban "szembenéz"
+  // a megtalált szomszéd-éllel (skaláris szorzat maximuma a −bestEdge.normal-lal).
+  const ownEdges = footprintEdges({ x: 0, z: 0, rot }, fp);
+  let facingEdge = ownEdges[0];
+  let bestScore = -Infinity;
+  for (const e of ownEdges) {
+    const score = e.normal.x * -bestEdge.normal.x + e.normal.z * -bestEdge.normal.z;
+    if (score > bestScore) {
+      bestScore = score;
+      facingEdge = e;
+    }
+  }
+  // `facingEdge.mid` itt a KÖZÉPPONTTÓL a saját élig mutató eltolás (mert a
+  // próbapéldány az origóban állt) — az új középpont úgy adódik, hogy ez az
+  // eltolás a szomszéd-élre essen (a két él PONTOSAN egybeessen).
+  return {
+    x: bestEdge.mid.x - facingEdge.mid.x,
+    z: bestEdge.mid.z - facingEdge.mid.z,
+    rot,
+  };
+}
+
 function nearestChordSegment(worldPt) {
   const n = points.length;
   let best = 0;
@@ -166,7 +309,7 @@ function setMode(newMode) {
   decorControlsEl.style.display = isTrack ? 'none' : 'block';
   instructionsEl.textContent = isTrack
     ? 'Kattints bárhova a pálya rajzolásának megkezdéséhez, majd folytasd további pontokkal — a görbe automatikusan simán illeszkedik közéjük. Legalább 4 pont után kattints vissza az első (arany) pontra a hurok zárásához. Zárás után: húzd a pontokat az áthelyezéshez, kattints a görbe közelébe új pont beszúrásához, jobb-kattints egy pontra a törléséhez, görgess egy pont fölött a szélességének (a "Xm" felirat) állításához, vagy dupla kattints egy pontra, hogy éles sarokká (négyzet) váltson — így sikánok, hajtűk is rajzolhatók.'
-    : 'Válaszd ki az elemet lent, majd kattints a pálya bármely pontjára a lerakáshoz — pontosan oda kerül, ahova kattintasz. Egy meglévő elem közelébe kattintva eltávolítod. A "Forgatás" gomb az elem irányát állítja lerakás előtt.';
+    : 'Válaszd ki az elemet lent (a neve mellett a valós mérete is látszik, amint betöltődött), állítsd be a "Forgatás" gombbal az irányát (a sárga nyíl + "E" felirat mutatja az elejét), majd kattints a pálya bármely pontjára a lerakáshoz. A fal/kerítés/garázs/iroda/lelátó/terelőkorlát egy MÁSIK ilyen elem éléhez közel automatikusan a PONTOS illesztett helyre kerül (rés/átfedés nélkül) — a FORGATÁSA mindig a beállított marad, tehát derékszögű sarok is építhető (forgasd 90°-kal, majd kattints a szomszéd sarkához). Máshova kattintva szabadon kerül le. Egy meglévő elemre (a téglalapján belül) kattintva eltávolítod.';
   hover = null;
   render();
   updateStatus();
@@ -179,6 +322,15 @@ modeDecorBtn.addEventListener('click', () => setMode('decor'));
 // szerint csoportosítva (a réteg-fogalom csak vizuális csoportosítás — a
 // tényleges elhelyezés minden típusnál azonos, szabad).
 const layerLabels = { ground: 'Talaj (a cella alapja)', object: 'Objektum (a talajra kerül)' };
+const paletteButtons = {}; // type → <button> — a betöltött méret utólag frissíti a feliratot
+
+function paletteLabelText(key) {
+  const def = DECORATION_TYPES[key];
+  const fp = footprints[key];
+  const size = fp ? ` (${fp.width.toFixed(1)}×${fp.depth.toFixed(1)}m)` : '';
+  return `${def.icon} ${def.label}${size}`;
+}
+
 for (const layer of ['ground', 'object']) {
   const keys = decorTypeKeys.filter((k) => DECORATION_TYPES[k].layer === layer);
   if (keys.length === 0) continue;
@@ -191,9 +343,8 @@ for (const layer of ['ground', 'object']) {
   const group = document.createElement('div');
   group.className = 'decorLayerGroup';
   for (const key of keys) {
-    const def = DECORATION_TYPES[key];
     const btn = document.createElement('button');
-    btn.textContent = `${def.icon} ${def.label}`;
+    btn.textContent = paletteLabelText(key);
     btn.dataset.type = key;
     if (key === activeDecorType) btn.classList.add('active');
     btn.addEventListener('click', () => {
@@ -201,9 +352,22 @@ for (const layer of ['ground', 'object']) {
       for (const b of decorPaletteEl.querySelectorAll('button')) b.classList.remove('active');
       btn.classList.add('active');
     });
+    paletteButtons[key] = btn;
     group.appendChild(btn);
   }
   decorPaletteEl.appendChild(group);
+}
+
+// A modellek valós mérete aszinkron töltődik be (glTF-parszolás) — amint egy
+// típusé megjön, frissítjük a palettán a feliratát ÉS újrarajzolunk (hogy a
+// már lerakott ilyen típusú elemek is megkapják a méret-téglalapot/illesztést).
+for (const key of decorTypeKeys) {
+  getFootprint(key).then((fp) => {
+    if (!fp) return;
+    footprints[key] = fp;
+    if (paletteButtons[key]) paletteButtons[key].textContent = paletteLabelText(key);
+    render();
+  });
 }
 
 rotateBtn.addEventListener('click', () => {
@@ -351,11 +515,13 @@ canvas.addEventListener('click', (e) => {
   if (mode !== 'decor') return;
   const screenPt = pixelToScreen(e.clientX, e.clientY);
   const worldPt = screenToWorld(screenPt.x, screenPt.y);
-  const existing = decorations.find((d) => Math.hypot(d.x - worldPt.x, d.z - worldPt.z) < REMOVE_RADIUS_M);
+  const existing = findDecorationNear(worldPt);
   if (existing) {
     decorations.splice(decorations.indexOf(existing), 1);
   } else {
-    decorations.push({ x: worldPt.x, z: worldPt.z, type: activeDecorType, rot: activeRot });
+    const snap = computeSnap(worldPt, activeDecorType, activeRot);
+    if (snap) decorations.push({ x: snap.x, z: snap.z, type: activeDecorType, rot: snap.rot });
+    else decorations.push({ x: worldPt.x, z: worldPt.z, type: activeDecorType, rot: activeRot });
   }
   render();
   updateStatus();
@@ -638,41 +804,131 @@ function render() {
     }
   }
 
-  // Dekorációk — mind szabad elhelyezésűek (ikon + forgás-jelző vonal).
+  // Dekorációk — ikon + forgás-jelző vonal, ÉS ha már ismert a valós mérete
+  // (lásd footprints/getFootprint), a tényleges (elforgatott) téglalapja is,
+  // méret-felirattal — ez adja a "pontos méret látszik" funkciót.
   for (const d of decorations) {
+    const fp = footprints[d.type];
+    if (fp) drawFootprintRect(d, fp, DECORATION_TYPES[d.type].snap ? 'rgba(111,179,122,0.9)' : 'rgba(122,127,140,0.7)');
+
     const s = worldToScreen(d);
     ctx.font = '20px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(DECORATION_TYPES[d.type].icon, s.x, s.y);
-    const angle = (d.rot * Math.PI) / 2 - Math.PI / 2;
-    ctx.strokeStyle = '#d99a3f';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.lineTo(s.x + Math.cos(angle) * 16, s.y + Math.sin(angle) * 16);
-    ctx.stroke();
+    drawFacingArrow(d, '#f2c14e');
   }
 
-  // Hover-visszajelzés (decor mód): törlés-célpont (piros gyűrű) / lerakás-előnézet.
+  // Hover-visszajelzés (decor mód): törlés-célpont (piros keret/gyűrű) / lerakás-
+  // előnézet — ha az aktív típus `snap`-elhető és van elég közeli illeszthető
+  // szomszéd, a PONTOS illesztett helyen/forgással mutatja (sárga téglalap +
+  // "illesztve" felirat), különben a szabad kattintás-helyen (a "Forgatás"
+  // gomb szerinti iránnyal).
   if (hover && mode === 'decor') {
-    const existing = decorations.find((d) => Math.hypot(d.x - hover.worldPt.x, d.z - hover.worldPt.z) < REMOVE_RADIUS_M);
-    const s = worldToScreen(hover.worldPt);
+    const existing = findDecorationNear(hover.worldPt);
     if (existing) {
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, 14, 0, Math.PI * 2);
-      ctx.strokeStyle = '#e05a5a';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      const fp = footprints[existing.type];
+      if (fp) {
+        drawFootprintRect(existing, fp, '#e05a5a');
+      } else {
+        const s = worldToScreen(existing);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 14, 0, Math.PI * 2);
+        ctx.strokeStyle = '#e05a5a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
     } else {
-      ctx.globalAlpha = 0.5;
+      const snap = computeSnap(hover.worldPt, activeDecorType, activeRot);
+      const preview = snap
+        ? { x: snap.x, z: snap.z, rot: snap.rot }
+        : { x: hover.worldPt.x, z: hover.worldPt.z, rot: activeRot };
+      const fp = footprints[activeDecorType];
+      if (fp) drawFootprintRect(preview, fp, snap ? '#f2c14e' : 'rgba(217,154,63,0.6)');
+
+      const s = worldToScreen(preview);
+      ctx.globalAlpha = 0.6;
       ctx.font = '20px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(DECORATION_TYPES[activeDecorType].icon, s.x, s.y);
       ctx.globalAlpha = 1;
+      drawFacingArrow(preview, snap ? '#f2c14e' : 'rgba(217,154,63,0.7)');
+      if (snap) {
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f2c14e';
+        ctx.fillText('illesztve', s.x, s.y - 18);
+      }
     }
   }
+}
+
+// Egy dekoráció valós (elforgatott) téglalapja + méret-felirat kirajzolása.
+// Az ELEJE (ugyanaz az irány, mint a drawFacingArrow nyila — lásd ott) oldala
+// vastagabb, sárga vonallal kiemelve, hogy a téglalapon is látszódjon, merre néz.
+function drawFootprintRect(d, fp, color) {
+  const corners = footprintCorners(d, fp).map(worldToScreen);
+  ctx.beginPath();
+  corners.forEach((c, i) => (i === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y)));
+  ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(140,150,165,0.10)';
+  ctx.fill();
+
+  // footprintCorners sorrendje [(-hw,-hd),(hw,-hd),(hw,hd),(-hw,hd)] — a
+  // 0→1 oldal a z=-hd ("eleje") oldal, UGYANAZ az irány, mint a forgás-nyíl.
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  ctx.lineTo(corners[1].x, corners[1].y);
+  ctx.strokeStyle = '#f2c14e';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  const s = worldToScreen(d);
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#9aa2b4';
+  ctx.fillText(`${fp.width.toFixed(1)}×${fp.depth.toFixed(1)}m`, s.x, s.y + 12);
+}
+
+// Az elem FORGÁSÁT (merre néz — "eleje") jelző nyíl: vonal + nyílhegy + "E"
+// (eleje) felirat a hegyénél. Ugyanazt a szög-konvenciót használja, mint a
+// footprintEdges "front" éle (rot=0-nál a világ −Z irányba, azaz a vásznon
+// "felfelé" mutat), így a nyíl és a drawFootprintRect kiemelt éle MINDIG
+// ugyanarra az oldalra mutat.
+function drawFacingArrow(d, color) {
+  const s = worldToScreen(d);
+  const angle = ((d.rot || 0) * Math.PI) / 2 - Math.PI / 2;
+  const len = 22;
+  const tipX = s.x + Math.cos(angle) * len;
+  const tipY = s.y + Math.sin(angle) * len;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  const headLen = 8;
+  const headAngle = Math.PI / 6;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - headLen * Math.cos(angle - headAngle), tipY - headLen * Math.sin(angle - headAngle));
+  ctx.lineTo(tipX - headLen * Math.cos(angle + headAngle), tipY - headLen * Math.sin(angle + headAngle));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.font = 'bold 9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText('E', tipX + Math.cos(angle) * 9, tipY + Math.sin(angle) * 9);
 }
 
 // A computeLayout()-hoz hasonló INVERZ, csak a RÉGI (rács/szegmens) formátumhoz —
@@ -866,8 +1122,11 @@ if (import.meta.env.DEV) {
   window.__EDITOR = {
     points,
     decorations,
+    footprints,
     get closed() { return closed; },
     get mode() { return mode; },
     validate: () => validateSplineTrack(points),
+    computeSnap,
+    setActiveDecorType: (t) => { activeDecorType = t; },
   };
 }

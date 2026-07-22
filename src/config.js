@@ -237,19 +237,26 @@ export const TRACK = {
 //
 // `layer`: 'ground' vagy 'object' — EGY cellába EGYSZERRE lehet egy talaj- ÉS egy
 // objektum-elem (pl. fű + rá helyezett fa), egymástól függetlenül lerakva/törölve.
+// `snap: true` — a szerkesztőben ez a típus a MEGLÉVŐ (szintén snap-elhető)
+// dekorációk éleihez illeszkedik lerakáskor (lásd editor.js computeSnap): ha a
+// kattintás egy másik snap-elemen közel esik valamelyik éléhez, a lerakott elem
+// pontosan odaillesztve, AZONOS forgással kerül le — így fal/kerítés/korlát
+// folytonos vonalban, épület (garázs/iroda/lelátó) pedig rés/átfedés nélkül,
+// egymás mellé rakható. A `footprint` (valós méret, m) a modell tényleges
+// Box3-ából számolódik (lásd render3d/decorFootprint.js) — nem hardkódolt.
 export const DECORATION_TYPES = {
   rumble: { model: '/assets/track/barrierRed.glb', label: 'Rázókő', icon: '🟥', scale: 1, layer: 'object' },
-  wall: { model: '/assets/track/barrierWall.glb', label: 'Fal', icon: '🧱', scale: 1, layer: 'object' },
-  fence: { model: '/assets/track/fenceStraight.glb', label: 'Kerítés', icon: '🚧', scale: 1, layer: 'object' },
+  wall: { model: '/assets/track/barrierWall.glb', label: 'Fal', icon: '🧱', scale: 1, layer: 'object', snap: true },
+  fence: { model: '/assets/track/fenceStraight.glb', label: 'Kerítés', icon: '🚧', scale: 1, layer: 'object', snap: true },
   treeSmall: { model: '/assets/track/treeSmall.glb', label: 'Kis fa', icon: '🌳', scale: 0.6, layer: 'object' },
   treeLarge: { model: '/assets/track/treeLarge.glb', label: 'Nagy fa', icon: '🌲', scale: 0.8, layer: 'object' },
-  pitGarage: { model: '/assets/track/pitsGarage.glb', label: 'Garázs', icon: '🏚️', scale: 1, layer: 'object' },
-  pitOffice: { model: '/assets/track/pitsOffice.glb', label: 'Iroda', icon: '🏢', scale: 1, layer: 'object' },
-  grandstand: { model: '/assets/track/grandStand.glb', label: 'Lelátó', icon: '🎪', scale: 1, layer: 'object' },
+  pitGarage: { model: '/assets/track/pitsGarage.glb', label: 'Garázs', icon: '🏚️', scale: 1, layer: 'object', snap: true },
+  pitOffice: { model: '/assets/track/pitsOffice.glb', label: 'Iroda', icon: '🏢', scale: 1, layer: 'object', snap: true },
+  grandstand: { model: '/assets/track/grandStand.glb', label: 'Lelátó', icon: '🎪', scale: 1, layer: 'object', snap: true },
   tent: { model: '/assets/track/tent.glb', label: 'Sátor', icon: '⛺', scale: 1, layer: 'object' },
   flag: { model: '/assets/track/flagCheckers.glb', label: 'Zászló', icon: '🏁', scale: 1, layer: 'object' },
   lightPost: { model: '/assets/track/lightPostModern.glb', label: 'Lámpa', icon: '💡', scale: 0.7, layer: 'object' },
-  rail: { model: '/assets/track/rail.glb', label: 'Terelőkorlát', icon: '🛡️', scale: 1, layer: 'object' },
+  rail: { model: '/assets/track/rail.glb', label: 'Terelőkorlát', icon: '🛡️', scale: 1, layer: 'object', snap: true },
   // `free: true` — nincs rács-igazítás; a szerkesztőben a kattintás PONTOS
   // helyére kerül (nem a legközelebbi cella közepére), így egy cellán belül is
   // tetszőleges pozícióba rakható (lásd editor.js pixelToPoint / free ág).
