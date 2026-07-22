@@ -97,13 +97,34 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = fa
   if (offTrack) state.lapValid = false; // letért a pályáról → az egész kör érvénytelen
   if (trackDirAt) updateWrongWay(state, prevPos, currPos, dt, trackDirAt);
 
-  // Csak a SORON KÖVETKEZŐ checkpoint átszelése számít — a sorrend így kikényszerített.
-  const cp = checkpoints[state.nextCheckpoint];
-  if (!segmentsCross(prevPos, currPos, cp.a, cp.b)) return events;
+  // Alapesetben csak a SORON KÖVETKEZŐ checkpoint átszelése számít — a sorrend
+  // így kikényszerített. DE ha sarkot vágunk (a pályán kívül kerülve megkerülünk
+  // egy köztes checkpointot úgy, hogy a vonalát SOHA nem metsszük), a
+  // `nextCheckpoint` örökre megakadt volna azon a ponton, és a célvonal-átszelés
+  // se számított volna — a kör SOSEM fejeződött be (élő hibajelentés: sarok-
+  // vágás után 1 körrel többet kellett menni). Ezért néhány (fél környi)
+  // checkpointtal ELŐRE is megnézzük, keresztezte-e MÁR azt az autó — ha igen,
+  // a kihagyott közteseket "elfogadjuk" (a kör úgyis érvénytelen lesz, hiszen a
+  // kihagyás mindig pályaelhagyást jelent). A keresést fél környire korlátozzuk,
+  // nehogy a TÁVOLI célvonalat tévesen a jelenlegi (korai) checkpointtal
+  // összekeverjük.
+  const maxLookahead = Math.max(1, Math.floor(checkpoints.length / 2));
+  let foundOffset = -1;
+  for (let k = 0; k <= maxLookahead; k++) {
+    const idx = (state.nextCheckpoint + k) % checkpoints.length;
+    const c = checkpoints[idx];
+    if (segmentsCross(prevPos, currPos, c.a, c.b)) {
+      foundOffset = k;
+      break;
+    }
+  }
+  if (foundOffset === -1) return events;
+  if (foundOffset > 0) state.lapValid = false; // kihagyott checkpoint = sarok-vágás
 
-  if (state.nextCheckpoint !== 0) {
+  const crossedCheckpoint = (state.nextCheckpoint + foundOffset) % checkpoints.length;
+  if (crossedCheckpoint !== 0) {
     // Köztes checkpoint: lépünk a következőre (a 3. után a 0 = célvonal jön).
-    state.nextCheckpoint = (state.nextCheckpoint + 1) % checkpoints.length;
+    state.nextCheckpoint = (crossedCheckpoint + 1) % checkpoints.length;
     events.push({ type: 'checkpoint', index: state.nextCheckpoint });
     return events;
   }
