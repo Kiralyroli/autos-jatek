@@ -1004,7 +1004,13 @@ async function startMultiplayer(room) {
         const info = p.finished
           ? `🏁 ${p.totalTime.toFixed(2)} s`
           : `${p.lap}/${mpTotalLaps}. kör`;
-        return `<div>${i + 1}. ${icon} ${p.name} — ${info}</div>`;
+        // Legutóbbi kör + (ha van érvényes) legjobb kör — a snapshotból (lásd
+        // RaceRoom.js broadcastSnapshot: lastLap/bestLap mezők).
+        const lastLap = p.lastLap != null ? `Utolsó: ${fmtTime(p.lastLap)}` : '';
+        const bestLap = p.bestLap != null ? `Legjobb: ${fmtTime(p.bestLap)}` : '';
+        const laptimes = [lastLap, bestLap].filter(Boolean).join(' · ');
+        const lapLine = laptimes ? `<div class="standingsLapTimes">${laptimes}</div>` : '';
+        return `<div>${i + 1}. ${icon} ${p.name} — ${info}${lapLine}</div>`;
       })
       .join('');
   }
