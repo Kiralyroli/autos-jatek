@@ -2,7 +2,10 @@
 <html lang="hu">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
     <title>Autós játék — Fázis 1</title>
     <style>
       :root {
@@ -28,10 +31,16 @@
         background: var(--bg);
         overflow: hidden;
         font-family: var(--font);
+        /* Mobil: ne legyen "húzd le a frissítéshez"/rugózó-görgetés, amíg a
+           gombokat nyomkodjuk. NEM touch-action:none itt — az a felugró
+           panelek (autó/pálya-választó stb.) belső görgetését is letiltaná;
+           a #game-en (lásd lent) elég, az a tényleges játék-felület. */
+        overscroll-behavior: none;
       }
       #game {
         width: 100vw;
         height: 100vh;
+        touch-action: none;
       }
       /* Vékony scrollbar a sötét paneleknek. */
       .overlay ::-webkit-scrollbar { width: 8px; }
@@ -326,6 +335,175 @@
         user-select: none;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
+
+      /* --- Érintős vezérlés (touchControls.js) — csak touch-eszközön jön
+         létre, alapból rejtett (a JS mutatja versenyközben, lásd main.js
+         touch.show()). A gombok a képernyő ALJÁN, a "biztonságos" (kijelző-
+         bemetszés/home-sáv alatti) területen kívül ülnek (safe-area-inset). */
+      #touchControls {
+        position: fixed;
+        inset: 0;
+        display: none; /* JS: flex, ha touch.show() fut */
+        justify-content: space-between;
+        align-items: flex-end;
+        padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px));
+        pointer-events: none; /* csak a gombok maguk kattinthatók */
+        z-index: 15; /* a 3D játék FÖLÖTT, de a menü/lobby overlay-ek (z-index 20+) ALATT */
+        touch-action: none;
+      }
+      #touchControls .tc-group {
+        display: flex;
+        align-items: flex-end;
+        gap: 14px;
+        pointer-events: none;
+      }
+      #touchControls .tc-group-right {
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 10px;
+      }
+      #touchControls .tc-pedals {
+        display: flex;
+        gap: 14px;
+      }
+      #touchControls .tc-btn {
+        pointer-events: auto;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1.5px solid var(--panel-border);
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        color: var(--text);
+        font-family: var(--font);
+        font-weight: 800;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        transition: transform 0.08s ease, background 0.08s ease;
+        cursor: pointer;
+      }
+      /* Lenyomott állapot — azonnali vizuális visszajelzés (a valós
+         gyorsulást/kanyarodást a fizika amúgy is jelzi, de a GOMB is
+         "reagáljon" a nyomásra, különben "élettelennek" tűnne). */
+      #touchControls .tc-btn.active {
+        transform: scale(0.9);
+        background: var(--panel-soft);
+      }
+      #touchControls .tc-steer {
+        width: 66px;
+        height: 66px;
+        border-radius: 50%;
+        font-size: 26px;
+      }
+      #touchControls .tc-gas {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        font-size: 30px;
+        color: var(--success);
+        border-color: rgba(47, 174, 102, 0.5);
+      }
+      #touchControls .tc-gas.active { background: rgba(47, 174, 102, 0.22); }
+      #touchControls .tc-brake {
+        width: 62px;
+        height: 62px;
+        border-radius: 50%;
+        font-size: 24px;
+        color: var(--danger);
+        border-color: rgba(224, 80, 90, 0.5);
+      }
+      #touchControls .tc-brake.active { background: rgba(224, 80, 90, 0.22); }
+      #touchControls .tc-drift {
+        min-width: 70px;
+        height: 40px;
+        padding: 0 14px;
+        border-radius: 20px;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        color: var(--gold);
+        border-color: rgba(224, 177, 61, 0.5);
+      }
+      #touchControls .tc-drift.active { background: rgba(224, 177, 61, 0.22); }
+
+      /* Amikor az érintős vezérlés aktív (lásd touchControls.js — a body
+         ekkor kapja a has-touch-controls osztályt), a játék FEKVŐ nézetre
+         optimalizált (rövid, széles képernyő). A képernyő ALSÓ SARKAIBAN
+         ülnek a kormány-/pedál-gombok, ezért a többi HUD-elemet FELÜLRE,
+         kompaktan rendezzük, hogy ne ütközzenek velük:
+         - a billentyű-jelmagyarázat (#hud) értelmetlen touchon → elrejtjük,
+         - a mini-térkép kisebb, bal fent,
+         - a "← Főmenü" gomb + a ping a mini-térkép mellé, szintén fentre. */
+      body.has-touch-controls #hud {
+        display: none;
+      }
+      body.has-touch-controls #minimap {
+        left: 14px;
+        top: 14px;
+        bottom: auto;
+        width: 104px;
+        height: 104px;
+      }
+      body.has-touch-controls #btnQuitRace {
+        left: 130px;
+        top: 14px;
+        bottom: auto;
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+      body.has-touch-controls #ping {
+        left: 130px;
+        top: 56px;
+        right: auto;
+        bottom: auto;
+      }
+
+      /* "Fordítsd el fekvőbe" figyelmeztetés — touch-eszközön (body.has-touch-
+         controls, lásd touchControls.js) ÉS álló tájolásnál, MINDENÜTT: a
+         menüben ÉS verseny közben is. Így a játék végig fekvő nézetre terel. */
+      #rotateNotice {
+        position: fixed;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        text-align: center;
+        padding: 40px;
+        background: rgba(5, 6, 10, 0.94);
+        color: var(--text);
+        font-family: var(--font);
+        z-index: 40; /* MINDEN fölött (a touch-gombok z-index 15, az overlay-ek 20-30) */
+      }
+      #rotateNotice .rn-icon {
+        font-size: 68px;
+        animation: rn-rotate 2s ease-in-out infinite;
+      }
+      #rotateNotice .rn-text {
+        font-size: 19px;
+        font-weight: 700;
+        max-width: 320px;
+        line-height: 1.5;
+      }
+      @keyframes rn-rotate {
+        0%, 40% { transform: rotate(0deg); }
+        60%, 100% { transform: rotate(-90deg); }
+      }
+      @media (orientation: portrait) {
+        body.has-touch-controls #rotateNotice {
+          display: flex;
+        }
+        /* Álló nézetben a vezérlő-gombokat elrejtjük — úgyis a figyelmeztetés
+           takarja, és nyomásra sem reagálhatnak félreérthetően a háttérben. */
+        body.has-touch-controls #touchControls {
+          display: none !important;
+        }
+      }
+
       /* --- Főmenü + multiplayer lobby --- */
       .overlay {
         position: fixed;
@@ -376,6 +554,7 @@
         .overlay .panel,
         .overlay .panel.sidepanel {
           width: 340px;
+          max-width: 92vw; /* nagyon keskeny (pl. 360px-es) telefonon a 340px is túllógna */
           max-height: none;
           overflow-y: visible;
         }
@@ -724,6 +903,13 @@
     <button id="btnQuitRace">← Főmenü</button>
     <div id="ping"></div>
     <canvas id="minimap" width="150" height="150"></canvas>
+
+    <!-- Álló-tájolás figyelmeztetés (touch-eszközön, álló nézetben MINDENÜTT:
+         menüben és verseny közben is — lásd a #rotateNotice CSS-t fentebb). -->
+    <div id="rotateNotice">
+      <div class="rn-icon">📱</div>
+      <div class="rn-text">Fordítsd el a készüléket fekvő nézetbe a játékhoz!</div>
+    </div>
 
     <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
     <div id="menu" class="overlay">

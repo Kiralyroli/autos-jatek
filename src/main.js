@@ -25,6 +25,7 @@ import {
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
+import { isTouchDevice, createTouchControls } from './touchControls.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
 import { loadTrackRibbon } from './render3d/trackRibbon.js';
 import { loadDecorations } from './render3d/decorations.js';
@@ -120,7 +121,23 @@ if (trackState.track.tiles.length === 0) {
 addGrassField(scene);
 loadDecorations(scene);
 const updateCamera = createChaseCamera(camera);
-const readInput = createKeyboard();
+const readKeyboard = createKeyboard();
+// Érintős vezérlés: CSAK touch-képes eszközön hozzuk létre (a gombok DOM-ja +
+// pointer-listenerei feleslegesek desktopon). A tényleges input a kettő OR-a
+// — egy touch laptopon a billentyűzet a gombok mellett is működik tovább.
+const touch = isTouchDevice() ? createTouchControls() : null;
+function readInput() {
+  const k = readKeyboard();
+  if (!touch) return k;
+  const t = touch.readInput();
+  return {
+    up: k.up || t.up,
+    down: k.down || t.down,
+    left: k.left || t.left,
+    right: k.right || t.right,
+    drift: k.drift || t.drift,
+  };
+}
 const audio = createAudio();
 const speedEl = document.getElementById('speed');
 
@@ -600,6 +617,7 @@ function startSingleplayer() {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  if (touch) touch.show();
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
@@ -786,6 +804,7 @@ async function startMultiplayer(room) {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  if (touch) touch.show();
 
   // Szerver-ping (RTT) mérése + kijelzése: időbélyeget küldünk, a szerver azonnal
   // visszaküldi ('pong'), a körbeérés ideje a késleltetés. Másodpercenként frissül.
