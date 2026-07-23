@@ -623,33 +623,43 @@
         top: 14px;
         display: none;
         flex-direction: column;
-        gap: 4px;
-        font-size: 13.5px;
+        gap: 6px;
+        min-width: 230px;
+        font-size: 15.5px;
         color: var(--text);
         background: var(--panel);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         border: 1px solid var(--panel-border);
-        padding: 11px 15px;
+        padding: 14px 18px;
         border-radius: 10px;
         pointer-events: none;
         font-variant-numeric: tabular-nums;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
       #standings > div {
-        padding: 2px 0;
+        padding: 3px 0;
       }
       #standings > div:first-child {
         color: var(--gold);
         font-weight: 700;
       }
       .standingsLapTimes {
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 400 !important;
         color: var(--text-dim, #9aa0a8);
         opacity: 0.8;
         padding-left: 18px;
       }
+      /* Időrés HOZZÁM képest (lásd main.js updateStandings): előttem álló
+         versenyző mínuszban (zöldes — "előnyben vagyok tőle lemaradva"),
+         mögöttem lévő pluszban (pirosas). */
+      .standingsGap {
+        font-weight: 700;
+        margin-left: 6px;
+      }
+      .standingsGap.gapAhead { color: #ff6b6b; }
+      .standingsGap.gapBehind { color: #5fd97a; }
     </style>
   </head>
   <body>

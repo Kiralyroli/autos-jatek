@@ -1328,18 +1328,34 @@ async function startMultiplayer(room) {
 
   // Élő állás-lista a jobb felső sarokban.
   function updateStandings(players) {
-    const list = Object.values(players).sort((a, b) => {
-      if (a.finished && b.finished) return a.totalTime - b.totalTime;
-      if (a.finished) return -1;
-      if (b.finished) return 1;
-      // Kör + folytonos (ívhossz-arányos) pálya-progressz — NEM a durva checkpoint-
-      // indexet (ncp) nézzük. Az ncp csak néhány milestone-ot ismer: ha két játékos
-      // épp ugyanazt célozza, sorrendjük a régi kódban esetlegesen (tie-break)
-      // dőlt el, akkor is, ha valójában jelentős távolság volt köztük — ez okozta,
-      // hogy az állás néha megugrott/villogott, főleg a checkpointok köré eső
-      // kanyaroknál, anélkül hogy a tényleges sorrend változott volna.
-      return (b.lap + (b.progress || 0)) - (a.lap + (a.progress || 0));
-    });
+    const list = Object.entries(players)
+      .map(([id, p]) => ({ ...p, id }))
+      .sort((a, b) => {
+        if (a.finished && b.finished) return a.totalTime - b.totalTime;
+        if (a.finished) return -1;
+        if (b.finished) return 1;
+        // Kör + folytonos (ívhossz-arányos) pálya-progressz — NEM a durva checkpoint-
+        // indexet (ncp) nézzük. Az ncp csak néhány milestone-ot ismer: ha két játékos
+        // épp ugyanazt célozza, sorrendjük a régi kódban esetlegesen (tie-break)
+        // dőlt el, akkor is, ha valójában jelentős távolság volt köztük — ez okozta,
+        // hogy az állás néha megugrott/villogott, főleg a checkpointok köré eső
+        // kanyaroknál, anélkül hogy a tényleges sorrend változott volna.
+        return (b.lap + (b.progress || 0)) - (a.lap + (a.progress || 0));
+      });
+
+    // Időrés-becslés HOZZÁM képest: a pálya-menti TÁVOLSÁG-különbséget (körök +
+    // folytonos progressz, a pálya hosszával szorozva) a SAJÁT aktuális
+    // sebességemmel osztjuk el — "ilyen tempóban ennyi másodperc választ el
+    // ettől a ponttól". Előttem álló = negatív, mögöttem = pozitív (a kért
+    // előjel-konvenció). Csak akkor van értelme, ha SE én, SE ő nincs célban,
+    // és van elég sebességem a becsléshez (kanyarban/álló helyzetben a nullához
+    // közeli saját sebesség irreálisan nagy/végtelen réseket adna).
+    const me = players[myId];
+    const trackLen = trackState.trackLength;
+    const mySpeedMs = me ? me.speed / 3.6 : 0;
+    const myDist = me ? (me.lap - 1 + (me.progress || 0)) * trackLen : 0;
+    const canEstimateGap = me && !me.finished && mySpeedMs > 2;
+
     standingsEl.style.display = roomPhase === 'lobby' ? 'none' : 'flex';
     standingsEl.innerHTML = list
       .map((p, i) => {
@@ -1353,7 +1369,17 @@ async function startMultiplayer(room) {
         const bestLap = p.bestLap != null ? `Legjobb: ${fmtTime(p.bestLap)}` : '';
         const laptimes = [lastLap, bestLap].filter(Boolean).join(' · ');
         const lapLine = laptimes ? `<div class="standingsLapTimes">${laptimes}</div>` : '';
-        return `<div>${i + 1}. ${icon} ${p.name} — ${info}${lapLine}</div>`;
+
+        let gapHtml = '';
+        if (p.id !== myId && !p.finished && canEstimateGap) {
+          const pDist = (p.lap - 1 + (p.progress || 0)) * trackLen;
+          const gapSec = (myDist - pDist) / mySpeedMs;
+          const cls = gapSec < 0 ? 'gapAhead' : 'gapBehind';
+          const sign = gapSec > 0 ? '+' : '';
+          gapHtml = `<span class="standingsGap ${cls}">${sign}${gapSec.toFixed(1)}s</span>`;
+        }
+
+        return `<div>${i + 1}. ${icon} ${p.name}${gapHtml} — ${info}${lapLine}</div>`;
       })
       .join('');
   }

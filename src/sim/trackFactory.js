@@ -205,6 +205,7 @@ export function createTrackState(layout, opts) {
     roadHalf,
     curbEdge,
     checkpointHalfWidth,
+    trackLength, // méter — a multiplayer élő állás időrés-becsléséhez (main.js updateStandings)
   };
 }
 
