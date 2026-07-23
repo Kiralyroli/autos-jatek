@@ -1272,6 +1272,8 @@ async function startMultiplayer(room) {
         bestLapTime: mpRace.bestLapTime,
         wrongWay: mpRace.wrongWay,
         lapValid: mpRace.lapValid,
+        lastSplitDelta: mpRace.lastSplitDelta,
+        lastSplitAt: mpRace.lastSplitAt,
         place: me ? me.place || null : null, // hányadikként értünk célba (szervertől)
         hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
       };

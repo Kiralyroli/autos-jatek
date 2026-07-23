@@ -2,6 +2,28 @@
 // soha nem írja; a játék igazsága a sim/race.js-ben van.
 import { RACE } from './config.js';
 
+// Ennyi másodpercig látszik a szektor-delta egy checkpont átszelése után —
+// ebből az első/utolsó SPLIT_ANIM_SECONDS a be-/kicsengő animációé.
+const SPLIT_DISPLAY_SECONDS = 2.5;
+const SPLIT_ANIM_SECONDS = 0.22;
+
+// A szektor-delta jelvény opacitása/eltolása/mérete a split óta eltelt idő
+// (elapsed, s) TISZTA FÜGGVÉNYEKÉNT — nincs CSS-animáció/osztály-újraindítás,
+// ezért két gyorsan egymás utáni split (rövid szektorok) esetén sem "akad meg"
+// egy félbehagyott átmenet: minden frame-ben újraszámolt, konzisztens állapot.
+function splitAnimStyle(elapsed) {
+  if (elapsed < SPLIT_ANIM_SECONDS) {
+    const t = elapsed / SPLIT_ANIM_SECONDS; // 0..1, belépő szakasz
+    return { opacity: t, translateY: (1 - t) * -8, scale: 0.85 + 0.15 * t };
+  }
+  const fadeStart = SPLIT_DISPLAY_SECONDS - SPLIT_ANIM_SECONDS;
+  if (elapsed < fadeStart) {
+    return { opacity: 1, translateY: 0, scale: 1 }; // teljes láthatóság
+  }
+  const t = (elapsed - fadeStart) / SPLIT_ANIM_SECONDS; // 0..1, kilépő szakasz
+  return { opacity: Math.max(0, 1 - t), translateY: 0, scale: 1 };
+}
+
 // Másodperc → "1:03.45" vagy "23.45 s" formátum. Exportálva — a ranglista
 // (main.js renderLeaderboard) is ezt használja a köridők megjelenítésére.
 export function fmt(seconds) {
@@ -26,6 +48,7 @@ export function createHud(onRestart) {
   const wrongWayEl = document.getElementById('wrongway');
   const invalidLapEl = document.getElementById('invalidlap');
   const restartEl = document.getElementById('restart');
+  const sectorDeltaEl = document.getElementById('sectordelta');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
 
@@ -47,6 +70,25 @@ export function createHud(onRestart) {
     timeEl.style.color = invalidLap ? '#ff6b4a' : '';
     invalidLapEl.style.display = invalidLap ? 'flex' : 'none';
     bestEl.textContent = fmt(race.bestLapTime);
+
+    // Szektor-delta: a legutóbb átszelt checkponton mérve, a legjobb kör
+    // UGYANOTT mért idejéhez képest (lásd sim/race.js lastSplitDelta/lastSplitAt)
+    // — jelvény-szerű kijelző nyíl-ikonnal, be-/kicsengő animációval
+    // (splitAnimStyle), amíg el nem telik SPLIT_DISPLAY_SECONDS.
+    const elapsed = race.lastSplitAt != null ? race.time - race.lastSplitAt : Infinity;
+    const showSplit = race.phase === 'racing' && race.lastSplitDelta != null && elapsed < SPLIT_DISPLAY_SECONDS;
+    if (showSplit) {
+      const d = race.lastSplitDelta;
+      const faster = d <= 0;
+      sectorDeltaEl.innerHTML =
+        `<span class="arrow">${faster ? '▼' : '▲'}</span><span>${faster ? '' : '+'}${d.toFixed(2)} s</span>`;
+      sectorDeltaEl.className = faster ? 'faster' : 'slower';
+      const { opacity, translateY, scale } = splitAnimStyle(elapsed);
+      sectorDeltaEl.style.opacity = String(opacity);
+      sectorDeltaEl.style.transform = `translateX(-50%) translateY(${translateY}px) scale(${scale})`;
+    } else {
+      sectorDeltaEl.style.opacity = '0';
+    }
 
     // Középső overlay: visszaszámlálás → GO! → (verseny közben semmi) → cél-eredmény.
     if (race.phase === 'countdown') {

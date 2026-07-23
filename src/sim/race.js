@@ -27,6 +27,12 @@ export function createRaceState(totalLaps) {
     wrongWaySeconds: 0, // s — mióta halad elfelé (türelmi idő számláló)
     lapValid: true, // az AKTUÁLIS kör érvényes-e — ha a kör alatt letér a pályáról
     //                (fűre/sarokvágás), false lesz, és a köridő nem számít a legjobbhoz.
+    currentSplits: [], // s[] — az AKTUÁLIS kör eddigi checkpont-időpillanatai (lapStartTime-tól)
+    bestLapSplits: null, // s[] — a legjobb (érvényes) kör checkpont-időpillanatai, ua. indexeléssel
+    lastSplitDelta: null, // s — a legutóbb átszelt checkpointnál mért idő - a legjobb kör UGYANAZON
+    //                        checkpontjának ideje (negatív = gyorsabb, pozitív = lassabb). A HUD
+    //                        ezt (és lastSplitAt-et) egy pár másodperces zöld/piros jelzéshez használja.
+    lastSplitAt: null, // s — versenyidő, amikor a lastSplitDelta született (a HUD ebből tudja, mikor tűnjön el)
   };
 }
 
@@ -69,7 +75,9 @@ function segmentsCross(p1, p2, q1, q2) {
 
 // Egy fizika-lépésnyi verseny-frissítés. MUTÁLJA a state-et (determinisztikusan),
 // és eseménylistát ad vissza (HUD/hang/hálózat reagálhat rá):
-//   {type:'go'} | {type:'checkpoint', index} | {type:'lap', lapTime} | {type:'finish', totalTime}
+//   {type:'go'} | {type:'checkpoint', index, splitTime?, delta?} | {type:'lap', lapTime} | {type:'finish', totalTime}
+// A `delta` (lásd state.lastSplitDelta is) csak sorrend szerinti checkpointnál
+// van jelen, és csak ha már van referencia (state.bestLapSplits).
 // A `checkpoints` paraméterben kapja a pálya keresztvonalait (kliensen a track.js
 // singletonét, szerveren a szoba trackState-jét) — így a modul pálya-független.
 // `offTrack` (bool): a hívó adja meg, hogy az autó JELENLEG a pályán kívül van-e
@@ -125,7 +133,22 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = fa
   if (crossedCheckpoint !== 0) {
     // Köztes checkpoint: lépünk a következőre (a 3. után a 0 = célvonal jön).
     state.nextCheckpoint = (crossedCheckpoint + 1) % checkpoints.length;
-    events.push({ type: 'checkpoint', index: state.nextCheckpoint });
+    // Szektoridő/delta CSAK a SORREND SZERINTI (nem sarok-vágással átugrott)
+    // checkpointoknál van értelme — az indexük (currentSplits.length) körről
+    // körre UGYANAZT a pálya-szakaszt jelenti, ezért összevethető a legjobb
+    // kör ugyanolyan indexű split-idejével. Átugrott checkpointnál (foundOffset>0)
+    // a kör úgyis érvénytelen lesz, nincs mit összevetni.
+    if (foundOffset === 0) {
+      const splitTime = state.time - state.lapStartTime;
+      const sectorIndex = state.currentSplits.length;
+      state.currentSplits.push(splitTime);
+      const refSplit = state.bestLapSplits ? state.bestLapSplits[sectorIndex] : null;
+      state.lastSplitDelta = refSplit != null ? splitTime - refSplit : null;
+      state.lastSplitAt = state.time;
+      events.push({ type: 'checkpoint', index: state.nextCheckpoint, splitTime, delta: state.lastSplitDelta });
+    } else {
+      events.push({ type: 'checkpoint', index: state.nextCheckpoint });
+    }
     return events;
   }
 
@@ -135,10 +158,14 @@ export function raceStep(state, prevPos, currPos, dt, checkpoints, offTrack = fa
   state.lapTimes.push({ time: lapTime, valid });
   state.lastLapTime = lapTime;
   state.lastLapValid = valid;
-  // A legjobb körhöz CSAK érvényes kör számít.
+  // A legjobb körhöz CSAK érvényes kör számít — az ehhez a körhöz tartozó
+  // split-időket (currentSplits) ilyenkor referenciaként elmentjük, hogy a
+  // KÖVETKEZŐ kör checkpointjai ehhez tudjanak delta-t számolni.
   if (valid && (state.bestLapTime === null || lapTime < state.bestLapTime)) {
     state.bestLapTime = lapTime;
+    state.bestLapSplits = state.currentSplits.slice();
   }
+  state.currentSplits = [];
 
   if (state.lap >= state.totalLaps) {
     state.phase = 'finished';

@@ -214,6 +214,36 @@
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
         white-space: nowrap;
       }
+      /* Szektor-delta: a legutóbb átszelt checkponton mérve, a legjobb kör
+         UGYANOTT mért idejéhez képest — jelvény-szerű kijelző, nyíl-ikonnal,
+         be- és kicsengő animációval. Az opacity/transform ÉRTÉKÉT a hud.js
+         számolja minden frame-ben (nincs CSS @keyframes/transition — így
+         két gyorsan egymás utáni split esetén sincs "megakadt" animáció,
+         mindig a friss `elapsed` idő alapján, tisztán számolt állapot). */
+      #sectordelta {
+        position: fixed;
+        top: 132px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 21px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        padding: 9px 20px;
+        border-radius: 999px;
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1.5px solid transparent;
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+        user-select: none;
+        opacity: 0;
+      }
+      #sectordelta .arrow { font-size: 14px; }
+      #sectordelta.faster { color: var(--success); border-color: rgba(47, 174, 102, 0.45); }
+      #sectordelta.slower { color: var(--danger); border-color: rgba(224, 80, 90, 0.45); }
       #restart {
         position: fixed;
         left: 50%;
@@ -689,6 +719,7 @@
       <span>ROSSZ IRÁNY!</span>
     </div>
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
+    <div id="sectordelta"></div>
     <button id="restart">🔄 Új verseny</button>
     <button id="btnQuitRace">← Főmenü</button>
     <div id="ping"></div>
