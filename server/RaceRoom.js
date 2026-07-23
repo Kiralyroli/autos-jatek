@@ -275,7 +275,16 @@ export class RaceRoom extends Room {
       return;
     }
     try {
-      await this.allowReconnection(client, 20);
+      // 20 → 60 mp: localhoston egy pálya/fizika-váltás miatti reload+rejoin
+      // ~1-3 mp (élő hibajelentés szerint ott sosem dob ki), de ÉLESBEN (valós
+      // hálózat, teljes oldal-újratöltés — a JS-bundle + GLB/textúra assetek
+      // letöltése, a Three.js jelenet újraépítése, majd a WS-kézfogás) ez
+      // ÉRDEMBEN tovább tarthat, és a 20 mp-es ablak élesben követhetően
+      // el is fogyott (a szoba emiatt üresen maradt, autoDispose törölte,
+      // mielőtt bárki visszatérhetett volna). 60 mp bőven elég tartalék,
+      // mégsem tartja élve feleslegesen sokáig az üres szobát, ha valaki
+      // TÉNYLEG kilépett hálózat-kieséssel (nem szándékos "Kilépés" gombbal).
+      await this.allowReconnection(client, 60);
       // Sikeres reconnect — a players Map bejegyzése (colorIdx, spawn, stb.)
       // változatlan, csak frissítjük a lobbyt (pl. ha időközben más is változott).
       this.broadcastLobby();

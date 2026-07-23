@@ -85,7 +85,36 @@ app.delete('/api/leaderboard/:trackKey/:physics', (req, res) => {
   res.json({ removed: clearBoard(req.params.trackKey, req.params.physics) });
 });
 
-app.use(express.static(DIST_DIR));
+// Cache-fejlécek — élesben ez rövidíti a pálya/fizika-váltás (vagy bármi más)
+// miatti kliens-reload idejét (a böngésző a MÁR letöltött fájlokat a hálózat
+// helyett a saját cache-éből adja), ami közvetlenül segít a 60 mp-es
+// visszacsatlakozási ablakon belül maradni (lásd RaceRoom.js onLeave).
+// Express `static` alapból NEM cache-el (maxAge=0) — enélkül MINDEN reload
+// újra letölti a teljes JS-bundle-t (~900 KB) + a kiválasztott autó GLB-jét.
+app.use(
+  express.static(DIST_DIR, {
+    setHeaders: (res, filePath) => {
+      if (/\.(js|css)$/.test(filePath)) {
+        // A Vite ezekbe a fájlnevekbe TARTALOM-HASHT tesz (pl. main-XXXX.js)
+        // — a tartalom változásakor MINDIG más fájlnév jön, ezért örökre,
+        // agresszíven cache-elhető (soha nem lesz "elavult" ütközés).
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else if (/\.(glb|png|jpe?g|mp3|wav|ogg)$/.test(filePath)) {
+        // A public/ mappából VÁLTOZATLAN névvel másolt assetek (GLB modellek,
+        // textúrák, hangok) NEM hash-eltek — ha valaha manuálisan lecseréled
+        // ugyanazon a néven (ahogy korábban egy textúránál is történt), az
+        // örök cache makacsul megtartaná a régit. Mérsékelt (1 órás) cache:
+        // a gyakori reload-oknál még mindig sokat segít, de nem ragad be
+        // tartósan.
+        res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+      } else {
+        // index.html/editor.html — MINDIG friss kell legyen, hiszen ez
+        // hivatkozik a ténylegesen aktuális hash-elt JS-fájlokra.
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  })
+);
 
 const httpServer = createServer(app);
 const gameServer = new Server({
