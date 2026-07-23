@@ -122,6 +122,62 @@ Hálózat: WebSocket (nem HTTP-polling). Éles környezetben `wss://` (TLS) kell
 - A statikus kliens (HTML/JS/assetek) bármilyen tárhelyről/CDN-ről mehet — csak a
   Node játékszervernek kell perzisztens process-hosting.
 
+## Ismert buktatók (gotchas)
+
+Ezek a repóban (git-ben) élnek, tehát bármelyik session/fiók/gép automatikusan
+látja őket, szemben a Claude személyes memóriájával, ami gépenként/felhasználónként
+külön van és NEM utazik a projekttel.
+
+**Fejlesztői munkafolyamat:**
+- A Colyseus szerver (`server/*.js`) **NEM hot-reload-ol** — minden szerver-oldali
+  kódváltás után a Node-folyamatot ki kell lőni és újraindítani
+  (`node server/index.js`), különben a régi kód fut tovább. A Vite dev-szerver
+  (kliens-oldal) viszont hot reload-ol.
+- `npm run build` mindig kötelező ellenőrzés kliens-oldali változás után, mielőtt
+  élesben/böngészőben tesztelünk.
+
+**Three.js / render buktatók:**
+- **Winding-order csapda**: kézzel épített `BufferGeometry` + `DoubleSide` anyag
+  esetén, ha a háromszög-bejárási irány (winding) fordított, a `HemisphereLight` a
+  sötét "föld" színt használja a világos "ég" helyett → zöld/fekete tónusú,
+  hibásnak tűnő felület. Javítás: winding ellenőrzése/javítása, majd `FrontSide`
+  használata (ne `DoubleSide`, ha a winding már garantáltan helyes).
+- **"Bowtie" önmetszés**: két, azonos középpontú, de eltérő elforgatású
+  keresztmetszeti pontot sima quaddal összekötve MATEMATIKAILAG garantáltan
+  önmetsző geometriát kapunk (körbeli pontsorrend argumentum). Ilyenkor
+  háromszög-legyezőt (fan) kell használni quad helyett.
+- Kenney GLB-modellek horgony-pontját mindig a TÉNYLEGESEN kiszámított
+  `Box3`-ból vezessük le, sosem hardkódolt konstansból — a node-szintű eltolás
+  modellenként eltérhet.
+
+**Multiplayer / Colyseus buktatók:**
+- **Elkésett kliens-üzenetek**: kliens-autoritatív modellben egy korábbi
+  versenyből/állapotból még "úton lévő" üzenet a szerveri reset UTÁN érkezhet meg
+  (pl. új verseny indításakor). Generációszámláló (`raceGen`) + fázis-ellenőrzés
+  nélkül ez hamis állapotváltásokat okoz (pl. az új verseny azonnal "véget ér").
+- **Reload/rejoin csak `allowReconnection` + `reconnectionToken` +
+  `client.reconnect()`-tel biztonságos** — sima `joinById`-vel történő
+  újracsatlakozás elveszíti a host-szerepet, és ha a szoba emiatt átmenetileg
+  kiürül, a Colyseus `autoDispose` azonnal megszüntetheti, mielőtt bárki
+  visszatérne (pl. host-egyedüli tesztelésnél, vagy pálya/fizika-váltás utáni
+  automatikus reload-nál).
+
+**Verseny-logika buktatók:**
+- A checkpoint-ellenőrzés szigorúan csak a "következő" checkpointot nézve
+  BERAGADHAT, ha sarok-vágással egy checkpointot kihagyunk (a kör sosem
+  fejeződik be). Kell egy előre-néző ablak, ami a kihagyást érvénytelen
+  körként elfogadja, de nem blokkolja a kör lezárását.
+- A `MIN_TURN_RADIUS` validáció szomszédos mintapontokból számolt körüljárt
+  sugara zajos lehet (numerikus zaj a mintavételezésből) — szélesebb ablak
+  (`CURVE_WINDOW`) kell a hamis "túl éles kanyar" hibák ellen.
+
+**Tesztelési környezet-specifikus (Claude-nak, ha böngészőben tesztel):**
+- Ha a böngésző-panel nincs "megjelenítve" (`document.hidden === true`), a
+  `requestAnimationFrame` NEM fut, és a `screenshot` időtúllépést ad. Ilyenkor
+  közvetlen DOM/esemény-kiváltás (`dispatchEvent`, közvetlen függvényhívás) +
+  pixel-szintű (`getImageData`) ellenőrzés a megbízható alternatíva élő
+  játékciklusra támaszkodó vizuális ellenőrzés helyett.
+
 ## Kezdő feladat javaslat
 
 Fázis 1: állítsd fel a projekt vázát (Vite + Phaser + Planck.js), egy pálya zárt
