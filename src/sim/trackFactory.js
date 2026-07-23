@@ -104,23 +104,29 @@ export function createTrackState(layout, opts) {
     return Math.hypot(px - cx, pz - cz);
   }
 
-  // Mennyivel van az (x,z) pont az útszélen KÍVÜL (0, ha az úton van) — a
-  // fű-büntetéshez (sim/car.js updateOffRoadPenalty). A LEGKÖZELEBBI szakasz
-  // két végpontjának width-átlagából számolt félszélességet vonjuk le — így a
-  // szélesebb/keskenyebb szakaszokon máshol kezdődik a fű (szabadvonalas
-  // pályánál); csempés pályánál (nincs width a center-pontokon) a globális
-  // roadHalf marad, változatlanul.
+  // Mennyivel van az (x,z) pont a RÁZÓKÖVÖN (curb) IS TÚL, KÍVÜL (0, ha még
+  // az úton VAGY a rázókövön van) — a fű-büntetéshez (sim/car.js
+  // updateOffRoadPenalty). A rázókő vizuálisan is a pálya része, ezért a
+  // határ nem a puszta aszfalt-szélnél (roadHalf), hanem curbWidth-del
+  // arrébb, a rázókő külső élénél húzódik — enélkül a kocsi már a rázókövön
+  // állva is "letértnek" számított, ami túl érzékenynek hatott. A LEGKÖZELEBBI
+  // szakasz két végpontjának width-átlagából számolt félszélességet vonjuk le
+  // (+curbWidth) — így a szélesebb/keskenyebb szakaszokon máshol kezdődik a fű
+  // (szabadvonalas pályánál); csempés pályánál (nincs width a center-pontokon)
+  // a globális curbEdge marad, változatlanul.
   function offRoadExcess(x, z) {
     const pts = track.center;
     let minDist = Infinity;
-    let localHalf = roadHalf;
+    let localHalf = curbEdge;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i];
       const b = pts[(i + 1) % pts.length];
       const d = pointSegmentDistance(x, z, a.x, a.z, b.x, b.z);
       if (d < minDist) {
         minDist = d;
-        localHalf = Number.isFinite(a.width) && Number.isFinite(b.width) ? (a.width + b.width) / 4 : roadHalf;
+        localHalf = Number.isFinite(a.width) && Number.isFinite(b.width)
+          ? (a.width + b.width) / 4 + curbWidth
+          : curbEdge;
       }
     }
     return Math.max(0, minDist - localHalf);
