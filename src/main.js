@@ -39,6 +39,14 @@ import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
 import { createRoom, joinRoom, reconnectRoom, createSnapshotBuffer } from './net/mpClient.js';
+import { createTrackState } from './sim/trackFactory.js';
+
+// Gyökér-relatív ('/assets/...') utak GitHub Pages al-útvonalára (/autos-jatek/)
+// prefixelve — ugyanaz a minta, mint render3d/assets.js withBase-je (itt egy
+// sima <img src>-hez kell, ami nem megy át a GLTFLoader/TextureLoader-en).
+function withBase(url) {
+  return import.meta.env.BASE_URL.replace(/\/$/, '') + url;
+}
 import {
   loadCustomLayout,
   loadCustomDecorations,
@@ -133,19 +141,42 @@ const nameInput = document.getElementById('playerName');
 const menuStatus = document.getElementById('menuStatus');
 const lobbyStatus = document.getElementById('lobbyStatus');
 
-const trackSelect = document.getElementById('trackSelect');
 const lapsInput = document.getElementById('lapsInput');
-const carSelectEl = document.getElementById('carSelect');
 const physicsSelect = document.getElementById('physicsSelect');
 const leaderboardListEl = document.getElementById('leaderboardList');
 const btnClearLeaderboard = document.getElementById('btnClearLeaderboard');
 
+// --- Autó-választó FELUGRÓ PANEL (lásd index.html #carPicker) — a sok (25+)
+// jármű nem fér el kényelmesen egy 240px-es sidepanelben, ezért egy gomb
+// (#btnPickCar a főmenüben, #btnMpPickCar a multiplayer beállításokban) nyitja
+// meg ugyanazt a tágas, közös rácsot. ---
+const carPickerEl = document.getElementById('carPicker');
+const carPickerGridEl = document.getElementById('carPickerGrid');
+const btnCarPickerClose = document.getElementById('btnCarPickerClose');
+const btnPickCar = document.getElementById('btnPickCar');
+const carPickThumb = document.getElementById('carPickThumb');
+const carPickName = document.getElementById('carPickName');
+const btnMpPickCar = document.getElementById('btnMpPickCar');
+const mpCarPickThumb = document.getElementById('mpCarPickThumb');
+const mpCarPickName = document.getElementById('mpCarPickName');
+
+// --- Pálya-választó FELUGRÓ PANEL (lásd index.html #trackPicker) — ugyanaz a
+// minta, mint az autó-választónál, csak a kártyákon egy kis pálya-RAJZ van
+// (lásd drawTrackThumb) a puszta név helyett. ---
+const trackPickerEl = document.getElementById('trackPicker');
+const trackPickerGridEl = document.getElementById('trackPickerGrid');
+const btnTrackPickerClose = document.getElementById('btnTrackPickerClose');
+const btnPickTrack = document.getElementById('btnPickTrack');
+const trackPickCanvas = document.getElementById('trackPickCanvas');
+const trackPickName = document.getElementById('trackPickName');
+const btnMpPickTrack = document.getElementById('btnMpPickTrack');
+const mpTrackPickCanvas = document.getElementById('mpTrackPickCanvas');
+const mpTrackPickName = document.getElementById('mpTrackPickName');
+
 // --- Multiplayer beállítások panel (autó BÁRKI, pálya/körök/fizika a host) —
 // a lobbiból ÉS a végeredmény-panelről is előhozható (lásd startMultiplayer). ---
 const mpSettingsEl = document.getElementById('mpSettings');
-const mpCarSelectEl = document.getElementById('mpCarSelect');
 const mpHostSettingsEl = document.getElementById('mpHostSettings');
-const mpTrackSelect = document.getElementById('mpTrackSelect');
 const mpLapsInput = document.getElementById('mpLapsInput');
 const mpPhysicsSelect = document.getElementById('mpPhysicsSelect');
 const btnMpApplySettings = document.getElementById('btnMpApplySettings');
@@ -154,43 +185,210 @@ const btnMpSettingsClose = document.getElementById('btnMpSettingsClose');
 const btnLobbySettings = document.getElementById('btnLobbySettings');
 const btnResultsSettings = document.getElementById('btnResultsSettings');
 
-// A trackSelect "Alap pálya" (value="") opciójának is kell egy trackKey (a
-// beépített DEFAULT_LAYOUT hash-e), hogy a ranglista rá is tudjon szűrni —
-// a katalógusból jövő pályák trackKey-jét a szerver adja (lásd populateTrackSelect).
-const defaultTrackOption = trackSelect.querySelector('option[value=""]');
-if (defaultTrackOption) defaultTrackOption.dataset.trackKey = hashLayout(DEFAULT_LAYOUT);
-
-// Autó-választó: a CARS listából kattintható kártyák. A választás perzisztál, a
-// 3D-előnézet (carMesh) azonnal a választott autóra vált (setPlayerCar). A
-// FŐMENÜBEN (carSelectEl) ÉS a multiplayer beállítások panelen (mpCarSelectEl,
-// lásd startMultiplayer) is ugyanez jelenik meg — mindkét konténer újrarajzolódik,
-// bármelyikben választva (`carSelectContainers`), és multiplayerben a választás
-// a szervernek is elküldődik (`onCarChanged`, csak ott van beállítva).
-const carSelectContainers = [carSelectEl];
+// Autó-választó: a CARS listából kattintható kártyák a #carPicker felugró
+// panelben (index.html). A választás perzisztál, a 3D-előnézet (carMesh)
+// azonnal a választott autóra vált (setPlayerCar), a KÉT trigger-gomb
+// (főmenü + multiplayer beállítások) mindig a jelenlegi választást mutatja
+// (updateCarPickButtons). Multiplayerben a választás a szervernek is
+// elküldődik (`onCarChanged`, csak ott van beállítva).
 let onCarChanged = null;
 
-function renderCarSelectInto(container) {
-  container.innerHTML = '';
+function renderCarPickerGrid() {
+  carPickerGridEl.innerHTML = '';
   CARS.forEach((c, i) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'carswatch' + (i === selectedCar ? ' active' : '');
-    btn.innerHTML = `<span class="dot" style="background:${c.color}"></span>${c.name}`;
+    // Kép-előnézet (Kenney Car Kit preview), HOGY LÁTSZÓDJON az autó, ne csak
+    // a neve — lásd config.js CARS[].preview. A sarok-pötty (dot) a
+    // névtábla/állás-jelölő SZÍNÉT mutatja továbbra is, kis kiegészítőként.
+    btn.innerHTML = `
+      <span class="dot" style="background:${c.color}"></span>
+      <img class="carThumb" src="${withBase(c.preview)}" alt="" draggable="false" />
+      <span class="carName">${c.name}</span>
+    `;
     btn.onclick = () => {
-      if (i === selectedCar) return;
       selectedCar = i;
       localStorage.setItem('autos-jatek:carIdx', String(i));
-      renderCarSelect();
       setPlayerCar(i);
+      updateCarPickButtons();
       if (onCarChanged) onCarChanged(i);
+      closeCarPicker(); // választás = kész, a modal automatikusan bezáródik
     };
-    container.appendChild(btn);
+    carPickerGridEl.appendChild(btn);
   });
 }
-function renderCarSelect() {
-  for (const el of carSelectContainers) renderCarSelectInto(el);
+
+// A KÉT trigger-gomb (főmenü #btnPickCar + multiplayer #btnMpPickCar) kis
+// előnézete — mindig a JELENLEGI választást mutatja, akkor is, ha az a másik
+// gombon/panelen (vagy a hálózaton, lásd onCarChanged) keresztül változott.
+function updateCarPickButtons() {
+  const c = CARS[selectedCar % CARS.length];
+  carPickThumb.src = withBase(c.preview);
+  carPickName.textContent = c.name;
+  mpCarPickThumb.src = withBase(c.preview);
+  mpCarPickName.textContent = c.name;
 }
-renderCarSelect();
+
+function openCarPicker() {
+  renderCarPickerGrid();
+  carPickerEl.style.display = 'flex';
+}
+function closeCarPicker() {
+  carPickerEl.style.display = 'none';
+}
+btnPickCar.onclick = openCarPicker;
+btnMpPickCar.onclick = openCarPicker;
+btnCarPickerClose.onclick = closeCarPicker;
+updateCarPickButtons();
+
+// Pálya-választó: a globális katalógusból (szerver, lásd trackApi.js) kattintható
+// kártyák a #trackPicker felugró panelben — mindegyiken egy kis RAJZ (canvas),
+// ugyanazzal a bbox-illesztéses skálázással, mint a versenyközbeni minitérkép
+// (lásd minimap.js) — hogy LÁTSZÓDJON a pálya alakja, ne csak a neve.
+//
+// A FŐMENÜ és a MULTIPLAYER BEÁLLÍTÁSOK (host) EGYMÁSTÓL FÜGGETLEN kiválasztást
+// tartanak (ugyanúgy, ahogy korábban a két külön <select> is független volt) —
+// innen az `openTrackPicker(target)` 'menu'/'mp' paramétere.
+let trackCatalog = null; // [{id,name,trackKey,...}] — egyszer lekérve, újrahasznosítva
+let selectedTrackId = ''; // '' = beépített Alap pálya (főmenü)
+let selectedTrackName = 'Alap pálya';
+let mpSelectedTrackId = ''; // ua., de a multiplayer beállítások panelen
+let mpSelectedTrackName = 'Alap pálya';
+
+// A pálya-rajzokhoz kellő középvonal-pontok id→pontok gyorsítótára — a katalógus
+// csak metaadatot ad (lásd server/trackStore.js listTracks), a teljes layoutot
+// (és belőle a rajzhoz a középvonalat) csak igény szerint, egyszer töltjük le.
+const trackCenterCache = new Map();
+trackCenterCache.set(
+  '',
+  createTrackState(DEFAULT_LAYOUT, {
+    tile: TRACK.tile,
+    curbWidth: 0,
+    gravelWidth: 0,
+    checkpointCount: 1,
+    start: TRACK.start,
+  }).track.center
+);
+
+async function loadTrackCatalog() {
+  if (trackCatalog) return trackCatalog;
+  try {
+    trackCatalog = await apiListTracks();
+  } catch {
+    trackCatalog = []; // szerver nem elérhető — marad csak az "Alap pálya"
+  }
+  return trackCatalog;
+}
+function findCatalogEntry(id) {
+  return (trackCatalog || []).find((t) => t.id === id) || null;
+}
+async function getTrackCenter(id) {
+  if (trackCenterCache.has(id)) return trackCenterCache.get(id);
+  let center = null;
+  try {
+    const t = await apiGetTrack(id);
+    center = createTrackState(t.layout, {
+      tile: TRACK.tile,
+      curbWidth: 0,
+      gravelWidth: 0,
+      checkpointCount: 1,
+      start: TRACK.start,
+    }).track.center;
+  } catch {
+    /* a kártya rajz nélkül, csak névvel marad — nem törik el a választó */
+  }
+  trackCenterCache.set(id, center);
+  return center;
+}
+
+// A minimap.js-ével AZONOS elvű (bbox-illesztéses, torzításmentes) rajz, csak
+// statikus (nincsenek versenyző-pontok) és kis canvasra méretezve.
+function drawTrackThumb(canvas, centerPoints) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const PAD = 5;
+  ctx.clearRect(0, 0, W, H);
+  if (!centerPoints || centerPoints.length === 0) return;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const p of centerPoints) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  const worldW = Math.max(1, maxX - minX);
+  const worldH = Math.max(1, maxZ - minZ);
+  const scale = Math.min((W - PAD * 2) / worldW, (H - PAD * 2) / worldH);
+  const offX = (W - worldW * scale) / 2;
+  const offY = (H - worldH * scale) / 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  centerPoints.forEach((p, i) => {
+    const cx = offX + (p.x - minX) * scale;
+    const cy = offY + (p.z - minZ) * scale;
+    if (i === 0) ctx.moveTo(cx, cy);
+    else ctx.lineTo(cx, cy);
+  });
+  ctx.closePath();
+  ctx.stroke();
+}
+
+async function renderTrackPickerGrid(target) {
+  await loadTrackCatalog();
+  const currentId = target === 'mp' ? mpSelectedTrackId : selectedTrackId;
+  const entries = [{ id: '', name: 'Alap pálya (beépített)' }, ...trackCatalog];
+  trackPickerGridEl.innerHTML = '';
+  for (const t of entries) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    // Ugyanaz a kártya-CSS ('carswatch'), mint az autó-választónál (lásd
+    // index.html .carSelectGrid .carswatch) — csak a belső elem tér el
+    // (canvas.trackThumb egy img.carThumb helyett).
+    btn.className = 'carswatch' + (t.id === currentId ? ' active' : '');
+    btn.innerHTML = `<canvas class="trackThumb" width="130" height="88"></canvas><span class="carName">${t.name}</span>`;
+    btn.onclick = () => {
+      if (target === 'mp') {
+        mpSelectedTrackId = t.id;
+        mpSelectedTrackName = t.name;
+        updateMpTrackPickButton();
+      } else {
+        selectedTrackId = t.id;
+        selectedTrackName = t.name;
+        updateTrackPickButton();
+        renderLeaderboard();
+      }
+      closeTrackPicker();
+    };
+    trackPickerGridEl.appendChild(btn);
+    const canvas = btn.querySelector('canvas');
+    getTrackCenter(t.id).then((center) => drawTrackThumb(canvas, center));
+  }
+}
+
+function updateTrackPickButton() {
+  trackPickName.textContent = selectedTrackName;
+  getTrackCenter(selectedTrackId).then((center) => drawTrackThumb(trackPickCanvas, center));
+}
+function updateMpTrackPickButton() {
+  mpTrackPickName.textContent = mpSelectedTrackName;
+  getTrackCenter(mpSelectedTrackId).then((center) => drawTrackThumb(mpTrackPickCanvas, center));
+}
+function openTrackPicker(target) {
+  renderTrackPickerGrid(target);
+  trackPickerEl.style.display = 'flex';
+}
+function closeTrackPicker() {
+  trackPickerEl.style.display = 'none';
+}
+btnPickTrack.onclick = () => openTrackPicker('menu');
+btnMpPickTrack.onclick = () => openTrackPicker('mp');
+btnTrackPickerClose.onclick = closeTrackPicker;
 
 // --- Dev mód (?dev=1): pálya-szerkesztő link + élő autó-hangoló panel ---
 // A szerkesztő linkje csak dev módban látszik (maga az editor.html is átirányít
@@ -254,40 +452,28 @@ const initialTrackSig = JSON.stringify({
   d: loadCustomDecorations(),
 });
 
-// A pálya-választó feltöltése a globális katalógusból. Alapból a főmenü
-// trackSelect-jét tölti fel; a multiplayer beállítások panel saját
-// mpTrackSelect-je (lásd startMultiplayer) is ugyanezt hívja, más `select`
-// paraméterrel és `preselectName`-mel (ott nem a lokális aktív pálya, hanem a
-// SZOBA jelenlegi pályája számít).
-async function populateTrackSelect(select = trackSelect, preselectName = getActiveTrackName()) {
-  let tracks = [];
-  try {
-    tracks = await apiListTracks();
-  } catch {
-    return; // szerver nem elérhető — marad csak az "Alap pálya" opció
-  }
-  for (const t of tracks) {
-    const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.name;
-    opt.dataset.trackKey = t.trackKey;
-    if (t.name === preselectName) opt.selected = true;
-    select.appendChild(opt);
-  }
-  if (select === trackSelect) {
-    // opt.selected = true nem vált ki 'change' eseményt — a ranglistát itt
-    // explicit újra kell rajzolni, ha időközben a katalógusból jött egy aktív pálya.
-    renderLeaderboard();
-  }
+// A főmenü kezdeti pálya-kiválasztása: a katalógus betöltése után, ha a
+// localStorage aktív pályája (getActiveTrackName) egyezik egy katalógus-
+// bejegyzés nevével, azt jelöljük ki — egyébként marad az "Alap pálya".
+// Ugyanaz a preselect-logika, mint korábban a <select>-es populateTrackSelect
+// vitte véghez; itt a #btnPickTrack gombot és a ranglistát frissíti.
+async function initTrackSelection() {
+  await loadTrackCatalog();
+  const activeName = getActiveTrackName();
+  const match = activeName ? trackCatalog.find((t) => t.name === activeName) : null;
+  selectedTrackId = match ? match.id : '';
+  selectedTrackName = match ? match.name : 'Alap pálya';
+  updateTrackPickButton();
+  renderLeaderboard();
 }
 
-// A kiválasztott pálya-opció ranglista-azonosítója + neve (a trackSelect
-// dataset.trackKey mezőjéből — lásd populateTrackSelect és a defaultTrackOption).
+// A kiválasztott pálya ranglista-azonosítója + neve (lásd selectedTrackId/
+// selectedTrackName fent, illetve findCatalogEntry a trackKey-hez).
 function currentTrackInfo() {
-  const opt = trackSelect.selectedOptions[0];
+  const entry = findCatalogEntry(selectedTrackId);
   return {
-    trackKey: opt?.dataset.trackKey || hashLayout(DEFAULT_LAYOUT),
-    trackName: opt?.textContent || 'Alap pálya',
+    trackKey: entry?.trackKey || hashLayout(DEFAULT_LAYOUT),
+    trackName: selectedTrackName,
   };
 }
 
@@ -336,7 +522,6 @@ async function renderLeaderboard() {
   }
 }
 
-trackSelect.addEventListener('change', renderLeaderboard);
 physicsSelect.addEventListener('change', renderLeaderboard);
 btnClearLeaderboard.addEventListener('click', async () => {
   const { trackKey, trackName } = currentTrackInfo();
@@ -351,7 +536,7 @@ renderLeaderboard();
 // egy "pending" akcióval — az oldal újratöltése után a config.js már az új
 // pályával épül, és a pending akció automatikusan lefut.
 async function playWithSelectedTrack(action) {
-  const id = trackSelect.value;
+  const id = selectedTrackId;
   menuStatus.textContent = 'Pálya betöltése…';
   try {
     if (id) {
@@ -777,18 +962,23 @@ async function startMultiplayer(room) {
   let mpPhysicsName = DEFAULT_PHYSICS;
   let mpTrackListLoaded = false;
 
-  carSelectContainers.push(mpCarSelectEl);
   onCarChanged = (i) => room.send('setCar', i);
 
-  function openMpSettings() {
+  async function openMpSettings() {
     mpSettingsStatus.textContent = '';
     mpHostSettingsEl.style.display = isHost ? 'block' : 'none';
-    renderCarSelect();
+    updateCarPickButtons();
     if (isHost) {
       if (!mpTrackListLoaded) {
         mpTrackListLoaded = true;
-        populateTrackSelect(mpTrackSelect, mpTrackName);
+        await loadTrackCatalog();
+        // Preselect: a szoba JELENLEGI pályáját (mpTrackName, a szervertől)
+        // keressük névre a katalógusban — ua. elv, mint korábban a <select>.
+        const match = trackCatalog.find((t) => t.name === mpTrackName);
+        mpSelectedTrackId = match ? match.id : '';
+        mpSelectedTrackName = match ? match.name : 'Alap pálya';
       }
+      updateMpTrackPickButton();
       mpLapsInput.value = String(mpTotalLaps);
       mpPhysicsSelect.value = mpPhysicsName;
     }
@@ -806,7 +996,7 @@ async function startMultiplayer(room) {
     mpSettingsStatus.textContent = 'Alkalmazás…';
     btnMpApplySettings.disabled = true;
     try {
-      const id = mpTrackSelect.value;
+      const id = mpSelectedTrackId;
       let layout;
       let decorations;
       let trackName;
@@ -1248,6 +1438,6 @@ if (rejoinRaw) {
   else doCreate();
 } else {
   menuEl.style.display = 'flex';
-  populateTrackSelect();
+  initTrackSelection();
 }
 requestAnimationFrame(idleFrame);

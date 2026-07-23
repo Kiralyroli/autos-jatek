@@ -56,17 +56,46 @@ export const ASSETS = {
 // Választható autók (menü autó-választó). A játékos-index (colorIdx a hálón) EZ a
 // lista indexe — így multiplayerben mindenki a másik VÁLASZTOTT autóját látja.
 //   model: a GLB útvonala.
+//   preview: kis (64×64) kép-ikon a választó-kártyához (lásd main.js
+//     renderCarSelectInto) — hogy a felhasználó LÁSSA, nem csak névből találgassa
+//     az autót. A Kenney Car Kit hivatalos előnézeti képei (Previews/*.png).
 //   color/icon: a névtábla/állás jelölőszíne és ikonja.
-//   colormap: HA a modell TEXTÚRÁS (Car Kit, pl. car.glb) — ekkor a Kenney
-//     szín-atlaszt rá kell tenni. A Racing Kit versenyautói TEXTÚRA NÉLKÜLIEK
-//     (anyag-baseColor a színük), nekik nincs colormap → a natív színük marad.
-// A kétféle Kit így KEVERHETŐ egy listában (lásd main.js setPlayerCar/ensureMesh).
+//   colormap: HA a modell TEXTÚRÁS (Car Kit) — ekkor a Kenney szín-atlaszt rá
+//     kell tenni (lásd ASSETS.car.colormap — a teljes Car Kit EGY közös atlaszt
+//     használ, minden modellnél ugyanaz a fájl). A Racing Kit versenyautói
+//     TEXTÚRA NÉLKÜLIEK (anyag-baseColor a színük), nekik nincs colormap → a
+//     natív színük marad. A kétféle Kit így KEVERHETŐ egy listában (lásd
+//     main.js setPlayerCar/ensureMesh).
+//
+// A teljes Kenney Car Kit (public/assets/carkit/, felhasználó által letöltve és
+// kicsomagolva) — minden benne lévő JÁRMŰ (kerék/roncs-darabok/doboz/kúp nélkül)
+// választható.
 export const CARS = [
-  { name: 'Piros', model: '/assets/track/raceCarRed.glb', color: '#ff4b3e', icon: '🔴' },
-  { name: 'Zöld', model: '/assets/track/raceCarGreen.glb', color: '#3a9d40', icon: '🟢' },
-  { name: 'Narancs', model: '/assets/track/raceCarOrange.glb', color: '#e08a2a', icon: '🟠' },
-  { name: 'Fehér', model: '/assets/track/raceCarWhite.glb', color: '#e6e8ec', icon: '⚪' },
-  { name: 'Gokart', model: '/assets/car.glb', color: '#5a86d8', icon: '🔵', colormap: '/assets/car-colormap.png' },
+  { name: 'Mentőautó', model: '/assets/carkit/ambulance.glb', preview: '/assets/carkit-previews/ambulance.png', color: '#e6e8ec', icon: '🚑', colormap: true },
+  { name: 'Szállító furgon', model: '/assets/carkit/delivery.glb', preview: '/assets/carkit-previews/delivery.png', color: '#4caf6b', icon: '🚚', colormap: true },
+  { name: 'Nyitott platós furgon', model: '/assets/carkit/delivery-flat.glb', preview: '/assets/carkit-previews/delivery-flat.png', color: '#e08a2a', icon: '🛻', colormap: true },
+  { name: 'Tűzoltóautó', model: '/assets/carkit/firetruck.glb', preview: '/assets/carkit-previews/firetruck.png', color: '#e6432f', icon: '🚒', colormap: true },
+  { name: 'Kukásautó', model: '/assets/carkit/garbage-truck.glb', preview: '/assets/carkit-previews/garbage-truck.png', color: '#3a9d40', icon: '🗑️', colormap: true },
+  { name: 'Sport ferdehátú', model: '/assets/carkit/hatchback-sports.glb', preview: '/assets/carkit-previews/hatchback-sports.png', color: '#54c17a', icon: '🚗', colormap: true },
+  { name: 'Gokart (levendula)', model: '/assets/carkit/kart-oobi.glb', preview: '/assets/carkit-previews/kart-oobi.png', color: '#b39ddb', icon: '🏎️', colormap: true },
+  { name: 'Gokart (sárga)', model: '/assets/carkit/kart-oodi.glb', preview: '/assets/carkit-previews/kart-oodi.png', color: '#f4c542', icon: '🏎️', colormap: true },
+  { name: 'Gokart (türkiz)', model: '/assets/carkit/kart-ooli.glb', preview: '/assets/carkit-previews/kart-ooli.png', color: '#4fd1c5', icon: '🏎️', colormap: true },
+  { name: 'Gokart (lila)', model: '/assets/carkit/kart-oopi.glb', preview: '/assets/carkit-previews/kart-oopi.png', color: '#9575cd', icon: '🏎️', colormap: true },
+  { name: 'Gokart (kék)', model: '/assets/carkit/kart-oozi.glb', preview: '/assets/carkit-previews/kart-oozi.png', color: '#64b5f6', icon: '🏎️', colormap: true },
+  { name: 'Rendőrautó', model: '/assets/carkit/police.glb', preview: '/assets/carkit-previews/police.png', color: '#7e8ce0', icon: '🚓', colormap: true },
+  { name: 'Versenyautó', model: '/assets/carkit/race.glb', preview: '/assets/carkit-previews/race.png', color: '#ff4b3e', icon: '🏁', colormap: true },
+  { name: 'Futurisztikus versenyautó', model: '/assets/carkit/race-future.glb', preview: '/assets/carkit-previews/race-future.png', color: '#3b5bdb', icon: '🚀', colormap: true },
+  { name: 'Szedán', model: '/assets/carkit/sedan.glb', preview: '/assets/carkit-previews/sedan.png', color: '#8f8fae', icon: '🚘', colormap: true },
+  { name: 'Sport szedán', model: '/assets/carkit/sedan-sports.glb', preview: '/assets/carkit-previews/sedan-sports.png', color: '#ff6659', icon: '🚗', colormap: true },
+  { name: 'Terepjáró', model: '/assets/carkit/suv.glb', preview: '/assets/carkit-previews/suv.png', color: '#6b8f71', icon: '🚙', colormap: true },
+  { name: 'Luxus terepjáró', model: '/assets/carkit/suv-luxury.glb', preview: '/assets/carkit-previews/suv-luxury.png', color: '#5c527f', icon: '🚙', colormap: true },
+  { name: 'Taxi', model: '/assets/carkit/taxi.glb', preview: '/assets/carkit-previews/taxi.png', color: '#ffd54f', icon: '🚕', colormap: true },
+  { name: 'Traktor', model: '/assets/carkit/tractor.glb', preview: '/assets/carkit-previews/tractor.png', color: '#558b4f', icon: '🚜', colormap: true },
+  { name: 'Rendőr-traktor', model: '/assets/carkit/tractor-police.glb', preview: '/assets/carkit-previews/tractor-police.png', color: '#9fa8da', icon: '🚔', colormap: true },
+  { name: 'Homlokrakodó traktor', model: '/assets/carkit/tractor-shovel.glb', preview: '/assets/carkit-previews/tractor-shovel.png', color: '#6d9e5a', icon: '🚜', colormap: true },
+  { name: 'Teherautó', model: '/assets/carkit/truck.glb', preview: '/assets/carkit-previews/truck.png', color: '#7c6fa8', icon: '🚛', colormap: true },
+  { name: 'Nyitott platós teherautó', model: '/assets/carkit/truck-flat.glb', preview: '/assets/carkit-previews/truck-flat.png', color: '#5e8f6b', icon: '🚛', colormap: true },
+  { name: 'Kisbusz', model: '/assets/carkit/van.glb', preview: '/assets/carkit-previews/van.png', color: '#4a6fdc', icon: '🚐', colormap: true },
 ];
 
 // Hang (Web Audio API). Valós hangfájl HA van (ASSETS.sounds), különben szintetizált.

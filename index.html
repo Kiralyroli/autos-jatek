@@ -403,25 +403,85 @@
         background: var(--panel);
         color: var(--text);
       }
-      /* Autó-választó kártyák — a bal oldali sidepanelben ÉS a multiplayer
-         beállítások panelen (lásd #mpCarSelect) is, egy oszlopban. */
-      .carSelectGrid {
-        display: flex;
-        flex-direction: column;
-        gap: 7px;
-      }
-      .carSelectGrid .carswatch {
+      /* Autó-VÁLASZTÓ GOMB — a bal oldali sidepanelben ÉS a multiplayer
+         beállítások panelen (lásd #btnMpPickCar) is: az AKTUÁLIS autó kis
+         előnézetét mutatja, kattintásra a #carPicker felugró panelt nyitja
+         (lásd lent) — így a teljes, sok-elemes választó NEM a szűk 240px-es
+         sidepanelbe kell hogy beférjen, hanem egy tágas, külön panelbe. */
+      .carPickBtn {
         display: flex;
         align-items: center;
-        gap: 9px;
-        padding: 10px 12px;
+        gap: 10px;
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        background: var(--panel-soft);
+        color: var(--text);
+        font-family: var(--font);
         font-size: 14px;
+        cursor: pointer;
+        transition: border-color 0.15s ease;
+      }
+      .carPickBtn:hover { border-color: rgba(255, 255, 255, 0.22); }
+      .carPickBtn .carThumb { width: 36px; height: 36px; object-fit: contain; flex-shrink: 0; }
+      /* A pálya-választó gombon egy kis RAJZ (canvas) van kép helyett — lásd
+         main.js drawTrackThumb / #btnPickTrack, #btnMpPickTrack. */
+      .carPickBtn .trackThumbSmall {
+        width: 48px;
+        height: 32px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.04);
+        flex-shrink: 0;
+      }
+      .carPickBtn .carPickName { flex: 1; text-align: left; }
+      .carPickBtn .chev { color: var(--text-dim); font-size: 12px; }
+
+      /* Autó-választó ÉS pálya-választó felugró panel (#carPicker / #trackPicker)
+         — KÉP/RAJZ-ELŐNÉZETES rács, a teljes ablakhoz mérten tágas (nem a
+         240px-es sidepanelhez), hogy a sok elem kényelmesen elférjen (lásd
+         main.js openCarPicker / openTrackPicker). */
+      #carPicker, #trackPicker { z-index: 30; } /* a menü/mpSettings FÖLÉ, ha azok is nyitva vannak */
+      #carPicker .panel, #trackPicker .panel { width: 640px; max-width: 94vw; }
+      /* A pálya-kártyák szélesebb, alacsonyabb rajzot kapnak (nem négyzet
+         thumbnail, mint az autóké) — lásd main.js drawTrackThumb. */
+      .carSelectGrid .carswatch .trackThumb {
+        width: 100%;
+        height: 72px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .carSelectGrid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        max-height: 62vh;
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+      @media (max-width: 560px) {
+        .carSelectGrid { grid-template-columns: repeat(3, 1fr); }
+      }
+      .carSelectGrid .carswatch {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 9px 6px 8px;
+        font-size: 12px;
+        line-height: 1.25;
+        text-align: center;
         border: 1px solid var(--panel-border);
         border-radius: 9px;
         background: var(--panel-soft);
         color: var(--text);
         cursor: pointer;
         transition: background 0.15s ease, border-color 0.15s ease;
+        /* Grid-elemek alapból nem zsugorodnának a tartalom (hosszú szó, pl.
+           "Homlokrakodó") min-content szélessége alá — ez nélküle túlnyújtotta
+           a rácsot a panel szélén, vízszintes csúszkát okozva. */
+        min-width: 0;
       }
       .carSelectGrid .carswatch:hover {
         border-color: rgba(255, 255, 255, 0.2);
@@ -431,11 +491,24 @@
         background: var(--accent-soft);
       }
       .carSelectGrid .carswatch .dot {
-        width: 15px;
-        height: 15px;
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
         border: 1px solid rgba(255, 255, 255, 0.35);
         flex-shrink: 0;
+      }
+      .carSelectGrid .carswatch .carThumb {
+        width: 56px;
+        height: 56px;
+        object-fit: contain;
+        pointer-events: none;
+      }
+      .carSelectGrid .carswatch .carName {
+        pointer-events: none;
+        overflow-wrap: break-word;
       }
       #mpSettings .panel { max-width: 420px; }
       #mpSettings h1 { font-size: 20px; }
@@ -616,16 +689,22 @@
       <div class="menuLayout">
         <div class="panel sidepanel">
           <h2>🚗 Autó</h2>
-          <div id="carSelect" class="carSelectGrid"></div>
+          <button id="btnPickCar" type="button" class="carPickBtn">
+            <img id="carPickThumb" class="carThumb" src="" alt="" draggable="false" />
+            <span id="carPickName" class="carPickName"></span>
+            <span class="chev">▾</span>
+          </button>
         </div>
         <div class="panel">
           <h1>🏎️ Autós játék</h1>
           <label for="playerName">Neved</label>
           <input id="playerName" maxlength="20" placeholder="Játékos" />
-          <label for="trackSelect">Pálya</label>
-          <select id="trackSelect">
-            <option value="">🏁 Alap pálya (beépített)</option>
-          </select>
+          <label>Pálya</label>
+          <button id="btnPickTrack" type="button" class="carPickBtn">
+            <canvas id="trackPickCanvas" class="trackThumbSmall" width="72" height="48"></canvas>
+            <span id="trackPickName" class="carPickName"></span>
+            <span class="chev">▾</span>
+          </button>
           <label for="lapsInput">Körök száma</label>
           <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
           <label for="physicsSelect">Autó-fizika</label>
@@ -685,13 +764,19 @@
       <div class="panel">
         <h1>⚙️ Beállítások</h1>
         <label>Autód</label>
-        <div id="mpCarSelect" class="carSelectGrid"></div>
+        <button id="btnMpPickCar" type="button" class="carPickBtn">
+          <img id="mpCarPickThumb" class="carThumb" src="" alt="" draggable="false" />
+          <span id="mpCarPickName" class="carPickName"></span>
+          <span class="chev">▾</span>
+        </button>
         <div id="mpHostSettings" style="display:none">
           <hr />
-          <label for="mpTrackSelect">Pálya (host)</label>
-          <select id="mpTrackSelect">
-            <option value="">🏁 Alap pálya (beépített)</option>
-          </select>
+          <label>Pálya (host)</label>
+          <button id="btnMpPickTrack" type="button" class="carPickBtn">
+            <canvas id="mpTrackPickCanvas" class="trackThumbSmall" width="72" height="48"></canvas>
+            <span id="mpTrackPickName" class="carPickName"></span>
+            <span class="chev">▾</span>
+          </button>
           <label for="mpLapsInput">Körök száma (host)</label>
           <input id="mpLapsInput" type="number" min="1" max="50" step="1" value="3" />
           <label for="mpPhysicsSelect">Autó-fizika (host)</label>
@@ -703,6 +788,29 @@
         </div>
         <div id="mpSettingsStatus" class="status"></div>
         <button id="btnMpSettingsClose">← Vissza</button>
+      </div>
+    </div>
+
+    <!-- Autó-választó felugró panel — a #btnPickCar (főmenü) ÉS a #btnMpPickCar
+         (multiplayer beállítások) is ezt nyitja meg (lásd main.js openCarPicker);
+         EGYETLEN közös rács van benne, tágasabb, mint a 240px-es sidepanel. -->
+    <div id="carPicker" class="overlay">
+      <div class="panel">
+        <h1>🚗 Autó választása</h1>
+        <div id="carPickerGrid" class="carSelectGrid"></div>
+        <button id="btnCarPickerClose">← Vissza</button>
+      </div>
+    </div>
+
+    <!-- Pálya-választó felugró panel — a #btnPickTrack (főmenü) ÉS a
+         #btnMpPickTrack (multiplayer beállítások) is ezt nyitja meg (lásd
+         main.js openTrackPicker); minden kártyán egy kis pálya-RAJZ látszik
+         (ugyanaz az elv, mint a versenyközbeni minitérkép, lásd minimap.js). -->
+    <div id="trackPicker" class="overlay">
+      <div class="panel">
+        <h1>🏁 Pálya választása</h1>
+        <div id="trackPickerGrid" class="carSelectGrid"></div>
+        <button id="btnTrackPickerClose">← Vissza</button>
       </div>
     </div>
 
