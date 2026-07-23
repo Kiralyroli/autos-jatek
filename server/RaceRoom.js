@@ -74,7 +74,6 @@ export class RaceRoom extends Room {
     this.phase = 'lobby'; // 'lobby' | 'countdown' | 'racing' | 'finished'
     this.countdownLeft = 0;
     this.hostId = null;
-    this.simTime = 0; // szerver-óra (s) — a snapshot időbélyege + laza össz-versenyidő
     // Verseny-generáció: minden startRace() növeli, és a kliens minden 'state'
     // üzenetben visszaküldi (lásd main.js mpSendState). Így az ELŐZŐ versenyből
     // még hálón lévő (pl. `finished: true`-t tartalmazó) elkésett üzenetek nem
@@ -216,11 +215,18 @@ export class RaceRoom extends Room {
 
     // Szerver-óra (nincs fizika): visszaszámlálás léptetése + cél-koordináció.
     this.setSimulationInterval((dtMs) => this.tick(dtMs / 1000), 1000 / 20);
-    // Snapshot-broadcast (a tárolt kliens-állapotokból).
-    this.snapshotTimer = this.clock.setInterval(
-      () => this.broadcastSnapshot(),
-      1000 / NET.snapshotHz
-    );
+    // Snapshot-broadcast (a tárolt kliens-állapotokból). SZÁNDÉKOSAN sima Node
+    // `setInterval`, NEM `this.clock.setInterval` — a Colyseus Clock ütemezett
+    // hívásai KIZÁRÓLAG a `setSimulationInterval` saját ciklusából kapott
+    // `clock.tick()`-ekkor süthetnek el (lásd @colyseus/core Room.js
+    // setSimulationInterval/setPatchRate), tehát egy `clock.setInterval`
+    // SOSEM futhat gyorsabban, mint a fenti 20Hz-es szimulációs ciklus — ez
+    // a NET.snapshotHz=40-es beállítás ELLENÉRE is csak ~19-20Hz-es tényleges
+    // broadcastot adott (mérve: ~53ms-es lépésköz 25ms helyett), ami a
+    // kliens-oldali interpolációnak rendhagyó, "lökésszerű" ütemet adott —
+    // ez okozta a jelentett szaggatást. A sima `setInterval` ettől a
+    // csatolástól teljesen független, pontosan a kért ütemben fut.
+    this.snapshotTimer = setInterval(() => this.broadcastSnapshot(), 1000 / NET.snapshotHz);
   }
 
   onJoin(client, options) {
@@ -288,6 +294,11 @@ export class RaceRoom extends Room {
   }
 
   onDispose() {
+    // A sima Node `setInterval`-t (lásd onCreate snapshotTimer) a Colyseus NEM
+    // állítja le automatikusan (azt csak a saját `this.clock`-on regisztrált
+    // időzítőkkel tenné) — enélkül a szoba megszűnése után is tovább futna,
+    // egy már eldobott room-ra hivatkozva.
+    clearInterval(this.snapshotTimer);
     unregisterJoinCode(this.joinCode);
   }
 
@@ -311,7 +322,6 @@ export class RaceRoom extends Room {
     this.countdownLeft = RACE.countdownSeconds;
     this.finishTimeout = 0;
     this.finishedCount = 0;
-    this.simTime = 0;
     this.raceGen++;
     this.lock(); // verseny közben nem csatlakozhat új játékos
     // A klienseknek: rajt-slotok — a helyi sim ebből tudja, hova pozicionáljon.
@@ -322,8 +332,6 @@ export class RaceRoom extends Room {
   // Szerver-óra: visszaszámlálás + cél-koordináció. NINCS fizika (a mozgást a
   // kliensek számolják, a szerver csak a bejelentett `finished` flageket figyeli).
   tick(dt) {
-    this.simTime += dt;
-
     if (this.phase === 'countdown') {
       this.countdownLeft -= dt;
       if (this.countdownLeft <= 0) {
@@ -386,7 +394,18 @@ export class RaceRoom extends Room {
       };
     }
     this.broadcast('snapshot', {
-      t: this.simTime * 1000, // ms — a snapshot szerver-időbélyege (interpolációhoz)
+      // ms — a snapshot időbélyege (interpolációhoz, lásd net/mpClient.js
+      // createSnapshotBuffer). KRITIKUS: Date.now(), NEM a simTime (a tick()
+      // 20Hz-es, a broadcast viszont NET.snapshotHz Hz-en fut — a két ütem nem
+      // esik egybe, ezért a simTime-mal bélyegzett snapshotok EGYMÁS UTÁN
+      // TÖBBSZÖR AZONOS időbélyeget kaptak, majd egy nagyot ugrottak, amikor a
+      // tick végre lépett. Ez a kliens-oldali interpoláció span-ját 0-ra vagy
+      // rendhagyóan nagyra tolta → látható szaggatás/akadozás a távoli
+      // autóknál. A Date.now() minden broadcast-hívásnál a TÉNYLEGES, finom
+      // időt adja, a firing-ütem apró szabálytalanságával együtt is — az
+      // interpoláció ebből mindig helyesen számol, nincs több duplikált/
+      // ugrásszerű időbélyeg.
+      t: Date.now(),
       phase: this.phase,
       countdownLeft: this.countdownLeft,
       players,

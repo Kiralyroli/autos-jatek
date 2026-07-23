@@ -306,14 +306,22 @@ export const NET = {
     typeof window !== 'undefined' && window.location.hostname !== 'localhost'
       ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
       : 'ws://localhost:2567',
-  // 30 Hz (20 helyett): sűrűbb szerver-állapot → az ellenfél-kocsik pontosabb
+  // 40 Hz (30 helyett): sűrűbb szerver-állapot → az ellenfél-kocsik pontosabb
   // helyen vannak a te gépeden, kevesebb extrapolációs hiba ütközésnél. 2-4
-  // játékosnál a sávszélesség elhanyagolható.
-  snapshotHz: 30, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
-  // 100 ms (120 helyett): kevésbé a "múltban" renderelünk → amit LÁTSZ, közelebb
-  // van ahhoz, ahol az ellenfél tényleg van (kisebb vizuális-vs-ütközés eltérés).
-  // 30 Hz-nél (~33 ms/snapshot) ez még mindig ~3 snapshot puffer — nem szaggat.
-  interpDelayMs: 100, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
+  // játékosnál a sávszélesség elhanyagolható. A korábbi szaggatás oka NEM a
+  // 30 Hz volt, hanem a snapshot-időbélyeg hibája (lásd server/RaceRoom.js
+  // broadcastSnapshot Date.now()-ra javítva) — ATTÓL FÜGGETLENÜL a magasabb
+  // ütem is finomít az élményen, ezért itt is feljebb véve.
+  snapshotHz: 40, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
+  // 80 ms (100 helyett): a snapshot-időbélyeg javítása (lásd fent) után a
+  // pufferhez már nem kell akkora biztonsági tartalék a szaggatás ellen, így
+  // a késleltetés lejjebb vehető — kevésbé a "múltban" renderelünk → amit
+  // LÁTSZ, közelebb van ahhoz, ahol az ellenfél TÉNYLEG van (élő hibajelentés:
+  // főleg rajtnál feltűnő, amikor mindkét oldal magát látta előrébbnek — ez a
+  // saját autó AZONNALI, a többieké interpDelayMs-nyivel késleltetett
+  // renderelésének szerkezeti következménye, csökkenteni lehet, kiküszöbölni
+  // nem). 40 Hz-nél (~25 ms/snapshot) ez még mindig ~3 snapshot puffer — nem szaggat.
+  interpDelayMs: 80, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
   maxPlayers: 4,
 };
 
