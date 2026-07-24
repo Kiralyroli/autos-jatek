@@ -1451,18 +1451,35 @@ async function doJoin(code) {
 
 // Visszatérés egy pálya/fizika-váltás (vagy átmeneti hálózat-kiesés) miatti
 // reload UTÁN — a SAJÁT, meglévő helyünkre `reconnect()`-elünk (nem új
-// csatlakozás, lásd ensureTrackMatches/net/mpClient.js). Ha a token időközben
-// lejárt (a szerver ~20 mp után törli a helyet, lásd RaceRoom.js onLeave),
-// visszaesünk a sima `doJoin`-ra — ekkor új játékosként lépünk be (a
-// host-szerep elveszhet, de legalább nem ragadunk be a menüben).
+// csatlakozás, lásd ensureTrackMatches/net/mpClient.js).
+//
+// TÖBBSZÖRÖS PRÓBÁLKOZÁS (élő hibajelentés: localhoston MŰKÖDIK, Railway-en
+// mégis a menübe dobott pálya/autó-váltáskor). Ok: valós hálózaton a régi
+// WebSocket lezárásának ÉSZLELÉSE a szerveren KÉSHET (a proxy nem azonnal jelzi
+// a bontást), így amikor a gyorsan (cache-ből) újratöltött kliens reconnectel,
+// a szerver MÉG NEM regisztrálta a `allowReconnection`-t → az ELSŐ reconnect
+// "nincs ilyen reconnect-token"-nel elbukik, és a régi kód egyből a
+// tartalék `doJoin`-ra, majd (ha az is hibázik) a menübe esett. Localhoston a
+// bontás észlelése azonnali, ezért ott sosem jött elő. Megoldás: néhányszor
+// ÚJRAPRÓBÁLJUK a reconnectet növekvő várakozással — mire a 2-3. próba fut, a
+// szerver már regisztrálta a reconnect-lehetőséget (az ablak 60 s, bőven belefér).
 async function doReconnect(token, fallbackCode) {
   menuStatus.textContent = 'Visszacsatlakozás…';
-  try {
-    const room = await reconnectRoom(token);
-    startMultiplayer(room);
-  } catch {
-    doJoin(fallbackCode);
+  const delaysMs = [0, 700, 1400, 2200, 3200, 4500, 6000, 8000];
+  for (let i = 0; i < delaysMs.length; i++) {
+    if (delaysMs[i]) await new Promise((r) => setTimeout(r, delaysMs[i]));
+    try {
+      const room = await reconnectRoom(token);
+      startMultiplayer(room);
+      return;
+    } catch {
+      menuStatus.textContent = `Visszacsatlakozás… (${i + 1})`;
+    }
   }
+  // Ha a reconnect végleg nem sikerül (a token tényleg lejárt / a szoba eltűnt),
+  // friss csatlakozás a szoba-id-vel — ekkor új játékosként lépünk be (a
+  // host-szerep elveszhet, de legalább nem ragadunk be a menüben, ha a szoba él).
+  doJoin(fallbackCode);
 }
 
 // --- Indulás: rejoin / pending pálya-akció (reload után), vagy főmenü ---
