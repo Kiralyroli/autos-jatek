@@ -34,6 +34,7 @@ import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3
 import { setupWheels } from './render3d/wheels.js';
 import { createNameplate } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
+import { applyStoredCamera, createCameraSettings } from './cameraSettings.js';
 import { createHud, fmt as fmtTime } from './hud.js';
 import { createMinimap } from './minimap.js';
 import { createAudio } from './audio.js';
@@ -120,6 +121,10 @@ if (trackState.track.tiles.length === 0) {
 }
 addGrassField(scene);
 loadDecorations(scene);
+// A mentett kamera-beállítás (távolság/magasság/szög) betöltése MÉG a chase
+// kamera létrehozása/az első render előtt, hogy rögtön a választott nézettel induljon.
+applyStoredCamera();
+const cameraSettings = createCameraSettings();
 const updateCamera = createChaseCamera(camera);
 const readKeyboard = createKeyboard();
 // Érintős vezérlés: CSAK touch-képes eszközön hozzuk létre (a gombok DOM-ja +
@@ -617,6 +622,7 @@ function startSingleplayer() {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  cameraSettings.show();
   if (touch) touch.show();
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
@@ -804,6 +810,7 @@ async function startMultiplayer(room) {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  cameraSettings.show();
   if (touch) touch.show();
 
   // Szerver-ping (RTT) mérése + kijelzése: időbélyeget küldünk, a szerver azonnal

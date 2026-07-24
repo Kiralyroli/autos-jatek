@@ -47,8 +47,15 @@ export function createChaseCamera(camera) {
     else camPos.lerp(desired, tp);
 
     camera.position.copy(camPos);
-    // A nézési pont is a simított irányból — a látómező nem csapkod kanyarban.
-    lookAt.set(carX + fx * CAMERA.lookAhead, 1.0, carZ + fz * CAMERA.lookAhead);
+    // A nézési pont VÍZSZINTESEN a simított irányból (a látómező nem csapkod
+    // kanyarban), FÜGGŐLEGESEN pedig a beállított LEFELÉ DŐLÉSBŐL (pitchDeg)
+    // számolva: a kamera aktuális magasságából (camPos.y) annyival lejjebb
+    // nézünk, hogy a látóirány pontosan pitchDeg fokkal a vízszintes alatt
+    // legyen a lookAt-ig tartó vízszintes távolságon. Így a dőlés a
+    // magasságtól/távolságtól FÜGGETLENÜL állítható.
+    const horizDist = CAMERA.distance + CAMERA.lookAhead; // kamera→nézési pont vízszintes táv
+    const lookY = camPos.y - horizDist * Math.tan((CAMERA.pitchDeg * Math.PI) / 180);
+    lookAt.set(carX + fx * CAMERA.lookAhead, lookY, carZ + fz * CAMERA.lookAhead);
     camera.lookAt(lookAt);
   };
 }

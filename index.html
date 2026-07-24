@@ -301,6 +301,120 @@
       #btnQuitRace:hover {
         background: rgba(255, 255, 255, 0.1);
       }
+      /* 📷 Kamera-gomb — verseny közben, a "← Főmenü" gomb mellett. Kis ikon,
+         a kamera-beállító panelt (#cameraPanel) nyitja/zárja. */
+      #btnCamera {
+        position: fixed;
+        left: 132px;
+        bottom: 14px;
+        display: none; /* JS: flex verseny közben (cameraSettings show/hide) */
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        cursor: pointer;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        transition: background 0.15s ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #btnCamera:hover { background: rgba(255, 255, 255, 0.1); }
+      /* Kamera-beállító panel — oldalt (bal-közép), kompakt, hogy a kép közepén
+         lévő autó látszódjon állítás közben (élő előnézet). Alapból rejtett. */
+      #cameraPanel {
+        position: fixed;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: none;
+        width: 260px;
+        max-width: calc(100vw - 28px);
+        flex-direction: column;
+        gap: 12px;
+        padding: 18px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--panel-border);
+        border-radius: 14px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+        z-index: 18; /* a HUD/gombok fölött, de a menü-overlay-ek (20+) alatt */
+        font-family: var(--font);
+      }
+      #cameraPanel.open { display: flex; }
+      #cameraPanel h3 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 800;
+        text-align: center;
+      }
+      #cameraPanel .camRow {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #cameraPanel .camLabel {
+        font-size: 12.5px;
+        color: var(--text-dim);
+        font-weight: 600;
+      }
+      #cameraPanel .camLabel b { color: var(--text); font-weight: 800; }
+      /* Nagy fogantyús csúszkák — touch-barát, de desktopon is jól használható. */
+      #cameraPanel input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--panel-soft);
+        outline: none;
+      }
+      #cameraPanel input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid #fff;
+        cursor: pointer;
+      }
+      #cameraPanel input[type="range"]::-moz-range-thumb {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid #fff;
+        cursor: pointer;
+      }
+      #cameraPanel .camBtns {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      #cameraPanel .camBtns button {
+        flex: 1;
+        padding: 9px 10px;
+        font-family: var(--font);
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        background: var(--panel-soft);
+        border: 1px solid var(--panel-border);
+        border-radius: 9px;
+        cursor: pointer;
+      }
+      #cameraPanel .camBtns button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
       /* Mini-térkép — versenyközben bal alul, a pálya + minden autó pozíciója. */
       #minimap {
         position: fixed;
@@ -459,6 +573,13 @@
         top: 56px;
         right: auto;
         bottom: auto;
+      }
+      body.has-touch-controls #btnCamera {
+        left: 232px;
+        top: 14px;
+        bottom: auto;
+        width: 40px;
+        height: 40px;
       }
       /* A kör/idő-kijelző touchon KOMPAKTABB és FELJEBB — a nagy asztali méret
          fekvő telefonon túl sokat takart a pályából. Kisebb betűk, szűkebb

@@ -7,10 +7,16 @@ import { loadCustomLayout } from './trackStorage.js';
 
 // A 3D render méterben dolgozik (1 fizikai méter = 1 Three.js egység), nincs lépték.
 
-// Chase kamera (az autó mögött-fölött) — hangolható.
+// Chase kamera (az autó mögött-fölött) — hangolható. A distance/height/pitchDeg
+// mezőket a játékos IS állíthatja élőben (lásd cameraSettings.js + a HUD 📷
+// gombja); a beállítás localStorage-ba perzisztál és induláskor visszatöltődik.
 export const CAMERA = {
-  distance: 11, // m — ennyivel az autó MÖGÖTT
-  height: 5, // m — ennyivel az autó FÖLÖTT
+  distance: 11, // m — ennyivel az autó MÖGÖTT (JÁTÉKOS-ÁLLÍTHATÓ)
+  height: 5, // m — ennyivel az autó FÖLÖTT (JÁTÉKOS-ÁLLÍTHATÓ)
+  pitchDeg: 14, // fok — a kamera LEFELÉ dőlése (JÁTÉKOS-ÁLLÍTHATÓ). A nézési pont
+  //               függőleges helyét ebből számoljuk (lásd render3d/camera.js):
+  //               0° ≈ vízszintesen előre néz, nagyobb érték = meredekebben lefelé.
+  //               A 14°-os alap a korábbi fix (lookAt y=1) nézettel egyezik.
   lookAhead: 5, // m — a kamera ennyivel az autó ELÉ néz (jobb kilátás kanyarban)
   stiffness: 8.0, // 1/s — POZÍCIÓ-követés merevsége (szoros, hogy ne maradjon le)
   yawStiffness: 2.8, // 1/s — FORGÁS-követés merevsége. EZ szabja az oldalirányú lengést:
@@ -20,6 +26,14 @@ export const CAMERA = {
   //                   a kocsi iránya mögött (enélkül hosszú kanyarban oldalnézetbe
   //                   ragadna). Kisebb = kanyarban is szinte előre nézel.
   fov: 65, // látószög fokban
+};
+
+// A játékos által állítható kamera-mezők ALAPÉRTÉKEI — a beállító-panel
+// "Alaphelyzet" gombja és az érvényes tartományok ellenőrzése ehhez nyúl.
+export const CAMERA_DEFAULTS = {
+  distance: CAMERA.distance,
+  height: CAMERA.height,
+  pitchDeg: CAMERA.pitchDeg,
 };
 
 // 3D falak megjelenése (a fizikát nem érinti — az élek a sim/track.js-ben vannak).
