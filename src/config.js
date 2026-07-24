@@ -327,6 +327,14 @@ export const NET = {
   // broadcastSnapshot Date.now()-ra javítva) — ATTÓL FÜGGETLENÜL a magasabb
   // ütem is finomít az élményen, ezért itt is feljebb véve.
   snapshotHz: 40, // a szerver ennyiszer küld állapot-pillanatképet másodpercenként
+  // A KLIENS ennyiszer küldi a SAJÁT autó-állapotát (60 > snapshotHz=40). Miért
+  // gyorsabban, mint a broadcast: ha a küldés ÜTEME MEGEGYEZIK a broadcastéval
+  // (40=40, de nem szinkronban), a két óra "lebeg" egymáshoz képest → némely
+  // broadcast UGYANAZT a (még nem frissült) pozíciót viszi, más egyet kihagy →
+  // lépcsős, ugráló táv-adat. Sűrűbb küldésnél MINDEN broadcast friss (≤16 ms-os)
+  // pozíciót kap, nincs duplázás/kihagyás → simább interpoláció. A sávszél
+  // elhanyagolható (2-4 játékos, ~40 bájt/üzenet).
+  sendHz: 60,
   // 80 ms (100 helyett): a snapshot-időbélyeg javítása (lásd fent) után a
   // pufferhez már nem kell akkora biztonsági tartalék a szaggatás ellen, így
   // a késleltetés lejjebb vehető — kevésbé a "múltban" renderelünk → amit
@@ -335,7 +343,21 @@ export const NET = {
   // saját autó AZONNALI, a többieké interpDelayMs-nyivel késleltetett
   // renderelésének szerkezeti következménye, csökkenteni lehet, kiküszöbölni
   // nem). 40 Hz-nél (~25 ms/snapshot) ez még mindig ~3 snapshot puffer — nem szaggat.
-  interpDelayMs: 80, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
+  // 80 → 60 ms: az extrapoláció bevezetése ÓTA (lásd maxExtrapolationMs) a puffer
+  // kifogyását már nem fagyás/ugrás követi, hanem sima sebesség-alapú tovább-
+  // gördülés, ezért a "biztonsági" puffer csökkenthető. Kevesebb késleltetés →
+  // a többi autót közelebb a valós időhöz látod → kisebb a "magamat előrébb
+  // látom" érzet (ez a saját=azonnali, mások=késleltetett renderelés
+  // következménye — csökkenthető, teljesen megszüntetni nem lehet). 40 Hz-nél
+  // 60 ms még mindig ~2,4 snapshotnyi puffer.
+  interpDelayMs: 60, // a kliens ennyivel a "múltban" renderel (két snapshot közt simít)
+  // EXTRAPOLÁCIÓ (lásd net/mpClient.js sample): ha a renderidő már a legfrissebb
+  // snapshoton TÚL van (a puffer kifogyott — hálózati jitter/csomagvesztés), a
+  // távoli autót a sebességéből (vx/vy/w) ENNYI ideig gördítjük tovább, ahelyett
+  // hogy megfagyna és a következő snapshotnál ugrana. 40 Hz-nél 200 ms ~8
+  // kimaradt snapshotot hidal át; ezen túl a fagyasztás biztonságosabb, mint a
+  // vad tovább-becslés (kanyarban egyre nő a hiba).
+  maxExtrapolationMs: 200,
   maxPlayers: 4,
 };
 

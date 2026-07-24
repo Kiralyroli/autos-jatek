@@ -874,9 +874,11 @@ async function startMultiplayer(room) {
     mpPlaceAtSpawn();
   }
 
-  // A saját autó bejelentése a szervernek (relay) — throttle-olva ~snapshotHz-re.
+  // A saját autó bejelentése a szervernek (relay) — throttle-olva NET.sendHz-re
+  // (60 Hz, a 40 Hz-es broadcast fölött, hogy minden broadcast friss pozíciót
+  // kapjon — lásd config.js sendHz megjegyzése).
   function mpSendState(now) {
-    if (now - mpLastStateSentAt < 1000 / NET.snapshotHz) return;
+    if (now - mpLastStateSentAt < 1000 / NET.sendHz) return;
     mpLastStateSentAt = now;
     const pos = mpCar.getPosition();
     const vel = mpCar.getLinearVelocity();

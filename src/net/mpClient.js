@@ -73,6 +73,33 @@ export function createSnapshotBuffer() {
     // Szerver-idővonalon járunk: becsült szerver-most, mínusz az interp-késleltetés.
     const rt = performance.now() - clockOffset - NET.interpDelayMs;
 
+    const last = snaps[snaps.length - 1];
+    // EXTRAPOLÁCIÓ: ha a renderidő már a legfrissebb snapshoton TÚL van (a puffer
+    // kifogyott — jitter/csomagvesztés), fagyasztás helyett a sebességből (vx/vy/w)
+    // ELŐRE becsüljük a pozíciót, egy korlátozott ablakig (NET.maxExtrapolationMs).
+    // Így a távoli autó tovább gördül simán, nem fagy be és nem ugrik, amikor
+    // végre megjön az új snapshot. (A saját autót ez nem érinti: azt a helyi
+    // simből rendereljük — a snapshot-beli saját bejegyzés csak az álláshoz kell.)
+    if (rt > last.t) {
+      const dt = Math.min((rt - last.t) / 1000, NET.maxExtrapolationMs / 1000);
+      const players = {};
+      for (const [id, p] of Object.entries(last.data.players)) {
+        players[id] = {
+          ...p,
+          x: p.x + (p.vx || 0) * dt,
+          y: p.y + (p.vy || 0) * dt,
+          angle: p.angle + (p.w || 0) * dt,
+        };
+      }
+      return {
+        phase: last.data.phase,
+        countdownLeft: last.data.countdownLeft,
+        raceTime: last.data.raceTime,
+        players,
+      };
+    }
+
+    // Normál eset: a renderidő két snapshot KÖZÉ esik → lineáris interpoláció.
     // A legfrissebb, rt-nél NEM újabb snapshot indexe.
     let i = snaps.length - 1;
     while (i > 0 && snaps[i].t > rt) i--;
