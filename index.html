@@ -394,35 +394,35 @@
         background: var(--panel-soft);
       }
       #touchControls .tc-steer {
-        width: 66px;
-        height: 66px;
+        width: 82px;
+        height: 82px;
         border-radius: 50%;
-        font-size: 26px;
+        font-size: 32px;
       }
       #touchControls .tc-gas {
-        width: 80px;
-        height: 80px;
+        width: 98px;
+        height: 98px;
         border-radius: 50%;
-        font-size: 30px;
+        font-size: 38px;
         color: var(--success);
         border-color: rgba(47, 174, 102, 0.5);
       }
       #touchControls .tc-gas.active { background: rgba(47, 174, 102, 0.22); }
       #touchControls .tc-brake {
-        width: 62px;
-        height: 62px;
+        width: 78px;
+        height: 78px;
         border-radius: 50%;
-        font-size: 24px;
+        font-size: 30px;
         color: var(--danger);
         border-color: rgba(224, 80, 90, 0.5);
       }
       #touchControls .tc-brake.active { background: rgba(224, 80, 90, 0.22); }
       #touchControls .tc-drift {
-        min-width: 70px;
-        height: 40px;
-        padding: 0 14px;
-        border-radius: 20px;
-        font-size: 12px;
+        min-width: 84px;
+        height: 46px;
+        padding: 0 16px;
+        border-radius: 23px;
+        font-size: 13px;
         letter-spacing: 0.04em;
         color: var(--gold);
         border-color: rgba(224, 177, 61, 0.5);
@@ -460,6 +460,20 @@
         right: auto;
         bottom: auto;
       }
+      /* A kör/idő-kijelző touchon KOMPAKTABB és FELJEBB — a nagy asztali méret
+         fekvő telefonon túl sokat takart a pályából. Kisebb betűk, szűkebb
+         belső margó, felül tapadva. */
+      body.has-touch-controls #raceinfo {
+        top: 6px;
+        gap: 12px;
+        padding: 6px 14px;
+        border-radius: 11px;
+      }
+      body.has-touch-controls #raceinfo .ri-lap { font-size: 20px; }
+      body.has-touch-controls #raceinfo .ri-lap #lap { font-size: 23px; }
+      body.has-touch-controls #raceinfo .ri-times { padding-left: 12px; gap: 1px; }
+      body.has-touch-controls #raceinfo .ri-row { font-size: 13px; }
+      body.has-touch-controls #raceinfo .ri-label { font-size: 9px; }
 
       /* "Fordítsd el fekvőbe" figyelmeztetés — touch-eszközön (body.has-touch-
          controls, lásd touchControls.js) ÉS álló tájolásnál, MINDENÜTT: a
