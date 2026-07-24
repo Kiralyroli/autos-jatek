@@ -18,6 +18,25 @@ export function isTouchDevice() {
   return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
+// Teljes képernyő kérése (Fullscreen API) — a verseny-indító gombok (Egyjátékos/
+// Szoba létrehozása/Csatlakozás) kattintás-eseményéből hívjuk, MÉG a user-gesztus
+// SZINKRON részéből, mert a böngésző csak közvetlenül egy felhasználói
+// interakcióból engedi a kérést. Androidon (Chrome) ez azonnal eltünteti a
+// böngésző-sávot. iOS Safari-n (iPhone) a Fullscreen API NEM támogatott — ott
+// ez csendben nem csinál semmit; ott csak a "Kezdőképernyőhöz adás" ad valódi
+// teljes képernyőt (lásd index.html web-manifest + apple-mobile-web-app-*
+// meta tagek). Nem kritikus funkció — minden hiba/elutasítás csendben elnyelve.
+export function requestFullscreen() {
+  if (document.fullscreenElement) return;
+  const el = document.documentElement;
+  try {
+    const req = el.requestFullscreen ? el.requestFullscreen() : el.webkitRequestFullscreen?.();
+    if (req && typeof req.catch === 'function') req.catch(() => {});
+  } catch {
+    /* nem kritikus — a játék teljes képernyő nélkül is működik */
+  }
+}
+
 export function createTouchControls() {
   const state = { up: false, down: false, left: false, right: false, drift: false };
 

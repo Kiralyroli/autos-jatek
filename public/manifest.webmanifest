@@ -1,0 +1,13 @@
+{
+  "name": "Racing King",
+  "short_name": "Racing King",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0d0e13",
+  "theme_color": "#0d0e13",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -6,7 +6,19 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <title>Autós játék — Fázis 1</title>
+    <title>Racing King</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Web App Manifest — "Kezdőképernyőhöz adás" után teljesen chrome-mentes
+         (böngésző-sáv nélküli) indítás, mindkét platformon (lásd manifest.webmanifest
+         display:"fullscreen"). Az iOS Safari a manifestet NEM veszi figyelembe a
+         megjelenítési módhoz (Apple-sajátosság) — ott a lenti apple-mobile-web-app-*
+         meta tagek adják ugyanezt. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0d0e13" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Racing King" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
     <style>
       :root {
         --bg: #0d0e13;
@@ -607,6 +619,17 @@
         gap: 6px;
       }
       body.has-touch-controls #sectordelta .arrow { font-size: 11px; }
+      /* Érvénytelen kör-szalag touchon KISEBB és FELJEBB — a nagy asztali
+         méret (top:90px, 15px betű) fekvő telefonon a képernyő közepén
+         "úszott", eltakarva a kilátást. A szektor-delta (fent, top:62px) alá
+         kerül, hogy a két elem ne fedje egymást. */
+      body.has-touch-controls #invalidlap {
+        top: 96px;
+        font-size: 12px;
+        padding: 5px 12px;
+        gap: 6px;
+        border-radius: 8px;
+      }
 
       /* "Fordítsd el fekvőbe" figyelmeztetés — touch-eszközön (body.has-touch-
          controls, lásd touchControls.js) ÉS álló tájolásnál, MINDENÜTT: a
@@ -1021,7 +1044,7 @@
   <body>
     <div id="game"></div>
     <div id="hud">
-      <b>Autós játék — 3D</b><br />
+      <b>👑 Racing King</b><br />
       Gyorsítás: <kbd>W</kbd> / <kbd>↑</kbd> &nbsp; Fék/tolatás: <kbd>S</kbd> / <kbd>↓</kbd><br />
       Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
       <span id="speed">Sebesség: 0 km/h</span>
@@ -1070,7 +1093,7 @@
           </button>
         </div>
         <div class="panel">
-          <h1>🏎️ Autós játék</h1>
+          <h1>👑 Racing King</h1>
           <label for="playerName">Neved</label>
           <input id="playerName" maxlength="20" placeholder="Játékos" />
           <label>Pálya</label>

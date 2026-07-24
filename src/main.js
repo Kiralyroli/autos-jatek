@@ -25,7 +25,7 @@ import {
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT } from './input.js';
-import { isTouchDevice, createTouchControls } from './touchControls.js';
+import { isTouchDevice, createTouchControls, requestFullscreen } from './touchControls.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
 import { loadTrackRibbon } from './render3d/trackRibbon.js';
 import { loadDecorations } from './render3d/decorations.js';
@@ -1485,10 +1485,21 @@ async function doReconnect(token, fallbackCode) {
 }
 
 // --- Indulás: rejoin / pending pálya-akció (reload után), vagy főmenü ---
-document.getElementById('btnSingle').onclick = () => playWithSelectedTrack('single');
-document.getElementById('btnCreate').onclick = () => playWithSelectedTrack('create');
-document.getElementById('btnJoin').onclick = () =>
+// A teljes képernyő kérése (touch-eszközön) MINDIG a kattintás-eseményből,
+// szinkron módon, MIELŐTT bármi async munka (pl. szerver-csatlakozás) elindulna
+// — a böngésző csak közvetlenül egy felhasználói gesztusból engedi a kérést.
+document.getElementById('btnSingle').onclick = () => {
+  if (touch) requestFullscreen();
+  playWithSelectedTrack('single');
+};
+document.getElementById('btnCreate').onclick = () => {
+  if (touch) requestFullscreen();
+  playWithSelectedTrack('create');
+};
+document.getElementById('btnJoin').onclick = () => {
+  if (touch) requestFullscreen();
   doJoin(document.getElementById('joinCode').value);
+};
 
 const rejoinRaw = sessionStorage.getItem('autos-jatek:mp-rejoin');
 const pendingRaw = sessionStorage.getItem('autos-jatek:pending');
