@@ -595,6 +595,18 @@
       body.has-touch-controls #raceinfo .ri-times { padding-left: 12px; gap: 1px; }
       body.has-touch-controls #raceinfo .ri-row { font-size: 13px; }
       body.has-touch-controls #raceinfo .ri-label { font-size: 9px; }
+      /* Szektor-delta touchon KISEBB és FELJEBB — a kompakt kör/idő-panel ALÁ
+         (top:62px), közvetlenül a felső HUD alatt, hogy ne a vezetési nézet
+         közepén (a korábbi 132px pont a képernyő közepére esett fekvő
+         telefonon). A transform-ot (translateX -50% + animáció) a hud.js állítja
+         inline, azt itt NEM bántjuk — csak a helyet és a méretet. */
+      body.has-touch-controls #sectordelta {
+        top: 62px;
+        font-size: 15px;
+        padding: 5px 13px;
+        gap: 6px;
+      }
+      body.has-touch-controls #sectordelta .arrow { font-size: 11px; }
 
       /* "Fordítsd el fekvőbe" figyelmeztetés — touch-eszközön (body.has-touch-
          controls, lásd touchControls.js) ÉS álló tájolásnál, MINDENÜTT: a
