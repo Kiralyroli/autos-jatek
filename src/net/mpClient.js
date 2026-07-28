@@ -144,18 +144,3 @@ export function createSnapshotBuffer() {
     get latestT() { return snaps[snaps.length - 1]?.t ?? null; },
   };
 }
-
-// Input-küldő: csak változáskor küld, plusz ritka "heartbeat" (elveszett csomag ellen).
-export function createInputSender(room) {
-  let last = '';
-  let lastSentAt = 0;
-  return function sendInput(input) {
-    const key = `${+input.up}${+input.down}${+input.left}${+input.right}${+input.drift}`;
-    const now = performance.now();
-    if (key !== last || now - lastSentAt > 200) {
-      room.send('input', input);
-      last = key;
-      lastSentAt = now;
-    }
-  };
-}
