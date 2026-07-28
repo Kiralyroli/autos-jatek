@@ -37,6 +37,11 @@ function emptyState(slot) {
     speed: 0, cornering: 0,
     lap: 1, progress: 0, curLap: 0, lastLap: null, bestLap: null,
     lapValid: true, wrongWay: false, finished: false, totalTime: null,
+    // A kliens bejelentett VEZÉRLÉSE (bitmaszk, lásd src/input.js encodeInput).
+    // A szerver csak továbbítja — ebből a TÖBBI kliens a valódi fizikán
+    // szimulálja tovább ezt az autót (lásd src/net/remoteCars.js), így a távoli
+    // autók igazi ívet írnak le és jelen-időben látszanak.
+    inp: 0,
   };
 }
 
@@ -97,6 +102,7 @@ export class RaceRoom extends Room {
       s.x = num(msg?.x); s.y = num(msg?.y); s.angle = num(msg?.angle);
       s.vx = num(msg?.vx); s.vy = num(msg?.vy); s.w = num(msg?.w);
       s.speed = num(msg?.speed); s.cornering = num(msg?.cornering);
+      s.inp = intOr(msg?.inp, 0);
       s.lap = intOr(msg?.lap, 1); s.progress = num(msg?.progress);
       s.curLap = num(msg?.curLap);
       s.lastLap = msg?.lastLap == null ? null : num(msg.lastLap);
@@ -394,6 +400,7 @@ export class RaceRoom extends Room {
       players[id] = {
         x: s.x, y: s.y, angle: s.angle,
         vx: s.vx, vy: s.vy, w: s.w,
+        inp: s.inp,
         speed: s.speed, cornering: s.cornering,
         lap: s.lap, progress: s.progress, curLap: s.curLap,
         lastLap: s.lastLap, bestLap: s.bestLap,

@@ -11,6 +11,39 @@ export const NEUTRAL_INPUT = Object.freeze({
   drift: false,
 });
 
+// --- Input ⇄ bitmaszk (hálózati küldéshez) ---
+// A multiplayerben minden kliens elküldi a SAJÁT inputját is a pozíció mellett
+// (lásd main.js mpSendState), hogy a többiek gépe az autóját a VALÓDI fizikán
+// tudja továbbszimulálni (net/remoteCars.js) — így a távoli autó igazi ívet ír
+// le, nem egyenes vonalban "csúszik". Egyetlen kis egész szám, hogy a 60 Hz-es
+// küldés se terhelje a sávot.
+const BIT_UP = 1;
+const BIT_DOWN = 2;
+const BIT_LEFT = 4;
+const BIT_RIGHT = 8;
+const BIT_DRIFT = 16;
+
+export function encodeInput(i) {
+  return (
+    (i.up ? BIT_UP : 0) |
+    (i.down ? BIT_DOWN : 0) |
+    (i.left ? BIT_LEFT : 0) |
+    (i.right ? BIT_RIGHT : 0) |
+    (i.drift ? BIT_DRIFT : 0)
+  );
+}
+
+export function decodeInput(m) {
+  const b = Number.isFinite(m) ? m : 0;
+  return {
+    up: (b & BIT_UP) !== 0,
+    down: (b & BIT_DOWN) !== 0,
+    left: (b & BIT_LEFT) !== 0,
+    right: (b & BIT_RIGHT) !== 0,
+    drift: (b & BIT_DRIFT) !== 0,
+  };
+}
+
 const KEYMAP = {
   up: ['KeyW', 'ArrowUp'],
   down: ['KeyS', 'ArrowDown'],

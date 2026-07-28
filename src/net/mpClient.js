@@ -126,7 +126,23 @@ export function createSnapshotBuffer() {
     };
   }
 
-  return { push, sample, get latest() { return snaps[snaps.length - 1]?.data || null; } };
+  // A BECSÜLT szerver-idő (ms) — a legutóbb ÉRKEZETT csomag szerver-időbélyegéhez
+  // igazítva. FIGYELEM: ez a hálózati út (egy irány) idejével ALULBECSÜLI a valódi
+  // szerver-mostot, mert az időbélyeg a küldés pillanatáé, a mi óránk pedig az
+  // ÉRKEZÉSKOR lett hozzá igazítva. Ezért a "jelenre" célzáshoz a hívónak a fél
+  // RTT-t is hozzá kell adnia (lásd main.js — a távoli autók jelen-idejű
+  // szimulációjánál pontosan ezt tesszük).
+  function serverNow() {
+    return clockOffset === null ? 0 : performance.now() - clockOffset;
+  }
+
+  return {
+    push,
+    sample,
+    serverNow,
+    get latest() { return snaps[snaps.length - 1]?.data || null; },
+    get latestT() { return snaps[snaps.length - 1]?.t ?? null; },
+  };
 }
 
 // Input-küldő: csak változáskor küld, plusz ritka "heartbeat" (elveszett csomag ellen).

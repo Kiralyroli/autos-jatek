@@ -24,7 +24,7 @@ import {
   separateBodyFromPoints,
 } from './sim/car.js';
 import { createRaceState, raceStep } from './sim/race.js';
-import { createKeyboard, NEUTRAL_INPUT } from './input.js';
+import { createKeyboard, NEUTRAL_INPUT, encodeInput } from './input.js';
 import { isTouchDevice, createTouchControls, requestFullscreen } from './touchControls.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
 import { loadTrackRibbon } from './render3d/trackRibbon.js';
@@ -41,6 +41,7 @@ import { createAudio } from './audio.js';
 import { lerp, lerpAngle } from './utils.js';
 import * as THREE from 'three';
 import { createRoom, joinRoom, reconnectRoom, createSnapshotBuffer } from './net/mpClient.js';
+import { createRemoteCars } from './net/remoteCars.js';
 import { createTrackState } from './sim/trackFactory.js';
 
 // Gyökér-relatív ('/assets/...') utak GitHub Pages al-útvonalára (/autos-jatek/)
@@ -65,7 +66,7 @@ import {
   apiClearLeaderboard,
 } from './net/leaderboardApi.js';
 import { hashLayout } from './sim/trackKey.js';
-import { TRACK, CAR, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
+import { TRACK, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
 import { isDevMode } from './devmode.js';
 import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
@@ -818,8 +819,15 @@ async function startMultiplayer(room) {
   const pingEl = document.getElementById('ping');
   pingEl.style.display = 'block';
   pingEl.textContent = 'Ping: … ms';
+  // A fél RTT (egy irányú út) a távoli autók JELEN-idejű célzásához kell: a
+  // snapshot-időbélyeg a küldés pillanatáé, tehát mire ideér, már ennyivel
+  // "öreg" (lásd net/remoteCars.js applyAuthoritative `ageSec`).
+  let mpHalfRttSec = 0;
   room.onMessage('pong', (t) => {
-    pingEl.textContent = `Ping: ${Math.max(0, Math.round(performance.now() - t))} ms`;
+    const rtt = Math.max(0, performance.now() - t);
+    // Simítás: a mérés zajos, ne ugráljon tőle a becslés.
+    mpHalfRttSec = mpHalfRttSec === 0 ? rtt / 2000 : mpHalfRttSec * 0.7 + (rtt / 2000) * 0.3;
+    pingEl.textContent = `Ping: ${Math.round(rtt)} ms`;
   });
   const pingTimer = setInterval(() => {
     try {
@@ -846,6 +854,12 @@ async function startMultiplayer(room) {
   const mpCar = createCarBody(mpWorld, mySpawn.x, mySpawn.y, mySpawn.angle);
   const mpStepper = createStepper();
   const mpDrive = createDriveState();
+  // A TÖBBI játékos autója — helyben, a VALÓDI fizikán szimulálva, az általuk
+  // küldött vezérlésből (lásd net/remoteCars.js). Ugyanabban a világban futnak,
+  // mint a saját autónk, ugyanazzal a fix lépésközzel — így a mozgásuk is
+  // ugyanolyan sima, és jelen-időben látszanak (nem a múltban).
+  const remoteCars = createRemoteCars(mpWorld, offRoadExcess);
+  let mpLastAuthT = null; // a legutóbb FELDOLGOZOTT snapshot időbélyege
   const mpRace = createRaceState(mpTotalLaps);
   const mpPrev = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
   const mpCurr = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
@@ -877,7 +891,7 @@ async function startMultiplayer(room) {
   // A saját autó bejelentése a szervernek (relay) — throttle-olva NET.sendHz-re
   // (60 Hz, a 40 Hz-es broadcast fölött, hogy minden broadcast friss pozíciót
   // kapjon — lásd config.js sendHz megjegyzése).
-  function mpSendState(now) {
+  function mpSendState(now, input) {
     if (now - mpLastStateSentAt < 1000 / NET.sendHz) return;
     mpLastStateSentAt = now;
     const pos = mpCar.getPosition();
@@ -885,6 +899,9 @@ async function startMultiplayer(room) {
     room.send('state', {
       x: pos.x, y: pos.y, angle: mpCar.getAngle(),
       vx: vel.x, vy: vel.y, w: mpCar.getAngularVelocity(),
+      // A VEZÉRLÉSÜNK is megy (bitmaszk) — ebből a többi kliens a mi autónkat
+      // a valódi fizikán tudja továbbszimulálni (lásd net/remoteCars.js).
+      inp: encodeInput(input || NEUTRAL_INPUT),
       speed: speedKmh(mpCar), cornering: corneringLoad(mpCar),
       lap: mpRace.lap,
       progress: trackState.trackProgress(pos.x, pos.y),
@@ -1114,6 +1131,14 @@ async function startMultiplayer(room) {
       meshes.delete(id);
       wheelAnims.delete(id);
     }
+    // A TÁVOLI autók szimulált testét is a rajtrácsra tesszük (itt SZÁNDÉKOSAN
+    // ugrunk — új verseny), különben az előző futam végállapotából indulnának,
+    // és az első snapshotig rossz helyen látszanának.
+    if (m.slots) {
+      for (const [id, slot] of Object.entries(m.slots)) {
+        if (id !== myId) remoteCars.placeAt(id, slot);
+      }
+    }
     mpResetForRace();
   });
 
@@ -1165,55 +1190,43 @@ async function startMultiplayer(room) {
       if (sampled.phase !== 'lobby') lobbyEl.style.display = 'none';
 
       removeStaleMeshes(sampled.players);
-      // A saját autó AKTUÁLIS pozíciója — a peer-ek "meglökésének" vizuális
-      // referenciája (lásd lentebb). A helyi simből, azonnali.
-      const myPos = mpCar.getPosition();
       for (const [id, p] of Object.entries(sampled.players)) {
         ensureMesh(id, p.colorIdx, p.name);
-        const mesh = meshes.get(id);
-        if (!mesh) continue;
-        let px = p.x;
-        let py = p.y;
-        // VIZUÁLIS meglökés: ha egy PEER közelebb kerül a saját autómnál a
-        // szeparációs küszöbnél (nekimentem), a RENDERJÉT kitoljuk a küszöbre —
-        // így a te képernyődön azonnal látszik, hogy odébb csúszik, nem "szikla".
-        // Csak megjelenítés: a valós (bejelentett) pozícióját nem írja felül, és
-        // amint az ő gépe úgyis kitolta magát, a kettő egybeesik (nincs ugrás).
-        if (id !== myId) {
-          const dx = px - myPos.x;
-          const dy = py - myPos.y;
-          const d = Math.hypot(dx, dy);
-          const md = RACE.carSeparation.minDist;
-          if (d > 1e-4 && d < md) {
-            const k = md / d;
-            px = myPos.x + dx * k;
-            py = myPos.y + dy * k;
-          }
+      }
+
+      // --- HITELES ÁLLAPOT a távoli autókra (csak ÚJ snapshotnál) ---
+      // A `sample()` (interpolált, múltbeli) adatot a HUD/állás/minitérkép
+      // használja; a távoli autók MOZGÁSA viszont a helyi fizikai szimulációból
+      // jön (remoteCars), amit itt igazítunk a hiteles állapothoz. Az `ageSec`
+      // a JELENRE célzáshoz kell: a snapshot-időbélyeg a küldés pillanatáé, így
+      // az adat ennyivel öreg (eltelt idő az érkezés óta + a fél RTT-nyi út).
+      const latestT = buffer.latestT;
+      const latest = buffer.latest;
+      if (latest && latestT !== mpLastAuthT) {
+        mpLastAuthT = latestT;
+        const ageSec =
+          Math.max(0, (buffer.serverNow() - latestT) / 1000) + mpHalfRttSec;
+        const liveIds = new Set();
+        for (const [id, p] of Object.entries(latest.players)) {
+          if (id === myId) continue;
+          liveIds.add(id);
+          remoteCars.applyAuthoritative(id, p, ageSec);
         }
-        mesh.position.set(px, 0.12, py);
-        mesh.rotation.y = -p.angle;
-        // Távoli autók kerekei a snapshotból: gördülés az előre-sebességből,
-        // kormányszög becslése a bicikli-modell inverzéből (δ ≈ atan(ω·L / v)).
-        if (id !== myId) {
-          const anim = wheelAnims.get(id);
-          if (anim) {
-            const fwd = p.vx * Math.cos(p.angle) + p.vy * Math.sin(p.angle);
-            const spd = Math.hypot(p.vx, p.vy);
-            let steer = spd > 1 ? Math.atan((p.w * CAR.wheelbase) / spd) : 0;
-            steer = Math.max(-CAR.maxSteerAngle, Math.min(CAR.maxSteerAngle, steer));
-            anim.update(fwd, steer, dt);
-          }
-        }
+        remoteCars.pruneExcept(liveIds);
       }
 
       // --- SAJÁT autó: HELYI sim (kliens-autoritatív) ---
       const serverPhase = sampled.phase;
       const me = sampled.players[myId]; // csak a helyezéshez kell (a szerver osztja)
 
-      // A többi kocsi középpontjai a puha szétnyomáshoz.
+      // A többi kocsi középpontjai a puha szétnyomáshoz — mostantól a HELYBEN
+      // SZIMULÁLT testükből (jelen-idejű, pontos), nem az interpolált (múltbeli)
+      // snapshotból. Így az ütközés-érzet is ott van, ahol az autót LÁTOD.
       mpPeerPoints = [];
-      for (const [id, p] of Object.entries(sampled.players)) {
-        if (id !== myId) mpPeerPoints.push({ x: p.x, y: p.y });
+      for (const id of Object.keys(sampled.players)) {
+        if (id === myId) continue;
+        const rs = remoteCars.renderState(id, 1);
+        if (rs) mpPeerPoints.push({ x: rs.x, y: rs.y });
       }
 
       // A szerver countdown→racing váltásakor (egyszer) elindítjuk a helyi versenyt.
@@ -1239,6 +1252,9 @@ async function startMultiplayer(room) {
             else updateCar(mpCar, input, fixedDt, mpDrive, offRoadExcess);
             // Puha szétnyomás a többi kocsitól (a kapott pozíciók alapján).
             separateBodyFromPoints(mpCar, mpPeerPoints, RACE.carSeparation);
+            // A TÁVOLI autók ugyanebben a lépésben, a VALÓDI fizikán, az általuk
+            // küldött vezérléssel — ettől írnak igazi ívet és mozognak simán.
+            remoteCars.step(fixedDt);
           },
           () => {
             mpPrev.x = mpCurr.x;
@@ -1248,6 +1264,7 @@ async function startMultiplayer(room) {
             mpCurr.x = pp.x;
             mpCurr.y = pp.y;
             mpCurr.angle = mpCar.getAngle();
+            remoteCars.afterStep(SIM.fixedDt);
             if (mpRace.phase === 'racing') {
               const offTrack =
                 isFullyOffRoad(mpCar, offRoadExcess) ||
@@ -1280,6 +1297,36 @@ async function startMultiplayer(room) {
       }
       carWheels.update(forwardSpeed(mpCar), mpDrive.steer, dt);
 
+      // --- TÁVOLI autók renderelése a HELYBEN SZIMULÁLT testükből ---
+      // (al-lépés-interpolálva, mint a sajátunk → ugyanolyan sima 60 Hz+).
+      for (const id of Object.keys(sampled.players)) {
+        if (id === myId) continue;
+        const mesh = meshes.get(id);
+        if (!mesh) continue;
+        const rs = remoteCars.renderState(id, alpha);
+        if (!rs) continue;
+        let px = rs.x;
+        let py = rs.y;
+        // VIZUÁLIS meglökés: ha egy PEER a szeparációs küszöbnél közelebb kerül
+        // a saját autómhoz (nekimentem), a RENDERJÉT kitoljuk a küszöbre — így
+        // a te képernyődön azonnal látszik, hogy odébb csúszik, nem "szikla".
+        const dx = px - ownX;
+        const dy = py - ownY;
+        const d = Math.hypot(dx, dy);
+        const md = RACE.carSeparation.minDist;
+        if (d > 1e-4 && d < md) {
+          const k = md / d;
+          px = ownX + dx * k;
+          py = ownY + dy * k;
+        }
+        mesh.position.set(px, 0.12, py);
+        mesh.rotation.y = -rs.angle;
+        // A kerekek a VALÓDI kormányszögből (a szimulált drive.steer-ből) —
+        // nem a korábbi, sebességből visszabecsült közelítésből.
+        const anim = wheelAnims.get(id);
+        if (anim) anim.update(forwardSpeed(rs.body), rs.steer, dt);
+      }
+
       // Kamera a saját autón.
       if (window.__TOP) {
         camera.position.set(ownX, window.__TOP, ownY + 0.001);
@@ -1307,19 +1354,22 @@ async function startMultiplayer(room) {
       };
       updateHud(hudRace);
       minimap.draw(
-        Object.entries(sampled.players).map(([id, p]) => ({
-          // A SAJÁT pozíciónk a simított (nem a nyers snapshot-beli, ami a
-          // kliens-oldali interpolációs késleltetés miatt "a múltban" van) —
-          // a többieké a snapshotból, ugyanúgy, mint a 3D jelenetben.
-          x: id === myId ? ownX : p.x,
-          z: id === myId ? ownY : p.y,
-          color: carColor(p.colorIdx),
-          isMe: id === myId,
-        }))
+        Object.entries(sampled.players).map(([id, p]) => {
+          // MINDENKI a ténylegesen RENDERELT pozíciójáról — a sajátunk a helyi
+          // simből, a többiek a helyben szimulált testükből (remoteCars). Így a
+          // minitérkép pontosan azt mutatja, amit a 3D jelenetben látsz.
+          const rs = id === myId ? null : remoteCars.renderState(id, alpha);
+          return {
+            x: id === myId ? ownX : rs ? rs.x : p.x,
+            z: id === myId ? ownY : rs ? rs.y : p.y,
+            color: carColor(p.colorIdx),
+            isMe: id === myId,
+          };
+        })
       );
 
-      // A saját állapot bejelentése a szervernek (relay).
-      mpSendState(now);
+      // A saját állapot + VEZÉRLÉS bejelentése a szervernek (relay).
+      mpSendState(now, input);
 
       const ownSpeed = speedKmh(mpCar);
       const ownCornering = myFinished ? 0 : corneringLoad(mpCar);
@@ -1415,7 +1465,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap, remoteCars };
   }
 }
 
