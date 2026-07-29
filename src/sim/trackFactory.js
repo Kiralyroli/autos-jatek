@@ -147,6 +147,37 @@ export function createTrackState(layout, opts) {
   );
   const trackLength = cumLen[n - 1] + closingLen;
 
+  // Az (x,y,angle) pont a középvonalon, a rajtvonaltól PONTOSAN `targetLen`
+  // ívhossz-méterre (a záró szakaszt — center[n-1]→center[0] — is figyelembe
+  // véve). A Hot Lap "guruló rajt" spawnjához kell (lásd pointBeforeStart),
+  // ahol a pontok NEM egyenletes méter-közönként helyezkednek el (kanyarban
+  // sűrűbbek), ezért egyszerű indexeléssel nem lehetne pontos méter-távolságot
+  // találni — végig kell menni a kumulatív ívhosszon.
+  function pointAtArcLength(targetLen) {
+    let t = targetLen % trackLength;
+    if (t < 0) t += trackLength;
+    if (t >= cumLen[n - 1]) {
+      const segT = closingLen > 1e-6 ? (t - cumLen[n - 1]) / closingLen : 0;
+      const a = track.center[n - 1];
+      const b = track.center[0];
+      return { x: a.x + (b.x - a.x) * segT, y: a.z + (b.z - a.z) * segT, angle: a.dir };
+    }
+    let i = 0;
+    while (i < n - 2 && cumLen[i + 1] <= t) i++;
+    const a = track.center[i];
+    const b = track.center[i + 1];
+    const segLen = cumLen[i + 1] - cumLen[i];
+    const segT = segLen > 1e-6 ? (t - cumLen[i]) / segLen : 0;
+    return { x: a.x + (b.x - a.x) * segT, y: a.z + (b.z - a.z) * segT, angle: a.dir };
+  }
+
+  // A rajtvonaltól `distanceMeters`-rel HÁTRÉBB lévő pont a középvonalon — a Hot
+  // Lap mód guruló rajtjához: itt indul a countdown, hogy mire az autó eléri a
+  // TÉNYLEGES rajtvonalat, már lendületben legyen (lásd main.js startHotLap).
+  function pointBeforeStart(distanceMeters) {
+    return pointAtArcLength(cumLen[startIdx] - distanceMeters);
+  }
+
   // Az (x,z) pont ÍVHOSSZ SZERINTI haladása a körön, 0..1 törtként (a legközelebbi
   // középvonal-szakaszra vetítve). ROBUSZTUS élő rangsorhoz (multiplayer állás):
   // a checkpoint-index (durva, néhány pontos milestone) helyett folytonos értéket
@@ -206,6 +237,7 @@ export function createTrackState(layout, opts) {
     curbEdge,
     checkpointHalfWidth,
     trackLength, // méter — a multiplayer élő állás időrés-becsléséhez (main.js updateStandings)
+    pointBeforeStart, // Hot Lap guruló rajt spawnjához (main.js startHotLap)
   };
 }
 

@@ -23,7 +23,7 @@ import {
   hitsCone,
   separateBodyFromPoints,
 } from './sim/car.js';
-import { createRaceState, raceStep } from './sim/race.js';
+import { createRaceState, raceStep, segmentsCross } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT, encodeInput } from './input.js';
 import { isTouchDevice, createTouchControls, requestFullscreen } from './touchControls.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
@@ -147,9 +147,11 @@ function readInput() {
 const audio = createAudio();
 const speedEl = document.getElementById('speed');
 
-// A restart gomb viselkedése módfüggő — a dispatcher az aktív mód kezelőjét hívja.
+// A restart / hot lap reset gomb viselkedése módfüggő — a dispatcher az aktív
+// mód kezelőjét hívja.
 let onRestartClick = () => {};
-const updateHud = createHud(() => onRestartClick());
+let onHotlapResetClick = () => {};
+const updateHud = createHud(() => onRestartClick(), () => onHotlapResetClick());
 // Kis felülnézeti pálya-rajz versenyközben (lásd minimap.js) — a jelenleg
 // aktív pálya középvonalából épül fel, EGYSZER (a pálya csak reloaddal
 // változik, lásd ensureTrackMatches), mind SP, mind MP frame-loop ezt hívja.
@@ -587,6 +589,7 @@ async function playWithSelectedTrack(action) {
     return;
   }
   if (action === 'single') startSingleplayer();
+  else if (action === 'hotlap') startSingleplayer(true);
   else doCreate();
 }
 
@@ -617,8 +620,12 @@ function idleFrame(now) {
 
 // =============================================================================
 //  EGYJÁTÉKOS MÓD — a korábbi (1-2. fázis) lokális játék, változatlan logikával.
+//  `hotLap`: gyakorló mód — nincs körszám-limit, a rajt/cél vonaltól hátrébb,
+//  guruló rajttal indulunk, és a rajtvonalig tartó szakasz NEM számít bele a
+//  mért időbe (lásd lent a hotLapStarted logikát) — csak az onnantól futott,
+//  valódi ("flying") kör.
 // =============================================================================
-function startSingleplayer() {
+function startSingleplayer(hotLap = false) {
   mode = 'single';
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
@@ -644,15 +651,25 @@ function startSingleplayer() {
     .filter((d) => d.type === 'pylon')
     .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
 
+  // Hot Lap: a rajtvonaltól hátrébb (guruló rajt) — lásd sim/trackFactory.js
+  // pointBeforeStart. Normál módban ez egyszerűen a rajtvonal (spawn).
+  const startPoint = hotLap ? trackState.pointBeforeStart(RACE.hotlapRunupMeters) : spawn;
+
   const world = createWorld();
-  const carBody = createCarBody(world, spawn.x, spawn.y, spawn.angle);
+  const carBody = createCarBody(world, startPoint.x, startPoint.y, startPoint.angle);
   const stepper = createStepper();
   const laps = chosenLaps();
-  const race = createRaceState(laps);
+  const race = createRaceState(hotLap ? Infinity : laps);
+  race.isHotLap = hotLap; // csak megjelenítéshez (hud.js) — a raceStep nem használja
   const drive = createDriveState();
+  // Guruló rajtnál a TÉNYLEGES rajtvonal első átszeléséig a köridő nem indul —
+  // a raceStep ezt a crossingot magától is figyelmen kívül hagyja (nextCheckpoint=1,
+  // a 0. checkpoint kívül esik a lookahead-ablakán), itt csak ÉSZLELJÜK, és
+  // onnantól nullázzuk az órát, hogy a mért kör valódi "flying lap" legyen.
+  let hotLapArmed = hotLap;
 
-  const prev = { x: spawn.x, y: spawn.y, angle: spawn.angle };
-  const curr = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+  const prev = { x: startPoint.x, y: startPoint.y, angle: startPoint.angle };
+  const curr = { x: startPoint.x, y: startPoint.y, angle: startPoint.angle };
 
   function recordState() {
     prev.x = curr.x;
@@ -662,6 +679,16 @@ function startSingleplayer() {
     curr.x = p.x;
     curr.y = p.y;
     curr.angle = carBody.getAngle();
+    // Guruló rajt: a TÉNYLEGES rajtvonal első átszelésekor nullázzuk az órát
+    // (lásd a hotLapArmed deklarációját fentebb) — ez a crossing raceStep-nek
+    // magának nem esemény, csak nekünk jelzi, hogy innentől "éles" a kör.
+    if (hotLapArmed && segmentsCross(prev, curr, checkpoints[0].a, checkpoints[0].b)) {
+      hotLapArmed = false;
+      race.time = 0;
+      race.lapStartTime = 0;
+      race.lapValid = true; // a guruló-rajt szakasza (letérés, sarok) ne rontsa el az ELSŐ mért kört
+      race.currentSplits = [];
+    }
     // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
     const offTrack =
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
@@ -705,6 +732,26 @@ function startSingleplayer() {
     prev.y = curr.y = spawn.y;
     prev.angle = curr.angle = spawn.angle;
   };
+
+  // Hot Lap reset: azonnal vissza a guruló-rajt pontra, új próba — a
+  // személyes legjobb (bestLapTime/lapTimes) MEGMARAD, csak a folyamatban lévő
+  // kör/idő nullázódik, hogy a gyakorlás közben lehessen a rekordot kergetni.
+  if (hotLap) {
+    onHotlapResetClick = () => {
+      resetCar(carBody, startPoint.x, startPoint.y, startPoint.angle);
+      const fresh = createRaceState(Infinity);
+      fresh.isHotLap = true;
+      fresh.bestLapTime = race.bestLapTime;
+      fresh.bestLapSplits = race.bestLapSplits;
+      fresh.lapTimes = race.lapTimes;
+      Object.assign(race, fresh);
+      Object.assign(drive, createDriveState());
+      prev.x = curr.x = startPoint.x;
+      prev.y = curr.y = startPoint.y;
+      prev.angle = curr.angle = startPoint.angle;
+      hotLapArmed = true;
+    };
+  }
 
   let lastCountInt = null;
   let lastPhase = race.phase;
@@ -1542,6 +1589,10 @@ document.getElementById('btnSingle').onclick = () => {
   if (touch) requestFullscreen();
   playWithSelectedTrack('single');
 };
+document.getElementById('btnHotLap').onclick = () => {
+  if (touch) requestFullscreen();
+  playWithSelectedTrack('hotlap');
+};
 document.getElementById('btnCreate').onclick = () => {
   if (touch) requestFullscreen();
   playWithSelectedTrack('create');
@@ -1569,6 +1620,7 @@ if (rejoinRaw) {
   const { action, name } = JSON.parse(pendingRaw);
   nameInput.value = name;
   if (action === 'single') startSingleplayer();
+  else if (action === 'hotlap') startSingleplayer(true);
   else doCreate();
 } else {
   menuEl.style.display = 'flex';

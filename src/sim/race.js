@@ -66,7 +66,11 @@ function orient(a, b, c) {
 
 // Két szakasz (p1→p2 és q1→q2) valódi metszése. Ha az autó nem mozdult
 // (p1 == p2), minden orientáció 0 → nincs metszés, helyesen.
-function segmentsCross(p1, p2, q1, q2) {
+// Exportálva: a Hot Lap mód (main.js) ezzel ismeri fel a guruló rajt UTÁN a
+// TÉNYLEGES rajtvonal első átszelését (a raceStep ezt — helyesen — figyelmen
+// kívül hagyja, hiszen nextCheckpoint=1-nél a 0. checkpoint nincs a lookahead-
+// ablakban), hogy onnantól indítsa a kör-időzítést.
+export function segmentsCross(p1, p2, q1, q2) {
   return (
     orient(p1, p2, q1) !== orient(p1, p2, q2) &&
     orient(q1, q2, p1) !== orient(q1, q2, p2)

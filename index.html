@@ -313,6 +313,30 @@
       #btnQuitRace:hover {
         background: rgba(255, 255, 255, 0.1);
       }
+      /* Hot Lap mód: mindig látható reset — jobb alul (a "← Főmenü" tükörpárja),
+         hogy a guruló rajt pontra azonnal vissza lehessen ugrani. */
+      #hotlapReset {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        display: none;
+        padding: 10px 16px;
+        font-family: var(--font);
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        cursor: pointer;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        transition: background 0.15s ease;
+      }
+      #hotlapReset:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
       /* 📷 Kamera-gomb — verseny közben, a "← Főmenü" gomb mellett. Kis ikon,
          a kamera-beállító panelt (#cameraPanel) nyitja/zárja. */
       #btnCamera {
@@ -592,6 +616,13 @@
         bottom: auto;
         width: 40px;
         height: 40px;
+      }
+      body.has-touch-controls #hotlapReset {
+        right: 14px;
+        top: 14px;
+        bottom: auto;
+        padding: 8px 12px;
+        font-size: 12px;
       }
       /* A kör/idő-kijelző touchon KOMPAKTABB és FELJEBB — a nagy asztali méret
          fekvő telefonon túl sokat takart a pályából. Kisebb betűk, szűkebb
@@ -1070,6 +1101,7 @@
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
     <div id="sectordelta"></div>
     <button id="restart">🔄 Új verseny</button>
+    <button id="hotlapReset">↺ Reset</button>
     <button id="btnQuitRace">← Főmenü</button>
     <div id="ping"></div>
     <canvas id="minimap" width="150" height="150"></canvas>
@@ -1110,6 +1142,7 @@
             <option value="light">Könnyített (arcade)</option>
           </select>
           <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
+          <button id="btnHotLap">🔥 Hot Lap (guruló rajt)</button>
           <hr />
           <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>
           <div class="joinrow">

@@ -39,7 +39,7 @@ function placeLabel(place) {
   return `${medal}${place}. helyezés`;
 }
 
-export function createHud(onRestart) {
+export function createHud(onRestart, onHotlapReset) {
   const raceInfoEl = document.getElementById('raceinfo');
   const lapEl = document.getElementById('lap');
   const timeEl = document.getElementById('laptime');
@@ -49,8 +49,10 @@ export function createHud(onRestart) {
   const invalidLapEl = document.getElementById('invalidlap');
   const restartEl = document.getElementById('restart');
   const sectorDeltaEl = document.getElementById('sectordelta');
+  const hotlapResetEl = document.getElementById('hotlapReset');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
+  if (onHotlapReset) hotlapResetEl.addEventListener('click', onHotlapReset);
 
   return function updateHud(race) {
     raceInfoEl.style.display = 'flex'; // updateHud csak játék közben fut
@@ -59,8 +61,16 @@ export function createHud(onRestart) {
     // A cél utáni "Új verseny" gombot MP-ben a végeredmény-panel váltja ki (main.js).
     restartEl.style.display =
       race.phase === 'finished' && !race.hideRestart ? 'block' : 'none';
+    // Hot Lap: nincs "cél" (végtelen körszám), ezért ehelyett egy MINDIG látható
+    // reset gomb — azonnal vissza a guruló-rajt pontra, új próba (main.js
+    // startSingleplayer hotLap ág).
+    hotlapResetEl.style.display = race.isHotLap ? 'block' : 'none';
 
-    lapEl.textContent = `${race.lap}/${race.totalLaps || RACE.laps}`;
+    // Hot Lap módban totalLaps=Infinity ("ne legyen körszám" — lásd main.js
+    // startSingleplayer hotLap ág) — ilyenkor nincs "/N" limit, csak a futó kör.
+    lapEl.textContent = Number.isFinite(race.totalLaps)
+      ? `${race.lap}/${race.totalLaps}`
+      : `${race.lap}`;
     const current =
       race.phase === 'racing' ? race.time - race.lapStartTime : race.lastLapTime;
     // Érvénytelen kör (letért a pályáról): a köridőt pirosan, ⚠-vel jelezzük, és
