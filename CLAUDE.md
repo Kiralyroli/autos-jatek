@@ -182,6 +182,20 @@ Ezek a repóban (git-ben) élnek, tehát bármelyik session/fiók/gép automatik
 látja őket, szemben a Claude személyes memóriájával, ami gépenként/felhasználónként
 külön van és NEM utazik a projekttel.
 
+**Deploy / Railway:**
+- **A Railway Node-verziója RÉGEBBI, mint a fejlesztői gépé.** Éles crash-loopot
+  okozott: a `package.json` `start` scriptjébe tett `node --env-file-if-exists=.env`
+  flag (Node 22.9+) a lokális Node 24-en hibátlanul ment, a Railway-en viszont
+  `node: bad option` → a konténer indulás után azonnal elszállt, végtelen ciklusban.
+  **Tanulság: a `start`/`server` scriptek maradjanak sima `node server/index.js`,
+  és semmilyen újabb Node-funkció ne legyen KÖTELEZŐ a szerver indulásához** —
+  amire szükség van (pl. `.env` betöltés), azt kódból, verzió-függetlenül oldjuk meg
+  (lásd `server/loadEnv.js`). Ha valaha mégis kell újabb Node, azt a `package.json`
+  `engines.node` mezőjével kell KIKÉNYSZERÍTENI, nem feltételezni.
+- A lokálisan működő futtatás tehát NEM bizonyítja, hogy élesben is elindul — a
+  deploy utáni Railway-logot mindig nézd meg (a szerver induláskor kiírja az
+  ADMIN_TOKEN és a trust proxy állapotát is).
+
 **Fejlesztői munkafolyamat:**
 - A Colyseus szerver (`server/*.js`) **NEM hot-reload-ol** — minden szerver-oldali
   kódváltás után a Node-folyamatot ki kell lőni és újraindítani
