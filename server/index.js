@@ -8,6 +8,10 @@
 //  Indítás: `npm run server` (localhost:2567). A kliens (Vite, localhost:5173)
 //  WebSocketen csatlakozik; a matchmaking HTTP-hívásaihoz kell a CORS.
 // =============================================================================
+// LEGELSŐ import, szándékosan: a .env-et be kell tölteni, MIELŐTT bármelyik másik
+// modul (security.js ADMIN_TOKEN, trackStore.js DATA_DIR) modul-szinten kiolvasná
+// a process.env-et. Lásd a loadEnv.js fejlécét.
+import './loadEnv.js';
 import { createServer } from 'http';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
