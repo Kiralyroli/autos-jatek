@@ -23,10 +23,26 @@ import { TRACK, RACE, NET, DEFAULT_LAYOUT, resolvePhysicsPreset } from '../src/c
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
 import { hashLayout } from '../src/sim/trackKey.js';
 import { recordLap } from './leaderboardStore.js';
+import { sanitizeLayout } from './trackStore.js';
 import { registerJoinCode, unregisterJoinCode } from './roomCodes.js';
 
 const num = (v) => (Number.isFinite(v) ? v : 0);
 const intOr = (v, d) => (Number.isInteger(v) ? v : d);
+
+// Játékos-/pályanév megtisztítása. A `<` és `>` eltávolítása MÁSODIK védvonal a
+// tárolt XSS ellen: a nevet a kliens a HUD-ba/állás-listába írja, ahol az elsődleges
+// védelem a kimenet escape-elése (src/main.js escapeHtml) — de ami sosem kerül be a
+// tárba, azt elrontani sem lehet, ha valahol később kimarad egy escape.
+function cleanName(v, fallback, maxLen) {
+  const s = String(v ?? '').replace(/[<>]/g, '').trim().slice(0, maxLen);
+  return s || fallback;
+}
+
+// A kliens által küldött dekoráció-lista mérethatára (a trackStore MAX_DECOR-jával
+// összhangban) — a szoba ezt csak továbbítja a többi kliensnek, de a méretét
+// korlátozni kell, hogy egy felfújt lista ne terhelje a broadcastot.
+const MAX_ROOM_DECOR = 5000;
+const safeDecor = (d) => (Array.isArray(d) ? d.slice(0, MAX_ROOM_DECOR) : []);
 
 // Egy kliens bejelentett autó-állapota (a spawn-pozícióra inicializálva). Minden
 // mező a rendereléshez / állás-listához / HUD-hoz kell a TÖBBI kliensnél.
@@ -49,12 +65,15 @@ export class RaceRoom extends Room {
   onCreate(options) {
     this.maxClients = NET.maxPlayers;
 
-    // A pályát a szobát LÉTREHOZÓ kliens adja (a saját aktív pályája) — validálva.
-    const layout = Array.isArray(options?.layout) && options.layout.length > 0
-      ? options.layout
-      : DEFAULT_LAYOUT;
+    // A pályát a szobát LÉTREHOZÓ kliens adja (a saját aktív pályája). A layoutból
+    // a szerver GEOMETRIÁT ÉPÍT (createTrackState lentebb), ezért ugyanazon a
+    // szűrőn kell átmennie, mint a REST-en mentett pályáknak — enélkül egy
+    // kézzel összerakott `create` üzenet (több ezer kontrollpont, csillagászati
+    // koordinátákkal) megfoghatná a teljes szerverfolyamatot. Érvénytelen adatra
+    // csendben az alappályára esünk vissza.
+    const layout = sanitizeLayout(options?.layout) || DEFAULT_LAYOUT;
     this.layout = layout;
-    this.decorations = Array.isArray(options?.decorations) ? options.decorations : [];
+    this.decorations = safeDecor(options?.decorations);
     // A szoba körszáma — a létrehozó (host) választja; korlátozva 1..50-re.
     this.laps = Number.isFinite(options?.laps)
       ? Math.max(1, Math.min(50, Math.round(options.laps)))
@@ -64,7 +83,7 @@ export class RaceRoom extends Room {
 
     // Örök ranglista: a trackKey a layout GEOMETRIÁJÁHOZ kötött, névtől független.
     this.trackKey = hashLayout(layout);
-    this.trackName = String(options?.trackName || 'Egyedi pálya').slice(0, 40);
+    this.trackName = cleanName(options?.trackName, 'Egyedi pálya', 40);
 
     // A spawn-slotokhoz kell a pálya-geometria (spawnSlot) — ez NEM fizikai sim.
     this.trackState = createTrackState(layout, {
@@ -168,10 +187,13 @@ export class RaceRoom extends Room {
     this.onMessage('hostSettings', (client, msg) => {
       if (client.sessionId !== this.hostId) return;
       if (this.phase === 'countdown' || this.phase === 'racing') return;
-      if (Array.isArray(msg?.layout) && msg.layout.length > 0) {
-        this.layout = msg.layout;
-        this.decorations = Array.isArray(msg?.decorations) ? msg.decorations : [];
-        this.trackName = String(msg?.trackName || 'Egyedi pálya').slice(0, 40);
+      // Ugyanaz a layout-szűrő, mint az onCreate-nél (lásd ott a magyarázatot) —
+      // a host is "csak egy kliens", az üzenete ugyanúgy hamisítható.
+      const nextLayout = sanitizeLayout(msg?.layout);
+      if (nextLayout) {
+        this.layout = nextLayout;
+        this.decorations = safeDecor(msg?.decorations);
+        this.trackName = cleanName(msg?.trackName, 'Egyedi pálya', 40);
         this.trackKey = hashLayout(this.layout);
         this.trackState = createTrackState(this.layout, {
           tile: TRACK.tile,
@@ -247,7 +269,7 @@ export class RaceRoom extends Room {
     const slot = spawnSlot(this.trackState, slotIndex);
 
     this.players.set(client.sessionId, {
-      name: String(options?.name || 'Játékos').slice(0, 20),
+      name: cleanName(options?.name, 'Játékos', 20),
       colorIdx,
       slotIndex,
       spawn: { x: slot.x, y: slot.y, angle: slot.angle }, // a kliens ide pozicionál

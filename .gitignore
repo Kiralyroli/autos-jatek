@@ -3,3 +3,10 @@ dist/
 *.log
 .DS_Store
 data/
+
+# Titkok (ADMIN_TOKEN stb.) — SOHA nem kerülhetnek a repóba. A .env a gépen/szerveren
+# él, a git nem látja. A .env.example ELLENBEN verziózott: az csak a változók NEVÉT
+# és leírását tartalmazza, értékek nélkül — abból tudod, mit kell beállítani.
+.env
+.env.*
+!.env.example

@@ -122,6 +122,60 @@ Hálózat: WebSocket (nem HTTP-polling). Éles környezetben `wss://` (TLS) kell
 - A statikus kliens (HTML/JS/assetek) bármilyen tárhelyről/CDN-ről mehet — csak a
   Node játékszervernek kell perzisztens process-hosting.
 
+## Biztonság (2026-07-29)
+
+A szerver a nyílt interneten fut, ezért a REST API-t nem elég a felületen elrejteni.
+A védelem rétegei (`server/security.js` a központi modul):
+
+**A "dev mód" NEM jogosultság.** A `src/devmode.js` csak a KLIENS gombjait kapcsolja
+(localStorage flag) — bárki átállítja a konzolból, a `curl` meg amúgy is megkerüli.
+Minden romboló műveletet a SZERVERNEK kell védenie.
+
+- **Admin-hitelesítés (`requireAdmin`).** A pálya mentés/törlés és a ranglista-törlés
+  admin-művelet. Loopbackről (a szervergépről) mindig szabad — ettől a lokális
+  fejlesztés config nélkül megy. Távolról `ADMIN_TOKEN` env-változó kell, és a
+  kérésnek fel kell mutatnia (`Authorization: Bearer …`). **Ha nincs ADMIN_TOKEN
+  beállítva, a végpontok távolról TELJESEN tiltottak** (fail-closed) — egy elfelejtett
+  env-változó nem nyitva, hanem zárva hagyja a rendszert.
+  - Railway-en: `ADMIN_TOKEN` beállítása a service Variables közt. A kliens oldalon
+    egyszer `?adminToken=…` az URL-ben (a kód azonnal kitörli a címsorból), utána a
+    localStorage-ból megy; 401 esetén a szerkesztő rákérdez.
+- **Forgalomkorlátozás (`rateLimit`).** IP + végpont-csoportonként, memóriában, külső
+  csomag nélkül. Olvasás 300/perc, írás 30/perc, admin 60/perc, szoba-kód 20/perc.
+- **`trust proxy` — kétélű, ezért explicit.** Proxy mögött (Railway) KELL, különben
+  minden kérés a proxy egy IP-jéről érkezőnek látszik, és az első korlát az ÖSSZES
+  játékost együtt zárja ki. Proxy NÉLKÜL viszont bekapcsolva a korlát megkerülhető
+  hamis `X-Forwarded-For` fejléccel (mérve: 25/25 kérés átment a 20-as limiten).
+  Ezért: Railway-env automatikus felismerés, `TRUST_PROXY` env-változóval felülírható,
+  és a szerver induláskor KIÍRJA, melyik módban fut.
+- **CORS-allowlist.** Korábban `cors()` = mindenki. Most: azonos origin + localhost dev
+  + `ALLOWED_ORIGINS`. Fontos, mit véd: csak a BÖNGÉSZŐből, idegen oldalról indított
+  kérést — a `curl` ellen semmit (az ellen a token + rate limit + validáció véd).
+- **CSP + védelmi fejlécek.** A `script-src 'self'` a tárolt XSS második védvonala.
+  A build nem tartalmaz inline `<script>`-et, ezért ez nem tör el semmit; a beágyazott
+  `<style>` miatt a `style-src`-nél viszont kell `'unsafe-inline'`.
+- **XSS: escape a kimeneten.** Ami NEM tőlünk jön (játékosnév, PÁLYANÉV), az
+  `escapeHtml`-en át kerülhet csak `innerHTML`-be (`src/main.js`). Ez volt a valódi
+  rés: egy `<img src=x onerror=…>` nevű pálya MINDEN játékos böngészőjében lefutott,
+  amikor megnyitotta a pálya-választót.
+- **Köridő-hihetőség (`server/lapValidation.js`).** A játék kliens-autoritatív, tehát
+  a köridőt a kliens jelenti — teljes csalás-védelem nincs. Ami olcsón kizárható: a
+  fizikailag lehetetlen idő (pálya hossza / csúcssebesség). Az alappályán ez ~3,6 s;
+  a "0,5 másodperces kör" beküldés elutasításra kerül.
+- **Méret-korlátok = DoS-védelem.** `MAX_TRACKS`, tábla-méret, kérés-törzs 256 KB.
+
+**A legfontosabb buktató, amit itt megtaláltunk:** a koordináta-clamp ÖNMAGÁBAN nem
+elég. 1000 kontrollpont a megengedett tartomány két ellentétes sarka közt cikcakkozva
+~28 000 km úthosszt ad, amit a `trackFactory` 2 méterenként mintavételez → 14 millió
+pont → **`FATAL ERROR: JavaScript heap out of memory`, a Node-folyamat meghal**. És ez
+a multiplayer szoba-létrehozás útján (`RaceRoom.onCreate` → `createTrackState`)
+HITELESÍTÉS NÉLKÜL elérhető volt. Ezért a `sanitizeLayout` (server/trackStore.js) a
+teljes ÚTHOSSZT is korlátozza (`MAX_TRACK_LENGTH`), a csempés formátumnál pedig a
+csempék SZUMMÁJÁT (`MAX_TOTAL_TILES`) — a szegmensenkénti korlát nem elég.
+**Tanulság: minden kliens-adat, amiből a szerver geometriát ÉPÍT, méret-korlátot igényel,
+nem csak érték-korlátot.** Ugyanez a szűrő fut a REST-mentésen ÉS a Colyseus úton
+(`onCreate` + `hostSettings`) — a host is "csak egy kliens".
+
 ## Ismert buktatók (gotchas)
 
 Ezek a repóban (git-ben) élnek, tehát bármelyik session/fiók/gép automatikusan

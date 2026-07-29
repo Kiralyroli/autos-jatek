@@ -13,14 +13,18 @@
 // =============================================================================
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { isPlausibleLapTime } from './lapValidation.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const FILE = join(DATA_DIR, 'leaderboard.json');
 
 const MAX_NAME = 40;
 const MAX_ENTRIES_RETURNED = 50;
-const MIN_LAP_TIME = 0.5; // s — enné rövidebb kör fizikailag lehetetlen, hibás adat
-const MAX_LAP_TIME = 3600; // s — 1 óránál hosszabb "kör" biztosan hibás adat
+// Egy (trackKey, physics) tábla FELSŐ bejegyzés-korlátja. A bejegyzések kulcsa
+// tartalmazza a JÁTÉKOSNEVET, amit a beküldő szabadon választ — korlát nélkül egy
+// szkript végtelen sok különböző névvel korlátlanul növelné a leaderboard.json-t.
+// A limit felett a LEGLASSABB bejegyzés esik ki (a ranglista úgyis a gyorsakról szól).
+const MAX_ENTRIES_PER_BOARD = 500;
 
 let cache = null;
 
@@ -74,9 +78,9 @@ export function recordLap({ trackKey, trackName, physics, playerName, lapTime },
   const phys = cleanStr(physics, 32);
   const player = cleanStr(playerName, MAX_NAME) || 'Játékos';
   const time = Number(lapTime);
-  if (!key || !phys || !Number.isFinite(time) || time < MIN_LAP_TIME || time > MAX_LAP_TIME) {
-    return null;
-  }
+  // A köridőt a KLIENS jelenti be (a játék kliens-autoritatív), ezért a
+  // fizikailag lehetetlen időt itt szűrjük ki — lásd server/lapValidation.js.
+  if (!key || !phys || !isPlausibleLapTime(key, time)) return null;
 
   const db = load();
   const ts = Number.isFinite(nowMs) ? nowMs : 0;
@@ -91,10 +95,22 @@ export function recordLap({ trackKey, trackName, physics, playerName, lapTime },
     persist();
     return existing;
   }
-  const rec = { trackKey, trackName: name, physics: phys, playerName: player, lapTime: time, achievedAt: ts };
+  const rec = { trackKey: key, trackName: name, physics: phys, playerName: player, lapTime: time, achievedAt: ts };
   db.entries.push(rec);
+  enforceBoardLimit(db, key, phys);
   persist();
   return rec;
+}
+
+// A tábla méret-korlátjának érvényesítése: a legrosszabb időket dobjuk, amíg a
+// tábla a MAX_ENTRIES_PER_BOARD alá nem kerül (lásd a konstans megjegyzését).
+function enforceBoardLimit(db, key, phys) {
+  const board = db.entries.filter((e) => e.trackKey === key && e.physics === phys);
+  if (board.length <= MAX_ENTRIES_PER_BOARD) return;
+  const doomed = new Set(
+    board.sort((a, b) => a.lapTime - b.lapTime).slice(MAX_ENTRIES_PER_BOARD)
+  );
+  db.entries = db.entries.filter((e) => !doomed.has(e));
 }
 
 // Egy játékos köridejének törlése (dev mód). true, ha törölt valamit.

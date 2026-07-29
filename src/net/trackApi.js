@@ -2,45 +2,28 @@
 //  GLOBÁLIS PÁLYA-KATALÓGUS — kliens oldali REST-hívások a szerverhez.
 //
 //  A pályák a szerveren élnek (server/trackStore.js), így minden gépről/böngészőből
-//  elérhetők. A szerver címét a NET.serverUrl-ből származtatjuk: ws→http, wss→https.
-//  Élesben ez ugyanaz az origin, ahonnan a kliens jön (Railway), fejlesztésben a
-//  külön Colyseus szerver (localhost:2567).
+//  elérhetők. A közös kérés-réteg (hibakezelés, admin-hitelesítés) a httpApi.js-ben
+//  van — az OLVASÁS bárkinek megy, a MENTÉS/TÖRLÉS admin-tokent igényel (a pálya
+//  mentése NÉVRE upsertel, tehát enélkül bárki felülírhatná mások pályáját).
 // =============================================================================
-import { NET } from '../config.js';
-
-const API_BASE = NET.serverUrl.replace(/^ws(s?):\/\//, 'http$1://');
-
-async function req(path, opts) {
-  const res = await fetch(API_BASE + path, opts);
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const j = await res.json();
-      if (j?.error) msg = j.error;
-    } catch {
-      /* nem JSON — marad a státuszkód */
-    }
-    throw new Error(msg);
-  }
-  return res.json();
-}
+import { apiRequest, apiAdminRequest } from './httpApi.js';
 
 // A pálya-katalógus metaadat-listája: [{ id, name, segments, decorations, ... }].
 export async function apiListTracks() {
-  const data = await req('/api/tracks');
+  const data = await apiRequest('/api/tracks');
   return Array.isArray(data.tracks) ? data.tracks : [];
 }
 
 // Egy pálya TELJES adata: { id, name, layout, decorations }.
 export async function apiGetTrack(id) {
-  return req(`/api/tracks/${encodeURIComponent(id)}`);
+  return apiRequest(`/api/tracks/${encodeURIComponent(id)}`);
 }
 
 // Pálya mentése/felülírása (névre upsert). Visszaadja: { id, name }.
 // Az editorPath/editorDecorations a szerkesztő WYSIWYG-nézete (opcionális) — a
 // játék nem használja, csak a szerkesztő újranyitásakor áll vissza pontosan.
 export async function apiSaveTrack({ name, layout, decorations, editorPath, editorDecorations }) {
-  return req('/api/tracks', {
+  return apiAdminRequest('/api/tracks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, layout, decorations, editorPath, editorDecorations }),
@@ -49,5 +32,5 @@ export async function apiSaveTrack({ name, layout, decorations, editorPath, edit
 
 // Pálya törlése id alapján.
 export async function apiDeleteTrack(id) {
-  return req(`/api/tracks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  return apiAdminRequest(`/api/tracks/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

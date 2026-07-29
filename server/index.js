@@ -23,19 +23,76 @@ import { RaceRoom } from './RaceRoom.js';
 import { listTracks, getTrack, saveTrack, deleteTrack } from './trackStore.js';
 import { listEntries, recordLap, deleteEntry, clearBoard } from './leaderboardStore.js';
 import { resolveJoinCode } from './roomCodes.js';
+import {
+  requireAdmin,
+  adminTokenConfigured,
+  rateLimit,
+  securityHeaders,
+  corsOptions,
+} from './security.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = join(__dirname, '..', 'dist');
 const PORT = Number(process.env.PORT) || 2567;
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+
+// A forgalomkorlátozás IP-nként számol, ezért a VALÓDI kliens-IP kell — ez pedig
+// attól függ, van-e reverse proxy a szerver előtt. A beállítás MINDKÉT irányban
+// veszélyes, ha rosszul találjuk el, ezért NEM tippelünk, hanem explicit döntünk:
+//
+//  - Proxy mögött (Railway) `trust proxy = 1` KELL, különben minden kérés a proxy
+//    egyetlen címéről érkezőnek látszik, és az első korlát az ÖSSZES játékost
+//    együtt zárja ki. Az `1` a proxy által hozzáfűzött (tehát nem hamisítható)
+//    utolsó XFF-címet veszi; a támadó saját fejléce attól balra kerül.
+//  - Proxy NÉLKÜL viszont bekapcsolva a korlát MEGKERÜLHETŐ: mérve, hogy egy
+//    kézzel küldött `X-Forwarded-For: 9.9.9.<i>` fejléccel 25/25 kérés átment a
+//    20-as limiten, mert nincs proxy, ami felülírná. Ezért alapból KI van kapcsolva.
+//
+// A Railway a saját környezeti változóit mindig beállítja — ebből ismerjük fel a
+// proxy mögötti futást; kézzel a TRUST_PROXY env-változóval bármikor felülírható.
+const behindProxy =
+  process.env.TRUST_PROXY !== undefined
+    ? process.env.TRUST_PROXY !== '0' && process.env.TRUST_PROXY !== ''
+    : Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID);
+app.set('trust proxy', behindProxy ? 1 : false);
+app.disable('x-powered-by');
+
+app.use(securityHeaders);
+app.use(cors(corsOptions));
+// 1 MB → 256 KB: a legnagyobb jogos kérés (egy teljes pálya layout+dekorációkkal)
+// bőven belefér, egy felfújt kérés viszont ne foglaljon feleslegesen memóriát.
+app.use(express.json({ limit: '256kb' }));
+
+// Végpont-csoportonkénti korlátok. Az olvasás bőkezű (a menü több hívást is indít
+// egy pálya-váltásnál), az írás és a szoba-kód feloldás szigorú.
+const readLimit = rateLimit({ name: 'read', limit: 300, windowMs: 60_000 });
+const writeLimit = rateLimit({
+  name: 'write',
+  limit: 30,
+  windowMs: 60_000,
+  message: 'Túl sok beküldés — várj egy percet.',
+});
+// A 4 jegyű kód mindössze 9000 lehetőség: korlát nélkül percek alatt végig lehetne
+// próbálni az összeset, és bejelentkezni MINDEN épp futó privát szobába.
+const joinCodeLimit = rateLimit({
+  name: 'joincode',
+  limit: 20,
+  windowMs: 60_000,
+  message: 'Túl sok szoba-kód próbálkozás — várj egy percet.',
+});
+const adminLimit = rateLimit({
+  name: 'admin',
+  limit: 60,
+  windowMs: 60_000,
+  message: 'Túl sok adminisztratív kérés.',
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // A rövid, számokból álló csatlakozási kód (lásd roomCodes.js) feloldása a
 // tényleges Colyseus roomId-ra — a kliens ezt hívja meg join előtt.
-app.get('/api/room-code/:code', (req, res) => {
+app.get('/api/room-code/:code', joinCodeLimit, (req, res) => {
   const roomId = resolveJoinCode(req.params.code);
   if (!roomId) return res.status(404).json({ error: 'Nincs ilyen szoba-kód.' });
   res.json({ roomId });
@@ -43,10 +100,15 @@ app.get('/api/room-code/:code', (req, res) => {
 
 // --- Globális pálya-katalógus REST API (szerkesztő + főmenü pálya-választó) ---
 // A pályák a szerveren élnek (trackStore), így minden gépről elérhetők.
-app.get('/api/tracks', (_req, res) => {
+//
+// OLVASÁS: bárkinek (a játékhoz kell). ÍRÁS/TÖRLÉS: CSAK admin — a pálya-szerkesztő
+// amúgy is dev-módhoz kötött (src/editor.js), tehát a mentés jogosan admin-művelet.
+// Enélkül bárki felülírhatná mások pályáját (a mentés NÉVRE upsertel!), vagy
+// egyetlen paranccsal kitörölhetné az összeset.
+app.get('/api/tracks', readLimit, (_req, res) => {
   res.json({ tracks: listTracks() });
 });
-app.get('/api/tracks/:id', (req, res) => {
+app.get('/api/tracks/:id', readLimit, (req, res) => {
   const t = getTrack(req.params.id);
   if (!t) return res.status(404).json({ error: 'Nincs ilyen pálya.' });
   res.json({
@@ -58,30 +120,35 @@ app.get('/api/tracks/:id', (req, res) => {
     editorDecorations: t.editorDecorations,
   });
 });
-app.post('/api/tracks', (req, res) => {
+app.post('/api/tracks', adminLimit, requireAdmin, (req, res) => {
   const rec = saveTrack(req.body || {}, Date.now());
-  if (!rec) return res.status(400).json({ error: 'Hibás pálya-adat.' });
+  if (!rec) return res.status(400).json({ error: 'Hibás pálya-adat vagy betelt a pálya-tár.' });
   res.json({ id: rec.id, name: rec.name });
 });
-app.delete('/api/tracks/:id', (req, res) => {
+app.delete('/api/tracks/:id', adminLimit, requireAdmin, (req, res) => {
   res.json({ ok: deleteTrack(req.params.id) });
 });
 
 // --- Örök ranglista REST API (pálya+fizika kombinációnként a legjobb köridők) ---
 // Az egyjátékos kliens ide küldi a saját köreit; a multiplayer szerver (RaceRoom)
 // UGYANEZT a modult közvetlenül (HTTP nélkül) hívja, mert ott már authoritative.
-app.get('/api/leaderboard/:trackKey/:physics', (req, res) => {
+//
+// A BEKÜLDÉS szándékosan nyitva marad (minden játékosnak be kell tudnia küldeni a
+// körét, és nincs felhasználó-kezelés) — itt a védelem a forgalomkorlátozás + a
+// fizikai hihetőség-ellenőrzés (server/lapValidation.js) + a tábla méret-korlátja.
+// A TÖRLÉS viszont admin-művelet (a kliensen is csak dev módban látszik a gomb).
+app.get('/api/leaderboard/:trackKey/:physics', readLimit, (req, res) => {
   res.json({ entries: listEntries(req.params.trackKey, req.params.physics) });
 });
-app.post('/api/leaderboard', (req, res) => {
+app.post('/api/leaderboard', writeLimit, (req, res) => {
   const rec = recordLap(req.body || {}, Date.now());
-  if (!rec) return res.status(400).json({ error: 'Hibás köridő-adat.' });
+  if (!rec) return res.status(400).json({ error: 'Hibás vagy hihetetlen köridő-adat.' });
   res.json({ ok: true });
 });
-app.delete('/api/leaderboard/:trackKey/:physics/:playerName', (req, res) => {
+app.delete('/api/leaderboard/:trackKey/:physics/:playerName', adminLimit, requireAdmin, (req, res) => {
   res.json({ ok: deleteEntry(req.params.trackKey, req.params.physics, req.params.playerName) });
 });
-app.delete('/api/leaderboard/:trackKey/:physics', (req, res) => {
+app.delete('/api/leaderboard/:trackKey/:physics', adminLimit, requireAdmin, (req, res) => {
   res.json({ removed: clearBoard(req.params.trackKey, req.params.physics) });
 });
 
@@ -125,4 +192,14 @@ gameServer.define('race', RaceRoom);
 
 httpServer.listen(PORT, () => {
   console.log(`🏁 Autós játék multiplayer szerver fut: ws://localhost:${PORT}`);
+  console.log(
+    adminTokenConfigured()
+      ? '🔒 ADMIN_TOKEN beállítva — a pálya-mentés/törlés távolról is elérhető vele.'
+      : '🔒 Nincs ADMIN_TOKEN — a pálya-mentés/törlés CSAK a szervergépről (localhost) megy.'
+  );
+  console.log(
+    behindProxy
+      ? '🌐 trust proxy BE — a kliens-IP az X-Forwarded-For-ból (reverse proxy mögött).'
+      : '🌐 trust proxy KI — a kliens-IP a közvetlen kapcsolatból (nincs proxy).'
+  );
 });

@@ -24,6 +24,26 @@ const MAX_NAME = 40;
 const MAX_LAYOUT = 1000;
 const MAX_DECOR = 5000;
 const MAX_EDITOR_CELLS = 2000;
+// A tárolható pályák FELSŐ korlátja — enélkül egy szkriptelt POST-áradat
+// korlátlanul növelné a tracks.json-t (lemez + memória kimerítése). A limit
+// felett új pálya nem jön létre; a MEGLÉVŐK felülírása (upsert névre) továbbra
+// is megy, tehát a normál szerkesztő-használatot nem akasztja meg.
+const MAX_TRACKS = 200;
+// A világkoordináták értelmes tartománya (m). Korlát nélkül egy 1e9 nagyságú
+// koordináta a spline-mintavételezésnél (2 méterenként!) gyakorlatilag végtelen
+// pontot generálna → a szerver befagyna egyetlen kérésre. Lásd sanitizeLayout.
+const MAX_COORD = 10000;
+// A pálya középvonalának FELSŐ hossz-korlátja (m). A koordináta-clamp ÖNMAGÁBAN
+// NEM elég: 1000 kontrollpont a megengedett tartomány két ellentétes sarka közt
+// cikcakkozva ~28 000 km úthosszt ad, amit a trackFactory 2 méterenként mintavételez
+// → 14 millió pont. MÉRVE: pontosan ez a layout `FATAL ERROR: JavaScript heap out of
+// memory`-val megölte a Node-folyamatot — és ez a multiplayer szoba-létrehozás
+// útján (RaceRoom.onCreate → createTrackState) HITELESÍTÉS NÉLKÜL elérhető volt.
+// 20 km nagyságrendekkel több minden valós pályánál (az alappálya ~306 m).
+const MAX_TRACK_LENGTH = 20000;
+// Ugyanez a csempe-alapú formátumra: a szegmensek `n`/`size` mezői közvetlenül
+// szorozzák a generált csempeszámot, ezért a SZUMMÁJUKAT is korlátozni kell.
+const MAX_TOTAL_TILES = 2000;
 
 let cache = null; // { tracks: [...] } — memóriában, lemezre íráskor szinkronban
 
@@ -59,50 +79,80 @@ function isSplineLayoutArr(arr) {
   return arr.length > 0 && arr[0] && typeof arr[0].x === 'number' && arr[0].type === undefined;
 }
 
+// Egy világkoordináta befogása az értelmes tartományba (lásd MAX_COORD).
+const clampCoord = (v) => Math.max(-MAX_COORD, Math.min(MAX_COORD, v));
+
+// A LAYOUT megtisztítása/validálása — hibás adatra null.
+//
+// EXPORTÁLT, mert nem csak a REST-mentés útján érkezhet layout: a multiplayer
+// szoba is a KLIENSTŐL kapja (createRoom options.layout, illetve a host
+// 'hostSettings' üzenete), és a szerver abból pálya-geometriát ÉPÍT
+// (createTrackState). Validálatlanul egy rosszindulatú layout (több ezer
+// kontrollpont, csillagászati koordinátákkal) ott is megfoghatná a
+// szerverfolyamatot — ezért ugyanez a szűrő fut mindkét úton.
+export function sanitizeLayout(layout) {
+  if (!Array.isArray(layout) || layout.length === 0 || layout.length > MAX_LAYOUT) return null;
+  if (isSplineLayoutArr(layout)) {
+    const clean = layout
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z))
+      .map((p) => {
+        const pt = { x: clampCoord(p.x), z: clampCoord(p.z) };
+        // Szakaszonkénti pálya-szélesség (lásd src/sim/trackSpline.js) — opcionális,
+        // a régebbi (e funkció előtt mentett) pontoknál nincs, a trackFactory.js
+        // ilyenkor a pálya alap-szélességére (tile) esik vissza.
+        if (Number.isFinite(p.width) && p.width > 0) pt.width = Math.min(p.width, 200);
+        // Éles sarok (törésponttá teszi a görbét, lásd src/sim/trackSpline.js)
+        // — opcionális, csak akkor mentjük, ha ténylegesen be van kapcsolva.
+        if (p.sharp === true) pt.sharp = true;
+        return pt;
+      });
+    // lásd src/sim/trackValidation.js MIN_CONTROL_POINTS
+    if (clean.length < 4) return null;
+    // A kontrollpontokon végigfutó útvonal teljes hossza (a záró szakasszal
+    // együtt, hiszen a pálya zárt hurok) — lásd MAX_TRACK_LENGTH.
+    let pathLen = 0;
+    for (let i = 0; i < clean.length; i++) {
+      const a = clean[i];
+      const b = clean[(i + 1) % clean.length];
+      pathLen += Math.hypot(b.x - a.x, b.z - a.z);
+    }
+    return pathLen <= MAX_TRACK_LENGTH ? clean : null;
+  }
+  const clean = layout
+    .filter((s) => s && typeof s.type === 'string' && s.type.length <= 20)
+    .map((s) => {
+      const seg = { type: s.type };
+      if (Number.isFinite(s.turn)) seg.turn = s.turn;
+      // Az `n` (szakasz-hossz csempében) és a `size` (kanyar-sugár) közvetlenül
+      // szorozza a generált geometria méretét — kötelező felső korlát.
+      if (Number.isFinite(s.n)) seg.n = Math.max(1, Math.min(500, Math.round(s.n)));
+      if (Number.isFinite(s.size)) seg.size = Math.max(1, Math.min(50, Math.round(s.size)));
+      return seg;
+    });
+  if (clean.length === 0) return null;
+  // A csempék SZUMMÁJA is korlátos (lásd MAX_TOTAL_TILES) — a szegmensenkénti
+  // korlát önmagában még mindig 1000 × 500 csempét engedne.
+  const totalTiles = clean.reduce((sum, s) => sum + (s.n ?? 1) + (s.size ?? 0), 0);
+  return totalTiles <= MAX_TOTAL_TILES ? clean : null;
+}
+
 // A bejövő pálya-adat megtisztítása/validálása. Hibás adatra null-t ad.
 function sanitize({ name, layout, decorations, editorPath, editorDecorations }) {
   if (typeof name !== 'string') return null;
   const cleanName = name.trim().slice(0, MAX_NAME);
   if (!cleanName) return null;
 
-  if (!Array.isArray(layout) || layout.length === 0 || layout.length > MAX_LAYOUT) return null;
-  let cleanLayout;
-  if (isSplineLayoutArr(layout)) {
-    cleanLayout = layout
-      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z))
-      .map((p) => {
-        const pt = { x: p.x, z: p.z };
-        // Szakaszonkénti pálya-szélesség (lásd src/sim/trackSpline.js) — opcionális,
-        // a régebbi (e funkció előtt mentett) pontoknál nincs, a trackFactory.js
-        // ilyenkor a pálya alap-szélességére (tile) esik vissza.
-        if (Number.isFinite(p.width) && p.width > 0) pt.width = p.width;
-        // Éles sarok (törésponttá teszi a görbét, lásd src/sim/trackSpline.js)
-        // — opcionális, csak akkor mentjük, ha ténylegesen be van kapcsolva.
-        if (p.sharp === true) pt.sharp = true;
-        return pt;
-      });
-    if (cleanLayout.length < 4) return null; // lásd src/sim/trackValidation.js MIN_CONTROL_POINTS
-  } else {
-    cleanLayout = layout
-      .filter((s) => s && typeof s.type === 'string')
-      .map((s) => {
-        const seg = { type: s.type };
-        if (Number.isFinite(s.turn)) seg.turn = s.turn;
-        if (Number.isFinite(s.n)) seg.n = s.n;
-        if (Number.isFinite(s.size)) seg.size = s.size;
-        return seg;
-      });
-    if (cleanLayout.length === 0) return null;
-  }
+  const cleanLayout = sanitizeLayout(layout);
+  if (!cleanLayout) return null;
 
   const rawDecor = Array.isArray(decorations) ? decorations : [];
   if (rawDecor.length > MAX_DECOR) return null;
   const cleanDecor = rawDecor
-    .filter((d) => d && typeof d.type === 'string')
+    .filter((d) => d && typeof d.type === 'string' && d.type.length <= 30)
     .map((d) => ({
       type: d.type,
-      dgx: Number(d.dgx) || 0,
-      dgy: Number(d.dgy) || 0,
+      dgx: clampCoord(Number(d.dgx) || 0),
+      dgy: clampCoord(Number(d.dgy) || 0),
       rot: Number(d.rot) || 0,
     }));
 
@@ -122,10 +172,10 @@ function sanitize({ name, layout, decorations, editorPath, editorDecorations }) 
   }
   if (Array.isArray(editorDecorations) && editorDecorations.length <= MAX_DECOR) {
     clean.editorDecorations = editorDecorations
-      .filter((d) => d && typeof d.type === 'string')
+      .filter((d) => d && typeof d.type === 'string' && d.type.length <= 30)
       .map((d) => ({
-        gx: Number(d.gx) || 0,
-        gy: Number(d.gy) || 0,
+        gx: clampCoord(Number(d.gx) || 0),
+        gy: clampCoord(Number(d.gy) || 0),
         type: d.type,
         rot: Number(d.rot) || 0,
       }));
@@ -157,6 +207,13 @@ export function getTrack(id) {
   return load().tracks.find((t) => t.id === id) || null;
 }
 
+// A tárolt pályák NYERS rekordjai — a köridő-hihetőség ellenőrzéséhez kell
+// (server/lapValidation.js: a trackKey-hez tartozó layout megkeresése, hogy a
+// pálya tényleges hosszából jöjjön a minimális elfogadható köridő).
+export function listRawTracks() {
+  return load().tracks;
+}
+
 // Pálya mentése. Ha már van AZONOS NEVŰ, felülírja (upsert névre) — így a
 // szerkesztőben ugyanazzal a névvel újramentés frissít, nem duplikál.
 // Visszaadja a mentett rekordot, vagy null-t hibás adatnál.
@@ -176,6 +233,9 @@ export function saveTrack(input, nowMs) {
     persist();
     return existing;
   }
+  // ÚJ pálya csak a felső korlátig (lásd MAX_TRACKS) — a meglévők felülírása
+  // (a fenti ág) korlátlan marad, tehát a szerkesztő normál használata megy tovább.
+  if (db.tracks.length >= MAX_TRACKS) return null;
   const rec = {
     id: randomUUID(),
     name: clean.name,

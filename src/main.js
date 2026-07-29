@@ -147,6 +147,20 @@ function readInput() {
 const audio = createAudio();
 const speedEl = document.getElementById('speed');
 
+// Szöveg biztonságos beszúrása HTML-sablonba (XSS-védelem).
+//
+// MINDEN olyan szöveget át kell rajta engedni, ami NEM tőlünk származik: a
+// játékosnevek és a PÁLYANEVEK is más felhasználóktól jönnek (a szerver csak
+// hosszra vágja őket), és több helyen `innerHTML`-lel épített listákba kerülnek —
+// escape nélkül egy `<img src=x onerror=…>` nevű pálya MINDEN játékos böngészőjében
+// lefutna, amikor megnyitja a pálya-választót. Második védvonal a szerver CSP-je
+// (server/security.js) és a nevek `<>`-szűrése (server/RaceRoom.js cleanName).
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 // A restart / hot lap reset gomb viselkedése módfüggő — a dispatcher az aktív
 // mód kezelőjét hívja.
 let onRestartClick = () => {};
@@ -376,7 +390,7 @@ async function renderTrackPickerGrid(target) {
     // index.html .carSelectGrid .carswatch) — csak a belső elem tér el
     // (canvas.trackThumb egy img.carThumb helyett).
     btn.className = 'carswatch' + (t.id === currentId ? ' active' : '');
-    btn.innerHTML = `<canvas class="trackThumb" width="130" height="88"></canvas><span class="carName">${t.name}</span>`;
+    btn.innerHTML = `<canvas class="trackThumb" width="130" height="88"></canvas><span class="carName">${escapeHtml(t.name)}</span>`;
     btn.onclick = () => {
       if (target === 'mp') {
         mpSelectedTrackId = t.id;
@@ -822,13 +836,6 @@ function startSingleplayer(hotLap = false) {
 // Az autó-modell + jelölőszín + ikon a config.CARS listából (a colorIdx = ez az index).
 const carColor = (i) => CARS[i % CARS.length].color;
 const carIcon = (i) => CARS[i % CARS.length].icon;
-
-// Játékosnév biztonságos beszúrása HTML-be (a végeredmény-listához).
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
 
 // A szoba pályája a MI lokálisan felépített pályánk-e? Ha nem, elmentjük a
 // szerverét aktívnak, és újratöltjük az oldalt (a pálya-render a betöltéskor
@@ -1506,7 +1513,7 @@ async function startMultiplayer(room) {
           gapHtml = `<span class="standingsGap ${cls}">${sign}${gapSec.toFixed(1)}s</span>`;
         }
 
-        return `<div>${i + 1}. ${icon} ${p.name}${gapHtml} — ${info}${lapLine}</div>`;
+        return `<div>${i + 1}. ${icon} ${escapeHtml(p.name)}${gapHtml} — ${info}${lapLine}</div>`;
       })
       .join('');
   }

@@ -11,10 +11,18 @@
 //  In-memory Map — egy Node-folyamat egy játékszervernyi szobát szolgál ki,
 //  nem kell perzisztálni (a szoba úgyis megszűnik szerver-újraindításkor).
 // =============================================================================
+import { randomInt } from 'crypto';
+
 const codeToRoomId = new Map();
 
+// KRIPTOGRÁFIAI véletlen (nem Math.random): a Math.random kimenete a belső
+// állapotból kikövetkeztethető, így néhány megfigyelt kód után a KÖVETKEZŐK
+// megjósolhatók lennének — egy privát szoba kódja pedig maga a belépő.
+// A kódtér így is csak 9000 elemű (a szóbeli átadhatóság kedvéért), ezért a
+// nyers próbálgatás ellen a feloldó végpont forgalomkorlátozott
+// (lásd server/index.js /api/room-code rate limit).
 function randomCode() {
-  return String(Math.floor(1000 + Math.random() * 9000)); // 4 jegyű: 1000-9999
+  return String(randomInt(1000, 10000)); // 4 jegyű: 1000-9999
 }
 
 // Új kód generálása és regisztrálása egy roomId-hoz (ütközés esetén újrapróbál).
