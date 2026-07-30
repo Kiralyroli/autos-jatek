@@ -7,7 +7,7 @@
 //  impulzussal kioltjuk. Teljes kioltás → nem csúszik kanyarban; részleges → drift.
 // =============================================================================
 import { Vec2, Box } from 'planck';
-import { CAR, OFFROAD } from '../config.js';
+import { CAR, OFFROAD, BOOST } from '../config.js';
 
 // Lokális tengelyek világkoordinátában:
 //   előre = +x, jobbra (oldalra) = +y
@@ -94,12 +94,35 @@ export function separateBodyFromPoints(body, points, sep) {
 //   throttleMul / wasOnGrass — a fű-büntetés (lásd updateOffRoadPenalty),
 //   steer — az AKTUÁLIS kormányszög (rad), ami fokozatosan fordul a cél felé
 //           (a kormány nem ugrik, mint a valóságban sem — lásd applySteering).
+//   boostRemaining — a hátralévő boost-üzemanyag (s), körönként újratöltve
+//           (lásd refillBoost — a hívó a raceStep 'lap'/'finish' eseményénél
+//           hívja). boosting — a TÉNYLEGESEN alkalmazott boost e lépésben
+//           (gomb nyomva ÉS van még üzemanyag) — ezt küldi a hálón a kliens
+//           (nem a nyers gombállapotot), hogy a távoli megfigyelők a
+//           tényleges (üzemanyag-korlátos) állapotot lássák/szimulálják.
 export function createDriveState() {
-  return { throttleMul: 1, wasOnGrass: false, steer: 0 };
+  return { throttleMul: 1, wasOnGrass: false, steer: 0, boostRemaining: BOOST.maxPerLap, boosting: false };
+}
+
+// A boost-üzemanyag mai állapotának frissítése — a world.step() ELŐTT hívandó
+// (updateCar hívja). CSAK akkor fogy (és csak akkor van "boosting" hatás), ha
+// a gomb nyomva van, VAN GÁZ IS (input.up), ÉS van hátralévő üzemanyag — a
+// boost önmagában (gáz nélkül) UGYANIS semmit nem csinál (lásd applyDrive),
+// ezért ne is fogyasszon: különben valaki csak úgy nyomva tartva a gombot
+// (fékezés/vitorlázás közben, véletlenül) feleslegesen elfecsérelné.
+function updateBoost(input, dt, drive) {
+  drive.boosting = !!input.boost && !!input.up && drive.boostRemaining > 0;
+  if (drive.boosting) drive.boostRemaining = Math.max(0, drive.boostRemaining - dt);
+}
+
+// A boost-üzemanyag teljes újratöltése — körváltáskor/versenykezdéskor hívandó
+// (lásd main.js: a raceStep visszaadott eseményei közt 'lap' vagy 'finish').
+export function refillBoost(drive) {
+  drive.boostRemaining = BOOST.maxPerLap;
 }
 
 // Egy fizika-lépés input-feldolgozása. A world.step() ELŐTT hívandó.
-//   input: { up, down, left, right, drift } — boolean-ök (lásd input.js)
+//   input: { up, down, left, right, drift, boost } — boolean-ök (lásd input.js)
 //   drive: createDriveState() eredménye — a fű-büntetés perzisztens állapota
 //   offRoad: (x, y) => méter az útszélen KÍVÜL (0 = úton) — a hívó pályájából
 //            (kliensen track.js offRoadExcess, szerveren a szoba trackState-je),
@@ -113,6 +136,7 @@ export function updateCar(body, input, dt, drive, offRoad, car = CAR) {
   updateSteerAngle(input, dt, drive, car); // előbb a kormányszög, mert a gumik használják
   applyTireFriction(body, input, dt, drive, car);
   updateOffRoadPenalty(body, drive, offRoad, car);
+  updateBoost(input, dt, drive);
   applyDrive(body, input, drive, car);
 }
 
@@ -197,17 +221,26 @@ function applyDrive(body, input, drive, car) {
   const forward = forwardNormal(body);
   const speed = forwardSpeed(body);
 
+  // BOOST: csak a GÁZ erejét és a csúcssebesség-határt emeli meg (lásd
+  // drive.boosting — updateBoost már eldöntötte, van-e még üzemanyag) — a
+  // fék/tolatás/gördülési-ellenállás érintetlen. Gáz NÉLKÜL (force==0 marad)
+  // a boost semmit nem csinál, tehát önmagában, gomb nyomva tartva sem mozgat.
+  const engineForce = drive.boosting ? car.engineForce * car.boostForceMultiplier : car.engineForce;
+  const maxForwardSpeed = drive.boosting
+    ? car.maxForwardSpeed * car.boostMaxSpeedMultiplier
+    : car.maxForwardSpeed;
+
   let force = 0;
   if (input.up) {
     // Csak a GÁZT csökkenti a fű-büntetés — fék és tolatás mindig teljes erővel.
-    force = car.engineForce * drive.throttleMul;
+    force = engineForce * drive.throttleMul;
   } else if (input.down) {
     // Ha még előre gurul → fék. Ha áll vagy hátrafelé megy → tolatás.
     force = speed > 0.5 ? -car.brakeForce : -car.reverseForce;
   }
 
   // Sebességhatárok: a határ felett nem adunk több hajtóerőt az adott irányba.
-  if (force > 0 && speed > car.maxForwardSpeed) force = 0;
+  if (force > 0 && speed > maxForwardSpeed) force = 0;
   if (force < 0 && speed < -car.maxReverseSpeed) force = 0;
 
   // Hajtóerő és gördülési ellenállás egyetlen, forward irányú eredő erőként.

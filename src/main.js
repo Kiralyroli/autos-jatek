@@ -23,6 +23,7 @@ import {
   isFullyOffRoad,
   hitsCone,
   separateBodyFromPoints,
+  refillBoost,
 } from './sim/car.js';
 import { createRaceState, raceStep, segmentsCross } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT, encodeInput } from './input.js';
@@ -148,6 +149,7 @@ function readInput() {
     left: k.left || t.left,
     right: k.right || t.right,
     drift: k.drift || t.drift,
+    boost: k.boost || t.boost,
   };
 }
 const audio = createAudio();
@@ -735,7 +737,10 @@ function startSingleplayer(hotLap = false) {
     // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
     const offTrack =
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
-    raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+    const raceEvents = raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+    // Boost-üzemanyag újratöltése minden körváltásnál (és célba éréskor) —
+    // lásd config.js BOOST.maxPerLap / sim/car.js refillBoost.
+    if (raceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(drive);
 
     // FONTOS: lastSubmittedBest CSAK sikeres válasz után frissül (nem rögtön a
     // hívás előtt) — így ha egy beküldés elhasal (hálózati hiba, Railway "kihűlt"
@@ -800,6 +805,9 @@ function startSingleplayer(hotLap = false) {
 
   let lastCountInt = null;
   let lastPhase = race.phase;
+  // "Nincs üzemanyag" hiba-hang csak ÚJ próbálkozásonként szóljon (élfigyelés),
+  // ne minden képkockában, amíg a gombot üres tartállyal nyomva tartja.
+  let wasBoostDenied = false;
   lastTime = performance.now();
 
   function frame(now) {
@@ -830,6 +838,7 @@ function startSingleplayer(hotLap = false) {
         lateralSpeed: lateralSpeed(carBody),
         forwardSpeed: forwardSpeed(carBody),
         corneringLoad: corneringLoad(carBody),
+        boosting: drive.boosting,
       }],
       dt,
       offRoadExcess
@@ -839,7 +848,7 @@ function startSingleplayer(hotLap = false) {
       camera.position.set(x, window.__TOP, z + 0.001);
       camera.lookAt(x, 0, z);
     } else {
-      updateCamera(x, z, angle, dt);
+      updateCamera(x, z, angle, dt, drive.boosting);
     }
     renderer.render(scene, camera);
 
@@ -855,9 +864,18 @@ function startSingleplayer(hotLap = false) {
       speedKmh: speedKmh(carBody),
       throttle: race.phase === 'racing' && input.up,
       corneringLoad: race.phase === 'finished' ? 0 : corneringLoad(carBody),
+      boosting: race.phase === 'racing' && drive.boosting,
     });
 
+    // "Nincs boost-üzemanyag" hiba-hang: gomb+gáz nyomva, DE üres a tartály —
+    // csak az ÚJ próbálkozás pillanatában szól (lásd wasBoostDenied fent).
+    const boostDenied =
+      race.phase === 'racing' && input.boost && input.up && drive.boostRemaining <= 0;
+    if (boostDenied && !wasBoostDenied) audio.playBoostEmpty();
+    wasBoostDenied = boostDenied;
+
     if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(speedKmh(carBody))} km/h`;
+    race.boostRemaining = drive.boostRemaining; // csak megjelenítéshez (hud.js)
     updateHud(race);
     minimap.draw([{ x, z, color: CARS[selectedCar]?.color, isMe: true }]);
 
@@ -866,7 +884,7 @@ function startSingleplayer(hotLap = false) {
   requestAnimationFrame(frame);
 
   if (import.meta.env.DEV) {
-    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap, carEffects };
+    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap, carEffects, updateHud };
   }
 }
 
@@ -997,8 +1015,13 @@ async function startMultiplayer(room) {
       x: pos.x, y: pos.y, angle: mpCar.getAngle(),
       vx: vel.x, vy: vel.y, w: mpCar.getAngularVelocity(),
       // A VEZÉRLÉSÜNK is megy (bitmaszk) — ebből a többi kliens a mi autónkat
-      // a valódi fizikán tudja továbbszimulálni (lásd net/remoteCars.js).
-      inp: encodeInput(input || NEUTRAL_INPUT),
+      // a valódi fizikán tudja továbbszimulálni (lásd net/remoteCars.js). A
+      // boost mezőnél NEM a nyers gombállapotot küldjük, hanem a TÉNYLEGESEN
+      // alkalmazott (üzemanyag-korlátos) állapotot (mpDrive.boosting — az
+      // updateCar/updateBoost már eldöntötte) — így a távoli megfigyelők
+      // pontosan azt látják/szimulálják, amit mi valójában csináltunk, üres
+      // üzemanyagnál nem "csalunk" számukra extra gyorsulást.
+      inp: encodeInput({ ...(input || NEUTRAL_INPUT), boost: mpDrive.boosting }),
       speed: speedKmh(mpCar), cornering: corneringLoad(mpCar),
       lap: mpRace.lap,
       progress: trackState.trackProgress(pos.x, pos.y),
@@ -1296,6 +1319,7 @@ async function startMultiplayer(room) {
   let lastCountInt = null;
   let lastPhase = 'lobby';
   let lastStandingsAt = 0;
+  let wasBoostDenied = false; // lásd SP — csak új próbálkozásonként szóljon a hiba-hang
   lastTime = performance.now();
 
   function frame(now) {
@@ -1389,7 +1413,8 @@ async function startMultiplayer(room) {
               const offTrack =
                 isFullyOffRoad(mpCar, offRoadExcess) ||
                 hitsCone(mpCar, mpConePoints, RACE.coneHitRadius);
-              raceStep(mpRace, mpPrev, mpCurr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+              const mpRaceEvents = raceStep(mpRace, mpPrev, mpCurr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+              if (mpRaceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(mpDrive);
             }
           }
         );
@@ -1428,6 +1453,7 @@ async function startMultiplayer(room) {
           lateralSpeed: lateralSpeed(mpCar),
           forwardSpeed: forwardSpeed(mpCar),
           corneringLoad: corneringLoad(mpCar),
+          boosting: mpDrive.boosting,
         },
       ];
 
@@ -1467,6 +1493,7 @@ async function startMultiplayer(room) {
           lateralSpeed: lateralSpeed(rs.body),
           forwardSpeed: forwardSpeed(rs.body),
           corneringLoad: corneringLoad(rs.body),
+          boosting: rs.boosting,
         });
       }
       carEffects.update(mpEffectsCars, dt, offRoadExcess);
@@ -1476,7 +1503,7 @@ async function startMultiplayer(room) {
         camera.position.set(ownX, window.__TOP, ownY + 0.001);
         camera.lookAt(ownX, 0, ownY);
       } else {
-        updateCamera(ownX, ownY, ownA, dt);
+        updateCamera(ownX, ownY, ownA, dt, mpDrive.boosting);
       }
 
       // HUD: a FUTÓ óra a helyi állapotból (azonnali, nincs hálózati késés), a
@@ -1500,6 +1527,7 @@ async function startMultiplayer(room) {
         lastSplitAt: mpRace.lastSplitAt,
         place: me ? me.place || null : null, // hányadikként értünk célba (szervertől)
         hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
+        boostRemaining: mpDrive.boostRemaining, // csak megjelenítéshez (hud.js)
       };
       updateHud(hudRace);
       minimap.draw(
@@ -1537,7 +1565,13 @@ async function startMultiplayer(room) {
         speedKmh: ownSpeed,
         throttle: racing && input.up,
         corneringLoad: ownCornering,
+        boosting: racing && mpDrive.boosting,
       });
+
+      // "Nincs boost-üzemanyag" hiba-hang — lásd SP megjegyzése.
+      const boostDenied = racing && input.boost && input.up && mpDrive.boostRemaining <= 0;
+      if (boostDenied && !wasBoostDenied) audio.playBoostEmpty();
+      wasBoostDenied = boostDenied;
 
       // Az állás-lista DOM-ját elég 4x/mp újraépíteni (60x/mp felesleges terhelés).
       if (now - lastStandingsAt > 250) {
@@ -1614,7 +1648,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap, remoteCars, carEffects };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, mpDrive, minimap, remoteCars, carEffects };
   }
 }
 

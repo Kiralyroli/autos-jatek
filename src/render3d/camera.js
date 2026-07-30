@@ -14,10 +14,25 @@ export function createChaseCamera(camera) {
   const desired = new THREE.Vector3();
   const lookAt = new THREE.Vector3();
   let yaw = null; // a kamera saját, simított iránya (nem a kocsié!)
+  let fov = camera.fov; // a JELENLEGI (simított) látószög — boostnál kitágul
 
-  // carX/carZ: az autó pozíciója a talajsíkon; angle: a fizikai (2D) szög.
-  return function updateCamera(carX, carZ, angle, dt) {
+  // carX/carZ: az autó pozíciója a talajsíkon; angle: a fizikai (2D) szög;
+  // boosting: épp aktív-e a boost (lásd sim/car.js drive.boosting) — enyhén
+  // kitágítja a látószöget, klasszikus "sebesség-érzet" trükk.
+  return function updateCamera(carX, carZ, angle, dt, boosting = false) {
     if (yaw === null) yaw = angle;
+
+    // A látószög sima be-/kicsengéssel követi a boost állapotát — SOSEM ugrik,
+    // a manuális kamera-beállítás (cameraSettings.js) bármikor felülírhatja
+    // CAMERA.fov-ot, ezért mindig AHHOZ képest adjuk a bónuszt, nem egy
+    // beégetett konstanshoz.
+    const targetFov = CAMERA.fov + (boosting ? CAMERA.boostFovBonus : 0);
+    const tf = 1 - Math.exp(-CAMERA.boostFovStiffness * dt);
+    fov += (targetFov - fov) * tf;
+    if (Math.abs(camera.fov - fov) > 0.01) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
 
     // A kamera iránya lomhán fordul a kocsi tényleges szöge felé.
     const ty = 1 - Math.exp(-CAMERA.yawStiffness * dt);

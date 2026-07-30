@@ -1,6 +1,6 @@
 // HUD — a verseny-állapot MEGJELENÍTÉSE a DOM-ban. Csak olvas a race state-ből,
 // soha nem írja; a játék igazsága a sim/race.js-ben van.
-import { RACE } from './config.js';
+import { RACE, BOOST } from './config.js';
 
 // Ennyi másodpercig látszik a szektor-delta egy checkpont átszelése után —
 // ebből az első/utolsó SPLIT_ANIM_SECONDS a be-/kicsengő animációé.
@@ -50,12 +50,15 @@ export function createHud(onRestart, onHotlapReset) {
   const restartEl = document.getElementById('restart');
   const sectorDeltaEl = document.getElementById('sectordelta');
   const hotlapResetEl = document.getElementById('hotlapReset');
+  const boostMeterEl = document.getElementById('boostMeter');
+  const boostFillEl = document.getElementById('boostBarFill');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
   if (onHotlapReset) hotlapResetEl.addEventListener('click', onHotlapReset);
 
   return function updateHud(race) {
     raceInfoEl.style.display = 'flex'; // updateHud csak játék közben fut
+    if (boostMeterEl) boostMeterEl.style.display = 'flex';
     wrongWayEl.style.display =
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
     // A cél utáni "Új verseny" gombot MP-ben a végeredmény-panel váltja ki (main.js).
@@ -80,6 +83,16 @@ export function createHud(onRestart, onHotlapReset) {
     timeEl.style.color = invalidLap ? '#ff6b4a' : '';
     invalidLapEl.style.display = invalidLap ? 'flex' : 'none';
     bestEl.textContent = fmt(race.bestLapTime);
+
+    // Boost-mérő: a hátralévő üzemanyag (s) aránya (BOOST.maxPerLap = tele).
+    // A `race.boostRemaining`-et a hívó (main.js) írja rá a race-objektumra
+    // csak megjelenítés céljából — a sim/car.js drive.boostRemaining a valódi forrás.
+    if (boostMeterEl && boostFillEl) {
+      const remaining = Number.isFinite(race.boostRemaining) ? race.boostRemaining : BOOST.maxPerLap;
+      const frac = Math.max(0, Math.min(1, remaining / BOOST.maxPerLap));
+      boostFillEl.style.width = `${(frac * 100).toFixed(1)}%`;
+      boostMeterEl.classList.toggle('empty', remaining <= 0.001);
+    }
 
     // Szektor-delta: a legutóbb átszelt checkponton mérve, a legjobb kör
     // UGYANOTT mért idejéhez képest (lásd sim/race.js lastSplitDelta/lastSplitAt)

@@ -1,13 +1,13 @@
 // =============================================================================
-//  AUTÓ-EFFEKTEK — guminyom (drift) + porfelhő (letérés) — tisztán VIZUÁLIS
-//  réteg, semmilyen fizikát/verseny-logikát nem befolyásol.
+//  AUTÓ-EFFEKTEK — guminyom (drift) + porfelhő (letérés) + boost-láng — tisztán
+//  VIZUÁLIS réteg, semmilyen fizikát/verseny-logikát nem befolyásol.
 //
-//  BEMENET: sima számok (x, z, angle, lateralSpeed, forwardSpeed, corneringLoad)
-//  + az offRoadExcess FÜGGVÉNY (sim/track.js, ill. szerveroldalon a szoba
-//  trackState-je) — nem Planck body. A hívó (main.js) a sajátjából és a távoli
-//  autókéból (net/remoteCars.js renderState().body) is ugyanígy elő tudja
-//  állítani, mindhárom a sim/car.js-ből jön (lateralSpeed/forwardSpeed/
-//  corneringLoad).
+//  BEMENET: sima számok (x, z, angle, lateralSpeed, forwardSpeed, corneringLoad,
+//  boosting) + az offRoadExcess FÜGGVÉNY (sim/track.js, ill. szerveroldalon a
+//  szoba trackState-je) — nem Planck body. A hívó (main.js) a sajátjából és a
+//  távoli autókéból (net/remoteCars.js renderState()) is ugyanígy elő tudja
+//  állítani — mind a sim/car.js drive állapotából jön (lateralSpeed/
+//  forwardSpeed/corneringLoad/boosting).
 //
 //  PORFELHŐ KIVÁLTÁS: NEM az autó KÖZÉPPONTJA alapján (az csak akkor lépne
 //  túl a rázókövön, ha az autó FÉLIG már a fűben van), hanem a doboz mind a 4
@@ -49,6 +49,26 @@ function makeDustTexture() {
   grad.addColorStop(0, 'rgba(214,196,168,0.9)');
   grad.addColorStop(0.5, 'rgba(214,196,168,0.45)');
   grad.addColorStop(1, 'rgba(214,196,168,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Ugyanaz a technika, mint a por-textúránál, de meleg (fehér-sárga-narancs)
+// magas kontrasztú színátmenettel a boost-lángnak — additív keveréssel (lásd
+// lent flameMat) ez ad izzó, nem csak áttetsző hatást.
+function makeFlameTexture() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(255,255,235,1)');
+  grad.addColorStop(0.35, 'rgba(255,190,80,0.9)');
+  grad.addColorStop(0.7, 'rgba(255,90,30,0.5)');
+  grad.addColorStop(1, 'rgba(255,60,20,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(canvas);
@@ -257,15 +277,110 @@ export function createCarEffects(scene) {
     }
   }
 
-  // `cars`: [{ id, x, z, angle, lateralSpeed, forwardSpeed, corneringLoad }]
+  // --- BOOST-LÁNG: pool of THREE.Sprite, additív keveréssel (izzás, nem
+  // áttetsző folt) — a struktúra a porfelhőével azonos, csak a triggere
+  // (drive.boosting — sim/car.js) és a vizuál más. ---
+  const flameTexture = makeFlameTexture();
+  const flameSprites = [];
+  const flameParticles = [];
+  for (let i = 0; i < EFFECTS.flame.poolSize; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: flameTexture,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending, // izzó hatás, nem sima áttetszőség
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.visible = false;
+    scene.add(sprite);
+    flameSprites.push(sprite);
+    flameParticles.push({ active: false, age: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
+  }
+  let nextFlameIdx = 0;
+
+  function spawnFlameParticle(x, z, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    // A kipufogó közelében indul (helyi -X, kicsivel a lökhárító mögött,
+    // földközelben) — kis véletlen oldal-szórással, hogy ne egyetlen pontból
+    // "lövelljen" ki, hanem egy rövid, élő lángnyelvnek hasson.
+    const lx = -EFFECTS.skid.rearOffset - 0.2;
+    const ly = (Math.random() - 0.5) * 0.5;
+    const wx = x + lx * cos - ly * sin;
+    const wz = z + lx * sin + ly * cos;
+
+    const idx = nextFlameIdx;
+    nextFlameIdx = (nextFlameIdx + 1) % EFFECTS.flame.poolSize;
+    const p = flameParticles[idx];
+    p.active = true;
+    p.age = 0;
+    p.x = wx;
+    p.y = 0.28 + (Math.random() - 0.5) * 0.1;
+    p.z = wz;
+    // Egyenesen hátrafelé (a haladási iránnyal ellentétesen) lövell, alig
+    // emelkedik — nem "felkavart por", hanem egy kilövellt lángnyelv.
+    const back = EFFECTS.flame.speed * (0.7 + Math.random() * 0.6);
+    p.vx = -cos * back + (Math.random() - 0.5) * EFFECTS.flame.spread;
+    p.vz = -sin * back + (Math.random() - 0.5) * EFFECTS.flame.spread;
+    p.vy = (Math.random() - 0.5) * 0.6;
+    flameSprites[idx].visible = true;
+    flameSprites[idx].position.set(p.x, p.y, p.z);
+  }
+
+  const flameState = new Map(); // id → { accum }
+
+  function updateFlame(id, x, z, angle, boosting, dt) {
+    let st = flameState.get(id);
+    if (!st) {
+      st = { accum: 0 };
+      flameState.set(id, st);
+    }
+    if (!boosting) {
+      st.accum = 0;
+      return;
+    }
+    st.accum += dt;
+    const interval = EFFECTS.flame.spawnInterval;
+    while (st.accum >= interval) {
+      st.accum -= interval;
+      spawnFlameParticle(x, z, angle);
+    }
+  }
+
+  function stepFlameParticles(dt) {
+    for (let i = 0; i < flameParticles.length; i++) {
+      const p = flameParticles[i];
+      if (!p.active) continue;
+      p.age += dt;
+      if (p.age >= EFFECTS.flame.lifetime) {
+        p.active = false;
+        flameSprites[i].visible = false;
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      const t = p.age / EFFECTS.flame.lifetime;
+      const sprite = flameSprites[i];
+      sprite.position.set(p.x, p.y, p.z);
+      const scale = THREE.MathUtils.lerp(EFFECTS.flame.startScale, EFFECTS.flame.endScale, t);
+      sprite.scale.setScalar(scale);
+      sprite.material.opacity = EFFECTS.flame.startOpacity * (1 - t);
+    }
+  }
+
+  // `cars`: [{ id, x, z, angle, lateralSpeed, forwardSpeed, corneringLoad, boosting }]
   // `offRoadFn`: (x,z) => méter az útszélen kívül (0 = úton) — sim/track.js
   // offRoadExcess-e (SP-ben és MP-ben is ugyanaz a szoba pályája mindenkinek).
   function update(cars, dt, offRoadFn) {
     for (const c of cars) {
       updateSkid(c.id, c.x, c.z, c.angle, c.lateralSpeed, c.forwardSpeed, c.corneringLoad);
       updateDust(c.id, c.x, c.z, c.angle, c.forwardSpeed, offRoadFn, dt);
+      updateFlame(c.id, c.x, c.z, c.angle, !!c.boosting, dt);
     }
     stepDustParticles(dt);
+    stepFlameParticles(dt);
   }
 
   // Egy játékos eltávozott (MP) — a nyom-állapotát eldobjuk, hogy a maradék
@@ -274,6 +389,7 @@ export function createCarEffects(scene) {
   function remove(id) {
     skidState.delete(id);
     dustState.delete(id);
+    flameState.delete(id);
   }
 
   // ÚJ VERSENY: a nyomoknak/pornak az ELŐZŐ futamból NEM szabad átlógnia az
@@ -293,6 +409,13 @@ export function createCarEffects(scene) {
     }
     nextDustIdx = 0;
     dustState.clear();
+
+    for (let i = 0; i < flameParticles.length; i++) {
+      flameParticles[i].active = false;
+      flameSprites[i].visible = false;
+    }
+    nextFlameIdx = 0;
+    flameState.clear();
   }
 
   return { update, remove, reset };

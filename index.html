@@ -133,7 +133,13 @@
         flex-direction: column;
         gap: 4px;
       }
-      #raceinfo .ri-row { font-size: 18px; }
+      #raceinfo .ri-row {
+        font-size: 18px;
+        white-space: nowrap; /* mint a testvér .ri-lap-nál — enélkül a sor
+          bizonyos betűtípus-környezetben 2-3 sorba törhet, és a #raceinfo
+          panel kiszámíthatatlanul magas lesz, felboríthatva az alatta
+          lévő elemek (boost-mérő/érvénytelen kör/szektor-delta) helyét. */
+      }
       #raceinfo .ri-row b { font-weight: 700; }
       #raceinfo .ri-best b { color: var(--gold); }
       #raceinfo .ri-label {
@@ -142,6 +148,50 @@
         color: var(--text-dim);
         text-transform: uppercase;
       }
+      /* Boost-mérő — a #raceinfo alatt, középen. A hátralévő üzemanyag (BOOST.
+         maxPerLap-ból, körönként újratöltve) sávja. */
+      #boostMeter {
+        position: fixed;
+        top: 92px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none; /* JS: flex, versenyközben (lásd hud.js) */
+        align-items: center;
+        gap: 8px;
+        pointer-events: none;
+        user-select: none;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid var(--panel-border);
+        padding: 6px 14px;
+        border-radius: 10px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        font-variant-numeric: tabular-nums;
+      }
+      #boostMeter .boostLabel {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        color: var(--danger);
+        white-space: nowrap;
+      }
+      #boostMeter.empty .boostLabel { color: var(--text-dim); }
+      #boostMeter .boostBarTrack {
+        width: 110px;
+        height: 8px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      #boostMeter .boostBarFill {
+        height: 100%;
+        background: linear-gradient(90deg, #ff8a3d, var(--danger));
+        border-radius: 4px;
+        transition: width 0.1s linear;
+      }
+      #boostMeter.empty .boostBarFill { background: rgba(255, 255, 255, 0.15); }
       /* Végeredmény-lista (a #results overlay panelben). */
       #resultsList {
         display: flex;
@@ -215,10 +265,12 @@
           opacity: 0.15;
         }
       }
-      /* Pálya-elhagyás → érvénytelen kör infó-szalag (felül, a kör-panel alatt). */
+      /* Pálya-elhagyás → érvénytelen kör infó-szalag (felül, a kör-panel ÉS a
+         boost-mérő ALATT — lásd #boostMeter/#sectordelta, a három elem együtt
+         egy függőleges oszlopot alkot, hogy sose fedjék egymást). */
       #invalidlap {
         position: fixed;
-        top: 90px;
+        top: 132px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
@@ -243,7 +295,7 @@
          mindig a friss `elapsed` idő alapján, tisztán számolt állapot). */
       #sectordelta {
         position: fixed;
-        top: 132px;
+        top: 180px;
         left: 50%;
         display: flex;
         align-items: center;
@@ -578,6 +630,21 @@
         border-color: rgba(224, 177, 61, 0.5);
       }
       #touchControls .tc-drift.active { background: rgba(224, 177, 61, 0.22); }
+      #touchControls .tc-sidebtns {
+        display: flex;
+        gap: 10px;
+        pointer-events: none;
+      }
+      #touchControls .tc-boost {
+        min-width: 60px;
+        height: 46px;
+        padding: 0 14px;
+        border-radius: 23px;
+        font-size: 20px;
+        color: var(--danger);
+        border-color: rgba(224, 80, 90, 0.5);
+      }
+      #touchControls .tc-boost.active { background: rgba(224, 80, 90, 0.28); }
 
       /* Amikor az érintős vezérlés aktív (lásd touchControls.js — a body
          ekkor kapja a has-touch-controls osztályt), a játék FEKVŐ nézetre
@@ -638,24 +705,35 @@
       body.has-touch-controls #raceinfo .ri-times { padding-left: 12px; gap: 1px; }
       body.has-touch-controls #raceinfo .ri-row { font-size: 13px; }
       body.has-touch-controls #raceinfo .ri-label { font-size: 9px; }
-      /* Szektor-delta touchon KISEBB és FELJEBB — a kompakt kör/idő-panel ALÁ
-         (top:62px), közvetlenül a felső HUD alatt, hogy ne a vezetési nézet
-         közepén (a korábbi 132px pont a képernyő közepére esett fekvő
-         telefonon). A transform-ot (translateX -50% + animáció) a hud.js állítja
-         inline, azt itt NEM bántjuk — csak a helyet és a méretet. */
+      /* Boost-mérő touchon a kompakt kör/idő-panel ALÁ (top:58px) — a lenti
+         sectordelta/invalidlap ezért lejjebb tolva, hogy ne fedjék egymást. */
+      body.has-touch-controls #boostMeter {
+        top: 58px;
+        padding: 4px 10px;
+        gap: 6px;
+      }
+      body.has-touch-controls #boostMeter .boostLabel { font-size: 9px; }
+      body.has-touch-controls #boostMeter .boostBarTrack { width: 80px; height: 6px; }
+      /* Szektor-delta touchon KISEBB és FELJEBB — a kompakt kör/idő-panel +
+         boost-mérő ALÁ (top:94px), közvetlenül a felső HUD alatt, hogy ne a
+         vezetési nézet közepén (a korábbi 132px pont a képernyő közepére esett
+         fekvő telefonon). A transform-ot (translateX -50% + animáció) a hud.js
+         állítja inline, azt itt NEM bántjuk — csak a helyet és a méretet. */
       body.has-touch-controls #sectordelta {
-        top: 62px;
+        top: 94px;
         font-size: 15px;
         padding: 5px 13px;
         gap: 6px;
       }
       body.has-touch-controls #sectordelta .arrow { font-size: 11px; }
       /* Érvénytelen kör-szalag touchon KISEBB és FELJEBB — a nagy asztali
-         méret (top:90px, 15px betű) fekvő telefonon a képernyő közepén
-         "úszott", eltakarva a kilátást. A szektor-delta (fent, top:62px) alá
-         kerül, hogy a két elem ne fedje egymást. */
+         méret (top:132px, 15px betű) fekvő telefonon a képernyő közepén
+         "úszott", eltakarva a kilátást. A szektor-delta (fent) alá kerül —
+         MÉRVE: a szektor-delta jelvény (be-/kicsengő animációval) akár 48px
+         magas is lehet, ezért ennek 150px-nél kell kezdődnie, nem 128-nál
+         (az korábban átfedte a szektor-delta jelvényt). */
       body.has-touch-controls #invalidlap {
-        top: 96px;
+        top: 150px;
         font-size: 12px;
         padding: 5px 12px;
         gap: 6px;
@@ -1105,7 +1183,7 @@
     <div id="hud">
       <b>👑 Racing King</b><br />
       Gyorsítás: <kbd>W</kbd> / <kbd>↑</kbd> &nbsp; Fék/tolatás: <kbd>S</kbd> / <kbd>↓</kbd><br />
-      Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
+      Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Boost: <kbd>Shift</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
       <span id="speed">Sebesség: 0 km/h</span>
       <div style="margin-top: 6px;">
         <a href="./editor.html">🏗️ Pálya szerkesztése</a>
@@ -1119,6 +1197,12 @@
         <div class="ri-row"><span class="ri-label">Köridő</span> <b id="laptime">–</b></div>
         <div class="ri-row ri-best"><span class="ri-label">🏆 Legjobb</span> <b id="bestlap">–</b></div>
       </div>
+    </div>
+
+    <!-- Boost-mérő: a hátralévő üzemanyag, körönként újratöltve (config.js BOOST) -->
+    <div id="boostMeter">
+      <span class="boostLabel">🔥 BOOST</span>
+      <div class="boostBarTrack"><div id="boostBarFill" class="boostBarFill"></div></div>
     </div>
 
     <div id="countdown"></div>

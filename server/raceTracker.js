@@ -132,12 +132,18 @@ function hitsCone(x, y, angle, cones, hitRadius) {
 
 // Szobaszintű kontextus (egyszer épül fel pályánként/versenyenként).
 export function createTrackerContext({ trackState, decorations, physics, laps }) {
-  const maxSpeed = PHYSICS_PRESETS[physics]?.maxForwardSpeed || CAR.maxForwardSpeed;
+  const baseMaxSpeed = PHYSICS_PRESETS[physics]?.maxForwardSpeed || CAR.maxForwardSpeed;
+  // A BOOST (src/sim/car.js applyDrive) ideiglenesen megemeli a csúcssebesség-
+  // határt — a csalás-szűrőnek ezt a MEGEMELT, szabályosan elérhető sebességet
+  // kell felső korlátnak tekintenie, különben egy legitim boostoló játékost
+  // "tartósan a fizikai korlát felett" jelzéssel kirúgna (lásd update() lent).
+  const maxSpeed = baseMaxSpeed * (CAR.boostMaxSpeedMultiplier || 1);
   return {
     trackState,
     laps,
-    // A leggyorsabb elérhető csúcssebesség ehhez a szobához — a sebesség-ellenőrzés
-    // felső korlátja. A szoba fizikája adja; ismeretlennél a globális CAR értéke.
+    // A leggyorsabb elérhető csúcssebesség ehhez a szobához (BOOST-tal együtt) —
+    // a sebesség-ellenőrzés felső korlátja. A szoba fizikája adja; ismeretlennél
+    // a globális CAR értéke.
     maxSpeed,
     // A fizikailag leggyorsabb lehetséges kör EZEN a pályán. Ha a SZERVER SAJÁT
     // mérése ennél rövidebb kört ad, az csak hamisított pozíciókból jöhet — ez a

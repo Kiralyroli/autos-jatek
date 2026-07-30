@@ -117,6 +117,106 @@ function createSampleSkid(ctx, out, buffer) {
   };
 }
 
+// --- BOOST: szintetizált "turbina" hang — magas-áteresztő szűrt zaj (rárohanó
+// szél) + egy lassan emelkedő fűrészfog-oszcillátor (a "feltöltődés" érzete,
+// mint egy spooling-up sugárhajtómű). Ugyanaz a setGain/dispose interfész,
+// mint a csikorgásnál (createSynthSkid) — az audio.update() egyszerű ki/be
+// kapcsolóként kezeli (lásd AUDIO.boost.riseTime a sima be-/kicsengésért).
+function createSynthBoost(ctx, out) {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buf;
+  noise.loop = true;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = 'highpass';
+  noiseFilter.frequency.value = 900;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0;
+  noise.connect(noiseFilter).connect(noiseGain).connect(out);
+  noise.start();
+
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.value = 90;
+  const oscGain = ctx.createGain();
+  oscGain.gain.value = 0;
+  osc.connect(oscGain).connect(out);
+  osc.start();
+
+  return {
+    setActive(on) {
+      const t = ctx.currentTime;
+      const rise = AUDIO.boost.riseTime;
+      noiseGain.gain.setTargetAtTime(on ? AUDIO.boost.gain : 0, t, rise);
+      oscGain.gain.setTargetAtTime(on ? AUDIO.boost.gain * 0.5 : 0, t, rise);
+      // "Felpörgés": bekapcsoláskor a frekvencia gyorsan felszalad ~280 Hz-re,
+      // amíg aktív; kikapcsolva visszaesik alapjáratra.
+      const targetFreq = on ? 280 : 90;
+      osc.frequency.setTargetAtTime(targetFreq, t, on ? 0.12 : 0.2);
+    },
+    dispose() {
+      noise.stop();
+      osc.stop();
+      noiseGain.disconnect();
+      oscGain.disconnect();
+    },
+  };
+}
+
+// --- BOOST: valós felvétel — EGYSZERI "kitörés" hang (motor-begyújtás/nitro-
+// lövellés), NEM loop (szemben az engine/skid mintákkal). Az AudioBufferSourceNode
+// csak EGYSZER indítható, ezért minden boost-bekapcsoláskor ÚJAT hozunk létre és
+// az elejéről indítjuk — így minden aktiválás friss "begyújtás"-nak hangzik, nem
+// egy folytonos loop kellős közepéből folytatódik. Elengedéskor gyors, kattanás-
+// mentes elhalkulással állítjuk le (nem egyből stop() — az durva vágást adna).
+function createSampleBoost(ctx, out, buffer) {
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  gain.connect(out);
+  let source = null;
+  let active = false;
+
+  function hardStop(node) {
+    try {
+      node.stop();
+    } catch {
+      /* már megállt/soha nem indult — nem kritikus */
+    }
+    node.disconnect();
+  }
+
+  return {
+    setActive(on) {
+      if (on === active) return; // csak ÁLLAPOTVÁLTÁSKOR reagál, nem minden frame-ben
+      active = on;
+      const t = ctx.currentTime;
+      const rise = AUDIO.boost.riseTime;
+      if (on) {
+        source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gain);
+        source.start(t);
+        gain.gain.cancelScheduledValues(t);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(AUDIO.boost.gain, t + rise);
+      } else if (source) {
+        gain.gain.cancelScheduledValues(t);
+        gain.gain.setValueAtTime(gain.gain.value, t);
+        gain.gain.linearRampToValueAtTime(0, t + rise);
+        const toStop = source;
+        source = null;
+        setTimeout(() => hardStop(toStop), rise * 1000 + 30);
+      }
+    },
+    dispose() {
+      if (source) hardStop(source);
+      gain.disconnect();
+    },
+  };
+}
+
 export function createAudio() {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const master = ctx.createGain();
@@ -126,11 +226,18 @@ export function createAudio() {
   // Kezdetben szintetizált (azonnal működik); a valós hangok betöltés után cserélik.
   let engine = createSynthEngine(ctx, master);
   let skid = createSynthSkid(ctx, master);
+  let boost = createSynthBoost(ctx, master);
+  // "Nincs üzemanyag" hiba-hang — NINCS szintetizált tartalék (apró, nem
+  // kritikus UX-elem): amíg nem töltődött be, playBoostEmpty() csendben
+  // kihagyja (lásd lent).
+  let boostEmptyBuffer = null;
 
   (async () => {
-    const [engBuf, skidBuf] = await Promise.all([
+    const [engBuf, skidBuf, boostBuf, boostEmptyBuf] = await Promise.all([
       loadSound(ctx, ASSETS.sounds.engine),
       loadSound(ctx, ASSETS.sounds.skid),
+      loadSound(ctx, ASSETS.sounds.boost),
+      loadSound(ctx, ASSETS.sounds.boostEmpty),
     ]);
     if (engBuf) {
       engine.dispose();
@@ -140,7 +247,24 @@ export function createAudio() {
       skid.dispose();
       skid = createSampleSkid(ctx, master, skidBuf);
     }
+    if (boostBuf) {
+      boost.dispose();
+      boost = createSampleBoost(ctx, master, boostBuf);
+    }
+    boostEmptyBuffer = boostEmptyBuf;
   })();
+
+  // Egyszeri lejátszás — a boost() (createSampleBoost) NEM erre épül, mert az
+  // folytonos (be/ki), ez viszont mindig a végéig lejátszandó "kattanás".
+  function playBoostEmpty() {
+    if (!boostEmptyBuffer) return;
+    const src = ctx.createBufferSource();
+    src.buffer = boostEmptyBuffer;
+    const g = ctx.createGain();
+    g.gain.value = AUDIO.boostEmpty.gain;
+    src.connect(g).connect(master);
+    src.start();
+  }
 
   let muted = false;
   const resume = () => {
@@ -168,12 +292,13 @@ export function createAudio() {
     osc.stop(t + duration + 0.03);
   }
 
-  function update({ speedKmh, throttle, corneringLoad }) {
+  function update({ speedKmh, throttle, corneringLoad, boosting }) {
     engine.update(speedKmh, throttle);
     const { startLoad, fullLoad, maxGain } = AUDIO.skid;
     const t = Math.max(0, Math.min(1, (corneringLoad - startLoad) / (fullLoad - startLoad)));
     skid.setGain(t * maxGain);
+    boost.setActive(!!boosting);
   }
 
-  return { beep, update, ctx, master };
+  return { beep, update, playBoostEmpty, ctx, master };
 }

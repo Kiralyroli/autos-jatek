@@ -43,12 +43,21 @@ export function createRemoteCars(world, offRoad) {
     c = {
       body: createCarBody(world, s.x, s.y, s.angle),
       drive: createDriveState(),
-      input: { up: false, down: false, left: false, right: false, drift: false },
+      input: { up: false, down: false, left: false, right: false, drift: false, boost: false },
       finished: false,
       prev: { x: s.x, y: s.y, angle: s.angle },
       curr: { x: s.x, y: s.y, angle: s.angle },
       corr: { x: 0, y: 0, a: 0 }, // lecsengő vizuális korrekció (lásd fent)
     };
+    // A TÁVOLI másolatnak NINCS saját kör-követése, tehát a boost-üzemanyagot
+    // sosem tudnánk helyesen újratölteni (lásd sim/car.js refillBoost — a
+    // SAJÁT raceStep 'lap' eseménye hívja, amit csak a kocsi TULAJDONOSA lát).
+    // Ehelyett végtelenre állítjuk: a kapott `inp` bit már ÚGYIS a küldő
+    // FÉL saját üzemanyag-korlátos döntését hordozza (lásd main.js mpSendState
+    // — a nyers gomb helyett a tényleges mpDrive.boosting megy át a hálón),
+    // tehát a másolatnak csak ENGEDELMESKEDNIE kell a kapott bitnek, nem
+    // saját maga újra-korlátoznia.
+    c.drive.boostRemaining = Infinity;
     cars.set(id, c);
     return c;
   }
@@ -70,6 +79,7 @@ export function createRemoteCars(world, offRoad) {
     const c = ensure(id, spawn);
     resetCar(c.body, spawn.x, spawn.y, spawn.angle);
     Object.assign(c.drive, createDriveState());
+    c.drive.boostRemaining = Infinity; // lásd ensure() megjegyzése
     c.prev.x = c.curr.x = spawn.x;
     c.prev.y = c.curr.y = spawn.y;
     c.prev.angle = c.curr.angle = spawn.angle;
@@ -174,6 +184,7 @@ export function createRemoteCars(world, offRoad) {
       y: lerp(c.prev.y, c.curr.y, alpha) + c.corr.y,
       angle: lerpAngle(c.prev.angle, c.curr.angle, alpha) + c.corr.a,
       steer: c.drive.steer, // a kerék-animációhoz (valódi kormányszög!)
+      boosting: c.drive.boosting, // a boost-láng effekthez (render3d/carEffects.js)
       body: c.body,
     };
   }

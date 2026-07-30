@@ -9,6 +9,7 @@ export const NEUTRAL_INPUT = Object.freeze({
   left: false,
   right: false,
   drift: false,
+  boost: false,
 });
 
 // --- Input ⇄ bitmaszk (hálózati küldéshez) ---
@@ -22,6 +23,7 @@ const BIT_DOWN = 2;
 const BIT_LEFT = 4;
 const BIT_RIGHT = 8;
 const BIT_DRIFT = 16;
+const BIT_BOOST = 32;
 
 export function encodeInput(i) {
   return (
@@ -29,7 +31,8 @@ export function encodeInput(i) {
     (i.down ? BIT_DOWN : 0) |
     (i.left ? BIT_LEFT : 0) |
     (i.right ? BIT_RIGHT : 0) |
-    (i.drift ? BIT_DRIFT : 0)
+    (i.drift ? BIT_DRIFT : 0) |
+    (i.boost ? BIT_BOOST : 0)
   );
 }
 
@@ -41,6 +44,7 @@ export function decodeInput(m) {
     left: (b & BIT_LEFT) !== 0,
     right: (b & BIT_RIGHT) !== 0,
     drift: (b & BIT_DRIFT) !== 0,
+    boost: (b & BIT_BOOST) !== 0,
   };
 }
 
@@ -50,6 +54,7 @@ const KEYMAP = {
   left: ['KeyA', 'ArrowLeft'],
   right: ['KeyD', 'ArrowRight'],
   drift: ['Space'],
+  boost: ['ShiftLeft', 'ShiftRight'],
 };
 
 // Feliratkozik a billentyű-eseményekre, és egy readInput() függvényt ad vissza,
@@ -76,6 +81,7 @@ export function createKeyboard(target = window) {
       left: has(KEYMAP.left),
       right: has(KEYMAP.right),
       drift: has(KEYMAP.drift),
+      boost: has(KEYMAP.boost),
     };
   };
 }

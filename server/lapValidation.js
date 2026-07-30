@@ -17,12 +17,13 @@ import { hashLayout } from '../src/sim/trackKey.js';
 import { DEFAULT_LAYOUT } from '../src/config.js';
 import { listRawTracks } from './trackStore.js';
 
-// A LEGGYORSABB preset csúcssebessége (m/s) — mindig a legmegengedőbbel számolunk,
-// hogy egy valós, jogos időt soha ne utasítsunk el.
-const MAX_SPEED = Math.max(
-  CAR.maxForwardSpeed || 0,
-  ...Object.values(PHYSICS_PRESETS).map((p) => p.maxForwardSpeed || 0)
-);
+// A LEGGYORSABB preset csúcssebessége (m/s), BOOST-tal (lásd sim/car.js
+// applyDrive/CAR.boostMaxSpeedMultiplier) — mindig a legmegengedőbbel
+// számolunk, hogy egy valós, jogos (akár teljesen boostolt) időt soha ne
+// utasítsunk el.
+const MAX_SPEED =
+  Math.max(CAR.maxForwardSpeed || 0, ...Object.values(PHYSICS_PRESETS).map((p) => p.maxForwardSpeed || 0)) *
+  (CAR.boostMaxSpeedMultiplier || 1);
 
 // Biztonsági ráhagyás: a ténylegesen megtett ív rövidebb lehet a KÖZÉPVONALNÁL,
 // ha a versenyző a kanyarok belső ívét használja (ez szabályos). 0.7 bőven fedi

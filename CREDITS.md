@@ -20,3 +20,13 @@ A játékban használt külső assetek és licenceik.
   eredeti hang: **Tom Haigh (audible-edge)**, loop: **qubodup**
   (https://opengameart.org/content/car-tire-squeal-skid-loop) —
   licenc: **CC-BY 3.0** (feltüntetés kötelező — ez a bejegyzés teljesíti).
+- **Boost** (`public/assets/sounds/boost.mp3`) — *"EXPLDsgn_Engine Ignition
+  Burst.Engine Start.Nitro.Flare.Blast.Explosion 1-3_EM"* by **newlocknew**
+  (https://freesound.org/people/newlocknew/sounds/716972/) —
+  licenc: **CC-BY-NC 4.0** (feltüntetés kötelező, ÉS TILOS a kereskedelmi
+  felhasználás — ez az EGYETLEN nem-CC0/sima-CC-BY asset a projektben; ha a
+  játék valaha kereskedelmi célú lenne (hirdetés, fizetős hozzáférés stb.),
+  ezt a hangot előbb le kell cserélni).
+- **Boost kimerülve** (`public/assets/sounds/boostEmpty.flac`) — *"CD Glitch 4"*
+  by **day-garwood** (https://freesound.org/s/612753/) —
+  licenc: **CC-BY 3.0** (feltüntetés kötelező — ez a bejegyzés teljesíti).

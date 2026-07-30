@@ -26,6 +26,11 @@ export const CAMERA = {
   //                   a kocsi iránya mögött (enélkül hosszú kanyarban oldalnézetbe
   //                   ragadna). Kisebb = kanyarban is szinte előre nézel.
   fov: 65, // látószög fokban
+  // BOOST-effekt: amíg boostolunk, a látószög enyhén kitágul (klasszikus
+  // "sebesség-érzet" trükk versenyjátékokból) — sima be-/kicsengéssel, hogy ne
+  // legyen szemet szúró ugrás. Lásd render3d/camera.js updateCamera.
+  boostFovBonus: 9, // fok — ennyivel nő a fov teljes boost alatt
+  boostFovStiffness: 7, // 1/s — milyen gyorsan simul a cél-fov felé
 };
 
 // A játékos által állítható kamera-mezők ALAPÉRTÉKEI — a beállító-panel
@@ -64,6 +69,10 @@ export const ASSETS = {
   sounds: {
     engine: '/assets/sounds/engine.wav', // loopolható motorhang (pitch = sebesség)
     skid: '/assets/sounds/skid.wav', // loopolható gumicsikorgás
+    // Boost-hang — NEM loop, egyszeri "kitörés" (lásd CREDITS.md — CC-BY-NC 4.0,
+    // az EGYETLEN nem-CC0/sima-CC-BY asset a projektben).
+    boost: '/assets/sounds/boost.mp3',
+    boostEmpty: '/assets/sounds/boostEmpty.flac', // "nincs üzemanyag" hiba-hang
   },
 };
 
@@ -129,6 +138,21 @@ export const AUDIO = {
     fullLoad: 95, // itt teljes hangerő
     maxGain: 0.3,
   },
+  // BOOST: szintetizált "turbina/rárohanó szél" hang (magas-áteresztő szűrt zaj
+  // + egy enyhén emelkedő oszcillátor a "feltöltődés" érzetéért) — lásd
+  // audio.js createSynthBoost. Bekapcsolás/kikapcsolás gyors, de sima (nincs
+  // kattanás), a drive.boosting állapotát követve.
+  boost: {
+    gain: 0.32,
+    riseTime: 0.06, // s — a hangerő ilyen gyorsan éri el a célt (be- és ki is)
+  },
+  // "Nincs boost-üzemanyag" jelzés — egyszeri, rövid hiba-hang, amikor a
+  // játékos megpróbál boostolni (gomb+gáz), de a tartály üres. Csak ÚJ
+  // próbálkozásonként szólal meg (lásd main.js edge-detektálás), nem
+  // ismétlődik folyamatosan, amíg a gombot nyomva tartja.
+  boostEmpty: {
+    gain: 0.5,
+  },
   beepGain: 0.35, // visszaszámláló/GO bip hangereje
 };
 
@@ -175,6 +199,15 @@ export const CAR = {
   // Gördülési/légellenállás (a forward sebességgel arányos fékező erő szorzója).
   // Kicsi érték: a csúcssebességet a maxForwardSpeed clamp adja, nem a drag.
   forwardDrag: 0.25,
+
+  // BOOST — a gázerő és a csúcssebesség-határ szorzója, amíg a boost gomb
+  // aktív (lásd sim/car.js updateBoost/applyDrive). MÉRVE (realistic preset):
+  // 0->100 km/h 1.05s helyett 0.67s, csúcssebesség 216 helyett 248 km/h —
+  // érezhetően erősebb, de nem irreális (egy valódi sportautó tartományában
+  // marad). Csak GÁZZAL együtt hat (lásd applyDrive — a force csak input.up-nál
+  // számít), tehát önmagában, gáz nélkül semmit nem csinál.
+  boostForceMultiplier: 1.5,
+  boostMaxSpeedMultiplier: 1.15,
 };
 
 // Választható autó-fizika előbeállítások (menü választó — a futam indításánál).
@@ -313,6 +346,23 @@ export const EFFECTS = {
     startOpacity: 0.4,
     poolSize: 120, // ~15 aktív szemcse/porzó autónál, több játékosra is elég tartalék
   },
+  // BOOST-LÁNG: a kipufogónál felvillanó, gyorsan elhaló izzó szemcsék, amíg a
+  // boost aktív (lásd sim/car.js drive.boosting). Additív keveréssel (nem
+  // sima átlátszósággal, mint a por) — attól "izzik", nem csak áttetsző.
+  flame: {
+    // ÉLŐ VISSZAJELZÉS: a méret/fényesség/sűrűség maradjon erőteljes (ez volt
+    // a jó), de a láng-CSÓVA legyen rövidebb — ez a `lifetime` (meddig él egy
+    // szemcse) és a `speed` (milyen messzire jut el eközben) szorzata, ezért
+    // ezt a kettőt csökkentettük, a méretet/fényességet NEM.
+    spawnInterval: 0.02, // s — sűrű szórás, hogy folytonos lángnak hasson
+    lifetime: 0.16, // s — a korábbi 0.28 helyett: rövidebb csóva
+    speed: 3.5, // m/s — a korábbi 5 helyett: kevesebb táv, mire elhal
+    spread: 1.6, // m/s — véletlen oldal-/sebesség-szórás
+    startScale: 0.55,
+    endScale: 1.1,
+    startOpacity: 0.9,
+    poolSize: 80,
+  },
 };
 
 // A pálya SZEGMENS-DEFINÍCIÓJA (lásd sim/trackbuilder.js). Egy kurzor végigjárja,
@@ -431,6 +481,13 @@ export const NET = {
   // vad tovább-becslés (kanyarban egyre nő a hiba).
   maxExtrapolationMs: 200,
   maxPlayers: 4,
+};
+
+// BOOST-üzemanyag: ennyi másodpercnyi boost jár KÖRÖNKÉNT (a kör elején/a
+// verseny rajtjánál újratöltve — lásd sim/car.js refillBoost, main.js a
+// raceStep 'lap'/'finish' eseményénél hívja). Nem gyűlik át a következő körre.
+export const BOOST = {
+  maxPerLap: 3, // s
 };
 
 // Verseny-szabályok és checkpointok. A checkpoint egy VONALSZAKASZ a folyosón

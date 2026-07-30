@@ -38,7 +38,7 @@ export function requestFullscreen() {
 }
 
 export function createTouchControls() {
-  const state = { up: false, down: false, left: false, right: false, drift: false };
+  const state = { up: false, down: false, left: false, right: false, drift: false, boost: false };
 
   const root = document.createElement('div');
   root.id = 'touchControls';
@@ -48,7 +48,10 @@ export function createTouchControls() {
       <button type="button" class="tc-btn tc-steer" data-key="right" aria-label="Jobbra">▶</button>
     </div>
     <div class="tc-group tc-group-right">
-      <button type="button" class="tc-btn tc-drift" data-key="drift" aria-label="Drift">DRIFT</button>
+      <div class="tc-sidebtns">
+        <button type="button" class="tc-btn tc-drift" data-key="drift" aria-label="Drift">DRIFT</button>
+        <button type="button" class="tc-btn tc-boost" data-key="boost" aria-label="Boost">🔥</button>
+      </div>
       <div class="tc-pedals">
         <button type="button" class="tc-btn tc-brake" data-key="down" aria-label="Fék/tolatás">▼</button>
         <button type="button" class="tc-btn tc-gas" data-key="up" aria-label="Gyorsítás">▲</button>
@@ -106,7 +109,7 @@ export function createTouchControls() {
       root.style.display = 'none';
       // Ha épp nyomva volt egy gomb, amikor elrejtettük (pl. célba érés
       // közben), ne maradjon "beragadva" a gáz/kormány a háttérben.
-      state.up = state.down = state.left = state.right = state.drift = false;
+      state.up = state.down = state.left = state.right = state.drift = state.boost = false;
     },
   };
 }
