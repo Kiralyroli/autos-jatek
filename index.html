@@ -1001,6 +1001,34 @@
         background: var(--accent);
         color: #fff;
       }
+      /* --- Csalás miatti kizárás panel (#kickedOverlay) --- */
+      #kickedOverlay .kickIcon {
+        font-size: 46px;
+        text-align: center;
+        line-height: 1;
+        margin-bottom: 2px;
+      }
+      /* Az indoklás a szervertől jön (pl. "Teleportálás: 97 m 16 ms alatt") —
+         kiemelt, piros blokkban, hogy a konkrét mérés jól olvasható legyen. */
+      #kickedOverlay .kickReason {
+        font-size: 14px;
+        font-weight: 700;
+        text-align: center;
+        color: var(--danger);
+        background: rgba(224, 80, 90, 0.12);
+        border: 1px solid rgba(224, 80, 90, 0.4);
+        border-radius: 10px;
+        padding: 12px 14px;
+        line-height: 1.45;
+        overflow-wrap: anywhere; /* hosszú indoklás se lógjon ki a panelből */
+      }
+      #kickedOverlay .kickNote {
+        margin: 0;
+        font-size: 12.5px;
+        color: var(--text-dim);
+        line-height: 1.55;
+        text-align: center;
+      }
       .overlay button.accent:hover:not(:disabled) { background: #6a9cfd; }
       .overlay .joinrow { display: flex; gap: 8px; }
       .overlay .joinrow input { flex: 1; }
@@ -1184,6 +1212,22 @@
         <button id="btnResultsAgain" class="primary" style="display:none">🔄 Új verseny</button>
         <button id="btnResultsSettings">⚙️ Autó / pálya / fizika</button>
         <button id="btnResultsLeave">← Vissza a menübe</button>
+      </div>
+    </div>
+
+    <!-- Csalás miatti kizárás — a szerver-oldali verseny-mérés (server/raceTracker.js)
+         fizikailag lehetetlen mozgást/köridőt észlelt. Rendes játékbeli panel, nem
+         böngésző-alert: az utóbbi kizökkent, és a natív sávot nem is lehet stílusozni. -->
+    <div id="kickedOverlay" class="overlay">
+      <div class="panel">
+        <div class="kickIcon">⛔</div>
+        <h1>Kizárva a szobából</h1>
+        <div id="kickedReason" class="kickReason"></div>
+        <p class="kickNote">
+          A szerver a versenyt saját méréssel követi, és ez a mozgás fizikailag nem
+          lehetséges. Ha szerinted tévedés, indíts új szobát.
+        </p>
+        <button id="btnKickedBack" class="primary">← Vissza a főmenübe</button>
       </div>
     </div>
 

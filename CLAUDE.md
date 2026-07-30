@@ -176,6 +176,73 @@ csempék SZUMMÁJÁT (`MAX_TOTAL_TILES`) — a szegmensenkénti korlát nem elé
 nem csak érték-korlátot.** Ugyanez a szűrő fut a REST-mentésen ÉS a Colyseus úton
 (`onCreate` + `hostSettings`) — a host is "csak egy kliens".
 
+## Szerver-oldali verseny-mérés + csalás-szűrés (2026-07-29)
+
+**A modell neve: kliens-autoritatív MOZGÁS, szerver-mért VERSENY.** Pontosan ez az,
+amit a versenyszimulátorok (iRacing, ACC, rF2) is csinálnak — és ez a válasz arra a
+gyakori félreértésre, hogy „a nagy játékokban a szerver számol mindent". Nem: a
+saját autód fizikáját a SAJÁT géped futtatja (különben a kormánymozdulat és a kép
+közé hálózati késés kerül, ami a tapadás határán vezetve elviselhetetlen — ebben a
+projektben pontosan ezért lett visszavonva a szerver-autoritatív modell, `821f46f`).
+Amit a szerver ad hozzá: **ő méri a versenyt.**
+
+- `server/raceTracker.js` — a szerver ugyanazt a `raceStep`-et (src/sim/race.js,
+  betű szerint ugyanaz a kód, mint a kliensen) futtatja a bejelentett pozíciókra, a
+  SAJÁT órájával. Ebből jön a körszám, köridő, kör-érvényesség, célba érés, ranglista.
+  A kliens `lap`/`bestLap`/`finished` mezőit a szerver már **nem is olvassa**.
+- A `fullyOffRoad` és a `hitsCone` a `sim/car.js` body-alapú párjainak POZÍCIÓ-alapú
+  megfelelői — betű szerint ugyanaz a geometria, hogy a szerver és a kliens ne
+  ítélje meg máshogy a kör érvényességét.
+
+**Csalás-szűrés — a legfontosabb tervezési elv: a hamis riasztás elkerülése.** Egy
+tisztességes, rossz hálózatú játékost kirúgni sokkal rosszabb, mint egy csalót nem
+elkapni. Ezért két szint van, és puha jelzés magában SOSEM rúg ki (8 strike kell).
+
+**Két hiba, amit MÉRÉSSEL találtunk meg, és amiért így épült:**
+1. **Az időlépés felső korlátja (`Math.min(dt, 0.1)`) MÉRÉSI HIBÁT okozott.** A
+   kliens frame-ciklusában ez a vágás a FIZIKÁT védi, itt viszont nincs fizika, csak
+   időmérés — és löketesen érkező csomagoknál (12 üzenet egyszerre, 200 ms mozgással)
+   a szerver egy 15,3 s-os kört **7,7 s-nak** mért. Ez nem csak pontatlan, hanem
+   kihasználható is lett volna: a szándékosan akadozó kapcsolat rövidebb köridőt ad.
+   **Tanulság: időmérésnél a valós eltelt időt kell összegezni, vágás nélkül.**
+2. **Üzenetenkénti sebesség-ellenőrzés hamis riasztást ad.** A WebSocket-csomagok
+   löketekben érkeznek (ezt a projekt máshol is megszenvedte — lásd
+   `broadcastSnapshot` Date.now()-megjegyzését), így a beérkezési időből számolt
+   „sebesség" csalás nélkül is a valóság többszöröse. **Ezért a fő ellenőrzés egy
+   csúszó ablakon vett ÁTLAG-sebesség**, plusz egy durva egyszeri-ugrás korlát, ami a
+   VALÓS eltelt időből számol (így egy 2 másodperces lag utáni nagy, de jogos
+   elmozdulás nem gyanús — mérve: 0 strike).
+
+**A küszöbök MÉRT adatból származnak, nem tippelve** (`scratch`-mérésekkel, a valódi
+`sim/car.js` fizikát végigfuttatva). A legnagyobb elérhető 1 másodperces átlag-sebesség
+a `maxForwardSpeed` **1,001–1,005×**-e — és ez akkor is igaz, ha:
+- tartósan driftel: a drift LASSÍT (az oldalsó súrlódás lekopik, csúcs 14 m/s),
+- két autó tartósan egymásba lóg: a `carSeparation` elvben 0,3 m/lépés (18 m/s!)
+  útvonal-hizlalást adhatna, mérve mégis 1,001× — az átfedés pár lépés alatt feloldódik.
+
+Ezért a „tartósan gyorsabb, mint a fizika" ellenőrzés KÉT szinten fut:
+- **1 másodperces csúszó ablak, 1,15× küszöb** → strike (gyors reagálás, toleráns).
+- **Kör-szintű: a TÉNYLEGESEN megtett útvonal / a szerver mérte köridő, 1,08× küszöb**
+  → azonnali kirúgás. Itt lehet szigorúbb, mert egy teljes körön több száz mintából
+  átlagolunk (a zaj eltűnik), és a húrokból összegzett útvonal alulbecsüli a valódi
+  ívet, tehát a mérés a játékos javára téved. Ez a metrika a **valódi útvonalat** méri,
+  ezért a kanyarvágás nem zavarja meg — szemben a köridő-alsókorláttal, aminek épp
+  ezért kell 30%-os kanyarvágási ráhagyást adni (`RACING_LINE_FACTOR`).
+
+**RÉS, amit ez zárt be:** korábban az ablak-küszöb 1,5× volt, a köridő-alsókorlát
+pedig 30% kanyarvágást engedett — a két nagyvonalú margó ÖSSZEJÁTSZOTT, és egy
+tartósan **85 m/s-mal (1,4×)** haladó csaló MINDKETTŐN átjutott (306 m / 85 m/s =
+3,6 s > a 3,57 s-os alsókorlát). Mérve: most az 1,1×-es „finom" csalás is kiesik.
+
+Kirúgás azonnal: teleportálás (a jogos elmozdulás 10×-e), tartósan a fizikai korlát
+felett (kör-szintű átlag), fizikailag lehetetlen köridő, érvénytelen koordináta. A kirúgott játékos ELŐBB kap egy indokló `kicked` üzenetet, és a
+`p.kicked` flag miatt az `onLeave` **nem ad neki visszacsatlakozási türelmi időt**
+(különben a `reconnect()`-tel visszatérne a helyére, host-szereppel együtt).
+
+**Amit ez NEM véd:** egy hitelesen, a fizikai korlátokon belül hamisított pálya, és
+egy tökéletesen vezető bot. Ez ellen csak a teljes szerver-fizika védene, amit az
+iRacing sem használ (ott valódi identitás + emberi vizsgálat a védelem).
+
 ## Ismert buktatók (gotchas)
 
 Ezek a repóban (git-ben) élnek, tehát bármelyik session/fiók/gép automatikusan

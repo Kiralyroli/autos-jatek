@@ -6,14 +6,27 @@
 //  'state' üzenetben küldi. A szerver ezt csak ELTÁROLJA és 30 Hz-en szétküldi
 //  (relay). Így a saját autót SOSEM "korrigálja" a szerver → nincs rángatás/húzás.
 //
-//  A szerver marad a KOORDINÁTOR: lobby, host, visszaszámlálás-óra, rajt (slot-
-//  kiosztás + fázisváltás), cél-sorrend és a verseny lezárása. A pálya-geometria
-//  (spawn-slotok) kell csak neki, fizika nem.
+//  DE A VERSENYT A SZERVER MÉRI (2026-07-29): a körszámot, a köridőt, a kör
+//  érvényességét és a célba érést a szerver SAJÁT SZÁMÍTÁSA adja — ugyanazt a
+//  determinisztikus `raceStep`-et futtatja a bejelentett pozíciókra (lásd
+//  raceTracker.js), a saját órájával. A kliens ilyen mezőit (lap/bestLap/finished)
+//  SZÁNDÉKOSAN nem is olvassuk. Korábban a kliens egyszerűen elküldte a köridő
+//  SZÁMOT és a szerver elhitte — vagyis a ranglistára bármit be lehetett írni.
 //
-//  Kompromisszum (baráti játékhoz vállalt): kliens-autoritatív → csalás ellen nem
-//  véd, és kemény ütközésnél a két képernyő kissé eltérhet (a puha szétnyomás
-//  tompítja). A "szerver az igazság" modellt (predikció+reconcile) tudatosan
-//  cseréltük erre, mert az a valós hálózaton látható korrekció-húzást okozott.
+//  Ez PONTOSAN a versenyszimulátorok (iRacing, ACC) modellje: a fizikát a kliens
+//  számolja (különben a kormánymozdulat és a kép közé hálózati késés kerül, amit a
+//  tapadás határán vezetve nem lehet elrejteni), a VERSENYT viszont a szerver méri.
+//
+//  A szerver továbbá KOORDINÁTOR: lobby, host, visszaszámlálás-óra, rajt (slot-
+//  kiosztás + fázisváltás), cél-sorrend, a verseny lezárása — és a csalás-szűrés
+//  (raceTracker.js: teleportálás/sebesség-hack → kirúgás indoklással).
+//
+//  MEGMARADÓ kompromisszum: a POZÍCIÓ továbbra is a kliens állítása, ezért egy
+//  hitelesen (a fizikai korlátokon belül) hamisított pálya elvben átjut — ez ellen
+//  csak a teljes szerver-fizika védene, amit viszont az iRacing sem használ. Kemény
+//  ütközésnél a két képernyő is kissé eltérhet (a puha szétnyomás tompítja). A
+//  "szerver az igazság" MOZGÁS-modellt (predikció+reconcile) tudatosan cseréltük
+//  erre, mert az a valós hálózaton látható korrekció-húzást okozott.
 // =============================================================================
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -25,6 +38,7 @@ import { hashLayout } from '../src/sim/trackKey.js';
 import { recordLap } from './leaderboardStore.js';
 import { sanitizeLayout } from './trackStore.js';
 import { registerJoinCode, unregisterJoinCode } from './roomCodes.js';
+import { createTrackerContext, createPlayerTracker } from './raceTracker.js';
 
 const num = (v) => (Number.isFinite(v) ? v : 0);
 const intOr = (v, d) => (Number.isInteger(v) ? v : d);
@@ -85,7 +99,8 @@ export class RaceRoom extends Room {
     this.trackKey = hashLayout(layout);
     this.trackName = cleanName(options?.trackName, 'Egyedi pálya', 40);
 
-    // A spawn-slotokhoz kell a pálya-geometria (spawnSlot) — ez NEM fizikai sim.
+    // A pálya-geometria kell a spawn-slotokhoz ÉS a szerver-oldali verseny-méréshez
+    // (checkpointok, fű-határ, pálya-irány) — ez NEM fizikai sim.
     this.trackState = createTrackState(layout, {
       tile: TRACK.tile,
       curbWidth: TRACK.curbWidth,
@@ -93,6 +108,7 @@ export class RaceRoom extends Room {
       checkpointCount: TRACK.checkpointCount,
       start: TRACK.start,
     });
+    this.rebuildTrackerContext();
 
     this.players = new Map(); // sessionId → { name, colorIdx, slotIndex, state, finished, place, ... }
     this.phase = 'lobby'; // 'lobby' | 'countdown' | 'racing' | 'finished'
@@ -109,53 +125,72 @@ export class RaceRoom extends Room {
     // belső Colyseus roomId helyett ezt mondja be egymásnak a felhasználó.
     this.joinCode = registerJoinCode(this.roomId);
 
-    // KLIENS-AUTORITATÍV állapot fogadása: átvesszük a kliens által számolt autó-
-    // állapotot (számokra szűrve — a szerver nem hisz el NaN-t/hiányzó mezőt).
+    // A MOZGÁS kliens-autoritatív (a szerver nem szimulál autót), a VERSENY viszont
+    // szerver-mért: a pozíciót/sebességet átvesszük a rendereléshez, de a körszámot,
+    // a köridőt, a kör érvényességét és a célba érést a szerver MAGA számolja ki
+    // ugyanezekből a pozíciókból (lásd raceTracker.js). A kliens ilyen mezőit
+    // (lap/curLap/lastLap/bestLap/finished/totalTime) SZÁNDÉKOSAN nem is olvassuk.
     this.onMessage('state', (client, msg) => {
       const p = this.players.get(client.sessionId);
       if (!p || this.phase === 'lobby') return;
       // Elkésett üzenet egy KORÁBBI versenyből (lásd raceGen fenti kommentje) —
-      // eldobjuk, nehogy stale `finished`/kör-adat szennyezze az új versenyt.
+      // eldobjuk, nehogy stale kör-adat szennyezze az új versenyt.
       if (intOr(msg?.raceGen, -1) !== this.raceGen) return;
       const s = p.state;
       s.x = num(msg?.x); s.y = num(msg?.y); s.angle = num(msg?.angle);
       s.vx = num(msg?.vx); s.vy = num(msg?.vy); s.w = num(msg?.w);
       s.speed = num(msg?.speed); s.cornering = num(msg?.cornering);
       s.inp = intOr(msg?.inp, 0);
-      s.lap = intOr(msg?.lap, 1); s.progress = num(msg?.progress);
-      s.curLap = num(msg?.curLap);
-      s.lastLap = msg?.lastLap == null ? null : num(msg.lastLap);
-      s.bestLap = msg?.bestLap == null ? null : num(msg.bestLap);
-      s.lapValid = msg?.lapValid !== false;
-      s.wrongWay = !!msg?.wrongWay;
 
-      // Cél: a kliens jelzi, a HELYEZÉST a szerver osztja a beérkezés sorrendjében
-      // (ez a "mindenki a sajátját számolja" modellben a tisztességes rangsor).
-      // CSAK 'racing' fázisban fogadjuk el — a kliens csak akkor jelezhetne
-      // valódi célba érést, ha a verseny ténylegesen fut; 'countdown' alatt ez
-      // mindig elkésett/idő előtti jelzés (lásd raceGen fenti kommentje), ami
-      // NÉLKÜLE azonnal "vége a versenynek"-et okozna, amint a fázis 'racing'-ra vált.
-      if (msg?.finished && !p.finished && this.phase === 'racing') {
+      // --- A SZERVER SAJÁT MÉRÉSE a most kapott pozícióból ---
+      const measured = p.tracker
+        ? p.tracker.update(s.x, s.y, s.angle, Date.now())
+        : { events: [], cheat: null };
+      const events = measured.events;
+      if (measured.cheat) {
+        this.kickForCheating(client, p, measured.cheat.reason);
+        return;
+      }
+      const r = p.tracker?.race;
+      if (r) {
+        s.lap = r.lap;
+        s.curLap = r.time - r.lapStartTime;
+        s.lastLap = r.lastLapTime;
+        s.bestLap = r.bestLapTime;
+        s.lapValid = r.lapValid;
+        s.wrongWay = r.wrongWay;
+        // A pálya-menti haladás is szerver-oldalon számolt (az élő állás sorrendje
+        // és az időrés-becslés ebből épül) — így az sem hamisítható.
+        s.progress = this.trackState.trackProgress(s.x, s.y);
+      }
+
+      // CÉL: a szerver SAJÁT mérése dönt (nem a kliens bejelentése). A helyezést a
+      // célba érés sorrendjében osztjuk. Az `events` a raceStep-től jön, tehát csak
+      // akkor van 'finish', ha a szerver szerint minden checkpoint és kör megvolt.
+      if (!p.finished && this.phase === 'racing' && events.some((e) => e.type === 'finish')) {
         p.finished = true;
         s.finished = true;
-        s.totalTime = num(msg?.totalTime);
+        s.totalTime = r.time;
         p.place = ++this.finishedCount;
       }
 
-      // Örök ranglista: a bejelentett legjobb körből (csak ha ÚJ/JOBB — a tároló
-      // amúgy is szűr, ez a felesleges hívásokat spórolja).
+      // Örök ranglista: a SZERVER által mért legjobb körből (csak ha ÚJ/JOBB — a
+      // tároló amúgy is szűr, ez a felesleges hívásokat spórolja). Korábban itt a
+      // kliens által BEJELENTETT szám szerepelt, vagyis a ranglistára bármit be
+      // lehetett írni; most a szerver mérése az egyetlen forrás.
       if (
-        s.bestLap !== null &&
-        (p.lastSubmittedBest === null || s.bestLap < p.lastSubmittedBest - 1e-6)
+        r &&
+        r.bestLapTime !== null &&
+        (p.lastSubmittedBest === null || r.bestLapTime < p.lastSubmittedBest - 1e-6)
       ) {
-        p.lastSubmittedBest = s.bestLap;
+        p.lastSubmittedBest = r.bestLapTime;
         recordLap(
           {
             trackKey: this.trackKey,
             trackName: this.trackName,
             physics: this.physics,
             playerName: p.name,
-            lapTime: s.bestLap,
+            lapTime: r.bestLapTime,
           },
           Date.now()
         );
@@ -207,6 +242,10 @@ export class RaceRoom extends Room {
         this.laps = Math.max(1, Math.min(50, Math.round(msg.laps)));
       }
       if (msg?.physics) this.physics = resolvePhysicsPreset(msg.physics);
+      // A verseny-mérés kontextusa a pályából/körszámból/fizikából épül — bármelyik
+      // változott, újra kell építeni (különben a következő futam a RÉGI pálya
+      // checkpointjaival és a régi csúcssebesség-korláttal mérne).
+      this.rebuildTrackerContext();
       // Mindenki (a hostot is beleértve) ugyanabból az üzenetből frissít — így
       // egységes a viselkedés: ha a pálya változott, a kliens (lásd main.js
       // roomSettings kezelő) elmenti aktívnak + újratölti magát (a rejoin-
@@ -277,9 +316,51 @@ export class RaceRoom extends Room {
       finished: false,
       place: null,
       lastSubmittedBest: null,
+      // Szerver-oldali verseny-követő (lásd raceTracker.js). A startRace() minden
+      // futam elején újat készít; ez itt csak azért kell, hogy egy lobbyban
+      // beérkező 'state' üzenet se találjon üres helyet.
+      tracker: createPlayerTracker(this.trackerCtx, slot),
     });
 
     this.broadcastLobby();
+  }
+
+  // Csalás miatti eltávolítás. A játékos ELŐBB kap egy magyarázó üzenetet, és csak
+  // utána zárjuk a kapcsolatot — különben a kliens csak egy néma szétkapcsolást
+  // látna, és hibának hinné.
+  //
+  // A `kicked` flag KRITIKUS: az onLeave alapesetben 60 másodpercig VÁR egy
+  // `reconnect()`-re (a reload/hálózat-kiesés kezelése miatt) — enélkül a kirúgott
+  // játékos egyszerűen visszatérhetne a saját helyére, host-szereppel együtt.
+  kickForCheating(client, p, reason) {
+    if (p.kicked) return; // már kirúgva — ne küldjük ki többször
+    p.kicked = true;
+    console.warn(`[anticheat] kirúgva: ${p.name} (${client.sessionId}) — ${reason}`);
+    try {
+      client.send('kicked', { reason });
+    } catch {
+      /* a kapcsolat már bomlott — a leave() alább akkor is lezárja */
+    }
+    // Rövid késleltetés, hogy az üzenet ténylegesen kimenjen a socketre a zárás előtt.
+    setTimeout(() => {
+      try {
+        client.leave(4000); // saját záró-kód: "kirúgva"
+      } catch {
+        /* már lecsatlakozott */
+      }
+    }, 120);
+  }
+
+  // A verseny-mérés szobaszintű kontextusa (checkpointok, fű-határ, terelőkúpok,
+  // csúcssebesség-korlát). A pálya/körszám/fizika bármelyik változásakor újra kell
+  // építeni — lásd onCreate és a 'hostSettings' kezelő.
+  rebuildTrackerContext() {
+    this.trackerCtx = createTrackerContext({
+      trackState: this.trackState,
+      decorations: this.decorations,
+      physics: this.physics,
+      laps: this.laps,
+    });
   }
 
   // A kapcsolat megszakadása NEM feltétlenül szándékos kilépés — pl. a
@@ -298,6 +379,14 @@ export class RaceRoom extends Room {
   // adja vissza, seat-vesztés nélkül.
   async onLeave(client, consented) {
     const wasHost = client.sessionId === this.hostId;
+    const p = this.players.get(client.sessionId);
+    // CSALÁS MIATT KIRÚGVA: azonnali, VÉGLEGES eltávolítás — semmilyen
+    // visszacsatlakozási türelmi idő (lásd kickForCheating), különben a kirúgott
+    // játékos a `reconnect()`-tel visszatérne a saját helyére.
+    if (p?.kicked) {
+      this.removePlayer(client.sessionId, wasHost);
+      return;
+    }
     if (consented) {
       this.removePlayer(client.sessionId, wasHost);
       return;
@@ -353,6 +442,9 @@ export class RaceRoom extends Room {
       p.finished = false;
       p.place = null;
       p.lastSubmittedBest = null;
+      // FRISS verseny-követő minden futamhoz (új kör-számláló, nullázott idő, a
+      // pozíció-előzmény a rajtrácsról indul).
+      p.tracker = createPlayerTracker(this.trackerCtx, slot);
       slots[id] = p.spawn; // a kliens a saját id-jéhez tartozó pozícióra pozicionál
     }
     this.phase = 'countdown';
@@ -366,14 +458,19 @@ export class RaceRoom extends Room {
     this.broadcastLobby();
   }
 
-  // Szerver-óra: visszaszámlálás + cél-koordináció. NINCS fizika (a mozgást a
-  // kliensek számolják, a szerver csak a bejelentett `finished` flageket figyeli).
+  // Szerver-óra: visszaszámlálás + cél-koordináció. NINCS autófizika (a mozgást a
+  // kliensek számolják) — a VERSENY-MÉRÉS viszont szerver-oldali (raceTracker.js),
+  // a célba érést is a szerver saját mérése állapítja meg.
   tick(dt) {
     if (this.phase === 'countdown') {
       this.countdownLeft -= dt;
       if (this.countdownLeft <= 0) {
         this.countdownLeft = 0;
         this.phase = 'racing';
+        // Rajt: innentől mér a szerver. A követők órája MOST indul, hogy a
+        // visszaszámlálás alatt beérkezett pozíciók ne számítsanak bele az időbe.
+        const now = Date.now();
+        for (const p of this.players.values()) p.tracker?.begin(now);
       }
     }
 

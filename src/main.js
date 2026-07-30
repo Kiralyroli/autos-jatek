@@ -161,6 +161,28 @@ function escapeHtml(s) {
   ));
 }
 
+// --- Csalás miatti kizárás panelje (#kickedOverlay) ---
+// Igaz, amíg a kizárás-panel látszik: ilyenkor NEM küldünk több állapotot a
+// szervernek (a kapcsolat már zárva — a room.send hibát dobna minden képkockában).
+let kickedShown = false;
+
+function showKicked(reason) {
+  kickedShown = true;
+  // A verseny/lobby paneljei zárva — csak a kizárás-panel maradjon.
+  lobbyEl.style.display = 'none';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('standings').style.display = 'none';
+  document.getElementById('countdown').style.display = 'none';
+  // Az indoklás a SZERVERTŐL jön; textContent (nem innerHTML), tehát semmilyen
+  // jelölés nem értelmeződik benne.
+  document.getElementById('kickedReason').textContent = reason;
+  document.getElementById('kickedOverlay').style.display = 'flex';
+}
+
+// A panel egyetlen gombja: vissza a főmenübe. A reload SZÁNDÉKOSAN itt van (nem az
+// onLeave-ben), hogy a játékos el tudja olvasni az indoklást, mielőtt eltűnik.
+document.getElementById('btnKickedBack').onclick = () => window.location.reload();
+
 // A restart / hot lap reset gomb viselkedése módfüggő — a dispatcher az aktív
 // mód kezelőjét hívja.
 let onRestartClick = () => {};
@@ -946,6 +968,8 @@ async function startMultiplayer(room) {
   // (60 Hz, a 40 Hz-es broadcast fölött, hogy minden broadcast friss pozíciót
   // kapjon — lásd config.js sendHz megjegyzése).
   function mpSendState(now, input) {
+    // Kizárás után a kapcsolat már zárva — a küldés minden képkockában hibát dobna.
+    if (kickedShown) return;
     if (now - mpLastStateSentAt < 1000 / NET.sendHz) return;
     mpLastStateSentAt = now;
     const pos = mpCar.getPosition();
@@ -1215,10 +1239,28 @@ async function startMultiplayer(room) {
     room.leave();
     window.location.reload();
   };
+  // CSALÁS MIATTI KIRÚGÁS: a szerver-oldali verseny-mérés (server/raceTracker.js)
+  // fizikailag lehetetlen mozgást vagy köridőt észlelt. A szerver ELŐBB ezt az
+  // üzenetet küldi, csak utána zárja a kapcsolatot — enélkül a játékos csak egy
+  // néma szétkapcsolást látna, és hálózati hibának hinné. A `kicked` jelzőből az
+  // onLeave tudja, hogy NE csendben újratöltsön: előbb elmondjuk, mi történt.
+  let kickedReason = null;
+  room.onMessage('kicked', (m) => {
+    kickedReason = String(m?.reason || 'Szabálytalan játék.');
+  });
+
   room.onLeave(() => {
     clearInterval(pingTimer);
-    // Szerver-oldali bontás (pl. szoba megszűnt) → vissza a menübe.
-    if (mode === 'multi') window.location.reload();
+    if (mode !== 'multi') return;
+    if (kickedReason) {
+      // Rendes játékbeli panel (nem böngésző-alert): a natív sáv kizökkent, nem
+      // stílusozható, és mobilon különösen idegen. A reload-ot NEM itt végezzük —
+      // a panel gombja indítja, hogy a játékos elolvashassa az indoklást.
+      showKicked(kickedReason);
+      return;
+    }
+    // Egyéb szerver-oldali bontás (pl. a szoba megszűnt) → vissza a menübe.
+    window.location.reload();
   });
 
   onRestartClick = () => {
@@ -1271,7 +1313,9 @@ async function startMultiplayer(room) {
 
       // --- SAJÁT autó: HELYI sim (kliens-autoritatív) ---
       const serverPhase = sampled.phase;
-      const me = sampled.players[myId]; // csak a helyezéshez kell (a szerver osztja)
+      // A SAJÁT szerver-oldali állapotunk a snapshotból: helyezés + a SZERVER által
+      // mért kör-adatok (lásd server/raceTracker.js — a köridő hivatalos forrása).
+      const me = sampled.players[myId];
 
       // A többi kocsi középpontjai a puha szétnyomáshoz — mostantól a HELYBEN
       // SZIMULÁLT testükből (jelen-idejű, pontos), nem az interpolált (múltbeli)
@@ -1389,16 +1433,21 @@ async function startMultiplayer(room) {
         updateCamera(ownX, ownY, ownA, dt);
       }
 
-      // HUD a HELYI verseny-állapotból; a countdown-t a szerver fázisa/ideje adja.
+      // HUD: a FUTÓ óra a helyi állapotból (azonnali, nincs hálózati késés), a
+      // BEFEJEZETT körök adatai viszont a SZERVER méréséből (`me`, a snapshotból) —
+      // a szerver mér hivatalosan (lásd server/raceTracker.js), és a ranglista is
+      // azt kapja. Ha itt a helyi mérést mutatnánk, a HUD "Legjobb" értéke pár
+      // század másodperccel eltérne a ranglistán látszó időtől, ami hibának tűnne.
+      // Amíg nincs szerver-adat (első pillanatok), a helyi érték az átmeneti tartalék.
       const hudRace = {
         phase: myFinished ? 'finished' : serverPhase === 'racing' ? 'racing' : 'countdown',
         countdownLeft: sampled.countdownLeft,
-        lap: mpRace.lap,
+        lap: me ? me.lap : mpRace.lap,
         time: mpRace.time,
         totalLaps: mpTotalLaps,
         lapStartTime: mpRace.lapStartTime,
-        lastLapTime: mpRace.lastLapTime,
-        bestLapTime: mpRace.bestLapTime,
+        lastLapTime: me && me.lastLap != null ? me.lastLap : mpRace.lastLapTime,
+        bestLapTime: me && me.bestLap != null ? me.bestLap : mpRace.bestLapTime,
         wrongWay: mpRace.wrongWay,
         lapValid: mpRace.lapValid,
         lastSplitDelta: mpRace.lastSplitDelta,

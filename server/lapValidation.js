@@ -64,14 +64,22 @@ function layoutForKey(trackKey) {
   return null;
 }
 
+// A minimális hihető köridő EGY ISMERT pályahosszból. Exportálva, hogy a
+// multiplayer szoba (server/raceTracker.js) UGYANEZT a képletet használhassa a
+// saját trackState.trackLength-jével — ott nem kell (és nem is lehet) trackKey
+// alapján visszakeresni a layoutot, viszont a két hely nem térhet el egymástól.
+export function minLapFromLength(lengthMeters, maxSpeed = MAX_SPEED) {
+  if (!Number.isFinite(lengthMeters) || lengthMeters <= 0 || !(maxSpeed > 0)) {
+    return FALLBACK_MIN_LAP;
+  }
+  return Math.max(FALLBACK_MIN_LAP, (lengthMeters * RACING_LINE_FACTOR) / maxSpeed);
+}
+
 export function minPlausibleLapTime(trackKey) {
   if (minLapCache.has(trackKey)) return minLapCache.get(trackKey);
   const layout = layoutForKey(trackKey);
   const len = layout ? trackLengthFor(layout) : null;
-  const min =
-    Number.isFinite(len) && len > 0 && MAX_SPEED > 0
-      ? Math.max(FALLBACK_MIN_LAP, (len * RACING_LINE_FACTOR) / MAX_SPEED)
-      : FALLBACK_MIN_LAP;
+  const min = minLapFromLength(len);
   // Ismeretlen pályánál NEM cache-elünk: később elmentheti valaki a pályát, és
   // onnantól a pontos (szigorúbb) korlátot akarjuk használni.
   if (layout) minLapCache.set(trackKey, min);
