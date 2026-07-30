@@ -1133,6 +1133,57 @@
         padding: 8px 12px;
         font-size: 14px;
       }
+      /* Hot Lap: mindig látható ranglista, jobb oldalt — UGYANOTT, ahol MP-ben
+         az élő állás (#standings) lenne. Nem ütköznek: a kettő sosem jelenik
+         meg egyszerre (Hot Lap tisztán SP-only mód). */
+      #raceLeaderboard {
+        position: fixed;
+        right: 14px;
+        top: 14px;
+        display: none; /* JS: flex Hot Lap módban (lásd main.js) */
+        flex-direction: column;
+        gap: 10px;
+        min-width: 210px;
+        max-width: 260px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        padding: 14px 16px;
+        border-radius: 10px;
+        pointer-events: none;
+        user-select: none;
+        font-variant-numeric: tabular-nums;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+      }
+      #raceLeaderboard h3 {
+        margin: 0;
+        font-size: 12.5px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+      }
+      #raceLeaderboard #raceLeaderboardList {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        max-height: 55vh;
+        overflow-y: auto;
+        font-variant-numeric: tabular-nums;
+      }
+      #raceLeaderboard #raceLeaderboardList p {
+        color: var(--text-dim);
+        font-style: italic;
+        font-size: 12.5px;
+        margin: 0;
+      }
+      /* Mobilon (touch) a hely már a HUD-elemekkel is szűkös — a ranglista itt
+         inkább zavarna, mint segítene, ezért ott elrejtjük. */
+      body.has-touch-controls #raceLeaderboard {
+        display: none !important;
+      }
       #standings {
         position: fixed;
         right: 14px;
@@ -1287,6 +1338,12 @@
 
     <!-- Élő állás (multiplayer verseny közben) -->
     <div id="standings"></div>
+
+    <!-- Hot Lap: mindig látható ranglista, oldalt (lásd main.js startSingleplayer) -->
+    <div id="raceLeaderboard">
+      <h3>🏆 Ranglista</h3>
+      <div id="raceLeaderboardList"></div>
+    </div>
 
     <!-- Végeredmény (verseny vége — teljes helyezés-lista) -->
     <div id="results" class="overlay">

@@ -214,6 +214,10 @@ const lapsInput = document.getElementById('lapsInput');
 const physicsSelect = document.getElementById('physicsSelect');
 const leaderboardListEl = document.getElementById('leaderboardList');
 const btnClearLeaderboard = document.getElementById('btnClearLeaderboard');
+// Hot Lap: mindig látható ranglista-panel oldalt (lásd startSingleplayer) —
+// UGYANAZT a tartalmat kapja, mint a menü sidepanelje (lásd renderLeaderboard).
+const raceLeaderboardEl = document.getElementById('raceLeaderboard');
+const raceLeaderboardListEl = document.getElementById('raceLeaderboardList');
 
 // --- Autó-választó FELUGRÓ PANEL (lásd index.html #carPicker) — a sok (25+)
 // jármű nem fér el kényelmesen egy 240px-es sidepanelben, ezért egy gomb
@@ -546,9 +550,41 @@ function currentTrackInfo() {
   };
 }
 
+// Egy ranglista-lista kirajzolása egy adott elembe — a menü sidepanelje ÉS a
+// Hot Lap oldali panel (raceLeaderboardListEl) is EZT hívja, azonos adatból
+// (lásd renderLeaderboard), hogy ne kelljen a köridőt kétszer lekérni.
+// A törlés-gomb (dev mód) csak ott jelenik meg, ahol `allowDelete` igaz — a
+// race-panel tisztán megjelenítő, versenyközben nincs értelme törlőgombnak.
+function paintLeaderboardEntries(el, entries, dev, allowDelete) {
+  if (entries.length === 0) {
+    el.innerHTML = '<p>Még nincs rögzített köridő ehhez a pályához.</p>';
+    return;
+  }
+  el.innerHTML = entries
+    .map((e, i) => `
+      <div class="lbRow">
+        <span class="lbPos">${i + 1}.</span>
+        <span class="lbName">${escapeHtml(e.playerName)}</span>
+        <span class="lbTime">${fmtTime(e.lapTime)}</span>
+        ${dev && allowDelete ? `<button class="lbDel" data-name="${escapeHtml(e.playerName)}">✕</button>` : ''}
+      </div>
+    `)
+    .join('');
+  if (dev && allowDelete) {
+    el.querySelectorAll('.lbDel').forEach((btn) => {
+      btn.onclick = async () => {
+        const { trackKey: tk } = currentTrackInfo();
+        await apiDeleteLeaderboardEntry(tk, chosenPhysics(), btn.dataset.name);
+        renderLeaderboard();
+      };
+    });
+  }
+}
+
 // A jelenleg választott pálya + fizika örök-ranglistájának betöltése és
-// kirajzolása a főmenübe. Dev módban törlés-gombok is megjelennek soronként,
-// illetve az egész tábla törlésére is (btnClearLeaderboard, lásd index.html).
+// kirajzolása a főmenübe ÉS (ha épp látszik) a Hot Lap oldali panelbe. Dev
+// módban törlés-gombok is megjelennek soronként, illetve az egész tábla
+// törlésére is (btnClearLeaderboard, lásd index.html).
 async function renderLeaderboard() {
   const { trackKey, trackName } = currentTrackInfo();
   const physics = chosenPhysics();
@@ -560,35 +596,15 @@ async function renderLeaderboard() {
     entries = await apiGetLeaderboard(trackKey, physics);
   } catch {
     leaderboardListEl.innerHTML = '<p>Nem sikerült betölteni a ranglistát.</p>';
+    raceLeaderboardListEl.innerHTML = '<p>Nem sikerült betölteni a ranglistát.</p>';
     return;
   }
   // Időközben másik pályára/fizikára válthatott a felhasználó — eldobjuk a válasz.
   const now = currentTrackInfo();
   if (now.trackKey !== trackKey || chosenPhysics() !== physics) return;
 
-  if (entries.length === 0) {
-    leaderboardListEl.innerHTML = '<p>Még nincs rögzített köridő ehhez a pályához.</p>';
-  } else {
-    leaderboardListEl.innerHTML = entries
-      .map((e, i) => `
-        <div class="lbRow">
-          <span class="lbPos">${i + 1}.</span>
-          <span class="lbName">${escapeHtml(e.playerName)}</span>
-          <span class="lbTime">${fmtTime(e.lapTime)}</span>
-          ${dev ? `<button class="lbDel" data-name="${escapeHtml(e.playerName)}">✕</button>` : ''}
-        </div>
-      `)
-      .join('');
-    if (dev) {
-      leaderboardListEl.querySelectorAll('.lbDel').forEach((btn) => {
-        btn.onclick = async () => {
-          const { trackKey: tk } = currentTrackInfo();
-          await apiDeleteLeaderboardEntry(tk, chosenPhysics(), btn.dataset.name);
-          renderLeaderboard();
-        };
-      });
-    }
-  }
+  paintLeaderboardEntries(leaderboardListEl, entries, dev, true);
+  paintLeaderboardEntries(raceLeaderboardListEl, entries, dev, false);
 }
 
 physicsSelect.addEventListener('change', renderLeaderboard);
@@ -677,6 +693,12 @@ function startSingleplayer(hotLap = false) {
   cameraSettings.show();
   if (touch) touch.show();
   carEffects.reset(); // friss guminyom/porfelhő-állapot minden versenykezdésnél
+
+  // Hot Lap: a ranglista mindig látszik oldalt, versenyközben is — enélkül a
+  // menü bezárásával eltűnt, pedig épp Hot Lap közben a leghasznosabb élőben
+  // látni, hol állsz. Normál egyjátékosnál/MP-ben marad rejtve (nem kérték).
+  raceLeaderboardEl.style.display = hotLap ? 'flex' : 'none';
+  if (hotLap) renderLeaderboard();
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
