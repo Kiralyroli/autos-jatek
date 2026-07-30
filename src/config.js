@@ -243,6 +243,78 @@ export const OFFROAD = {
   entrySpeedFactor: 0.5, // a fűre lépés pillanatában a sebesség ennyire esik vissza (50%)
 };
 
+// Guminyom + porfelhő — tisztán VIZUÁLIS effektek (render3d/carEffects.js), a
+// fizikát nem befolyásolják.
+//
+// A KÜSZÖB TÖRTÉNETE (MÉRT adatokból, nem tippelve — két hibás nekifutás után):
+//  1. Először 1.5 m/s volt — TÚL magas, csak a legdurvább driftnél jelent meg
+//     bármi (élő visszajelzés: "jöjjön enyhébb forduláskor is").
+//  2. Lejjebb vittem 0.6-ra + egy minForwardSpeed=12 sebesség-kaput vezettem be,
+//     mert azt hittem, a kormányzás/gyorsítás ÁTMENETI szakaszában (a kormányszög
+//     még ramp-el, lásd updateSteerAngle) keletkező, drift NÉLKÜLI |lateralSpeed|-
+//     tüske ALACSONY SEBESSÉGHEZ kötött — TÉVESEN: méréssel kiderült, hogy ez a
+//     tranziens BÁRMILYEN sebességnél ugyanúgy jelentkezik (a kormány VÁLTOZÁSÁHOZ
+//     kötődik, nem a sebességhez), a sebesség-kapu pedig a VALÓDI driftet is
+//     elnémította, ha menet közben (pl. kicsúszáskor) a haladási sebesség a kapu
+//     alá esett — élő visszajelzés: "nagyobb sebességnél semmit nem hagy, picike
+//     kis fordulásoknál meg hagy" — pontosan fordítva a kívánttól.
+//  3. A VALÓDI elválasztó jel a CSÚCS NAGYSÁGA, nem a sebesség: a driftmentes
+//     tranziens abszolút csúcsa (sok induló-sebességgel, mindhárom fizika-
+//     preset-tel mérve) 2.56-2.65 m/s, FÜGGETLENÜL a sebességtől — egy VALÓDI,
+//     akár csak 0.25s-os driftkoppintás viszont MINDIG legalább ~9 m/s-ot ér el
+//     (rövidebb, ~0.1-0.15s-os koppintásoknál a drift még nem "kap el", de az
+//     ilyen villanásnyi driftet a valóságban sem látnánk nyomként). A
+//     minLateralSpeed ezért a tranziens csúcsa FÖLÉ, de a legrövidebb értelmes
+//     drift alá esik — sebesség-kapu NÉLKÜL, hogy driftkor a sebesség-ingadozás
+//     (kicsúszásnál a haladási sebesség csökkenhet/negatívba fordulhat) ne tudja
+//     tévesen megszakítani a nyomot.
+//
+// MÁSODIK KIVÁLTÓ OK — "erőteljes kanyarodás" driftelés NÉLKÜL is: a fenti
+// lateralSpeed-alapú jel KIZÁRÓLAG a tapadás ELVESZTÉSÉT (drift) méri — teljes
+// tapadású kanyarban ez akkor is nullához közeli marad, ha az autó a sebesség-
+// határon egyensúlyoz (mérve: 60 m/s-on, éles kanyarban is |lateralSpeed|~0.16
+// m/s). Erre a corneringLoad (=|forwardSpeed×szögsebesség|, sim/car.js — a
+// gumicsikorgás hangeffektje is EZT használja) ad jó jelet, mert a kanyarodás
+// INTENZITÁSÁVAL skálázódik, tapadástól függetlenül. MÉRVE (kormány-kitérés
+// arányában): enyhe (10-30%) kanyar átlaga 2-13, közepes-erős (50%+) 27-46 —
+// az AUDIO.skid.startLoad=28 (ahol a csikorgás-hang elindul) pont a "már
+// tényleg erőteljes" határon van, ezért ÚJRAHASZNOSÍTVA: a nyom és a hang
+// egyszerre kezdődik.
+export const EFFECTS = {
+  skid: {
+    minLateralSpeed: 4.0, // m/s — a driftmentes tranziens csúcsa (2.56-2.65) fölött, bő tartalékkal
+    minCorneringLoad: AUDIO.skid.startLoad, // erőteljes (nem feltétlen driftelő) kanyarodás jele
+    minForwardSpeed: 2, // m/s — csak azt zárja ki, hogy szinte álló autó hagyjon nyomot
+    markSpacing: 0.6, // m — ennyi elmozdulásonként új nyom-szegmens (folytonos csík)
+    markWidth: 0.28, // m — kb. egy kerék szélessége
+    wheelOffset: 0.6, // m — a hátsó kerekek fél-nyomtávja a középvonaltól
+    rearOffset: CAR.wheelbase / 2, // m — a hátsó tengely távolsága a tömegközépponttól
+    maxOpacity: 0.55,
+    // A nyomoknak a TELJES verseny végéig meg kell maradniuk (élő visszajelzés) —
+    // a korábbi 600-as pool ehhez KEVÉS volt: egyetlen, erőteljesen vezetett kör
+    // is simán 500+ szegmenst termel (306 m pálya / 0.6 m szegmens-táv × 2 kerék),
+    // tehát a régi pool egy KÖRÖN BELÜL körbeért, és a saját nyoma eltűnt a hátunk
+    // mögött. A pool körbeforgása FIZIKAILAG olcsó (egy InstancedMesh — egyetlen
+    // rajzhívás bármekkora számnál, egy 4×4 mátrix/instance = 64 bájt, tehát
+    // 20 000 instance is csak ~1.3 MB), ezért bőkezűen méretezve: egy teljes,
+    // több körös, akár többjátékosos versenyt is fedez anélkül, hogy a pool
+    // ténylegesen körbeérne (lásd main.js carEffects.reset() — új versenynél
+    // egyébként is nullázódik, tehát a pool sosem "örökli" az előző futamot).
+    poolSize: 20000,
+  },
+  dust: {
+    minSpeed: 3, // m/s — ennél lassabban/állva nincs porfelhő
+    spawnInterval: 0.05, // s — új porszemcse ilyen gyakran, amíg füvön/sóderen halad
+    lifetime: 0.7, // s — egy szemcse ennyi ideig él, aztán újrahasznosul
+    riseSpeed: 1.4, // m/s — felfelé sodródás
+    spread: 1.2, // m/s — véletlen oldal-/hátraszórás mértéke
+    startScale: 0.5,
+    endScale: 2.4,
+    startOpacity: 0.4,
+    poolSize: 120, // ~15 aktív szemcse/porzó autónál, több játékosra is elég tartalék
+  },
+};
+
 // A pálya SZEGMENS-DEFINÍCIÓJA (lásd sim/trackbuilder.js). Egy kurzor végigjárja,
 // és ebből születik a fizika (falak), a spawn, a checkpointok ÉS a 3D-modellek.
 //

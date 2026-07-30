@@ -24,6 +24,17 @@ export function forwardSpeed(body) {
   return Vec2.dot(forwardNormal(body), body.getLinearVelocity());
 }
 
+// Az aktuális sebesség OLDALIRÁNYÚ (haladási irányra merőleges) komponense,
+// előjeles m/s. Ez a tényleges CSÚSZÁS/DRIFT mértéke — teljes tapadású
+// kanyarban közel nulla (a tireImpulse ezt a komponenst oltja ki minden
+// lépésben), driftnél viszont nagy, mert a hátsó tengely tapadása szándékosan
+// csökkentett (lásd applyTireFriction lateralGripDrift). Exportált: a
+// guminyom-effekt (render3d/carEffects.js) ezzel dönti el, mikor "csúszik" az
+// autó — MÉRVE: teljes tapadású éles kanyarban ~0.15-0.2 m/s, driftnél 15+ m/s.
+export function lateralSpeed(body) {
+  return Vec2.dot(rightNormal(body), body.getLinearVelocity());
+}
+
 // Létrehoz egy autó-testet a világban. Visszaadja a Planck body-t.
 // `car`: opcionális paraméter-objektum (alapból a globális CAR) — lásd updateCar.
 export function createCarBody(world, x, y, angle = 0, car = CAR) {

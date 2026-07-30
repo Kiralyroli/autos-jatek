@@ -17,6 +17,7 @@ import {
   resetCar,
   speedKmh,
   forwardSpeed,
+  lateralSpeed,
   corneringLoad,
   createDriveState,
   isFullyOffRoad,
@@ -32,6 +33,7 @@ import { loadDecorations } from './render3d/decorations.js';
 import { addGrassField } from './render3d/grassField.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
 import { setupWheels } from './render3d/wheels.js';
+import { createCarEffects } from './render3d/carEffects.js';
 import { createNameplate } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { applyStoredCamera, createCameraSettings } from './cameraSettings.js';
@@ -74,6 +76,10 @@ import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.j
 const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
   document.getElementById('game')
 );
+
+// Guminyom + porfelhő (render3d/carEffects.js) — egyetlen megosztott effekt-
+// rendszer mindkét módhoz (SP: saját autó; MP: saját + minden távoli autó).
+const carEffects = createCarEffects(scene);
 
 // A menüben választott autó indexe (CARS lista) — perzisztálva. A saját autó
 // modellje (SP + MP) ÉS multiplayerben a hálón küldött választás is ez.
@@ -668,6 +674,7 @@ function startSingleplayer(hotLap = false) {
   minimapEl.style.display = 'block';
   cameraSettings.show();
   if (touch) touch.show();
+  carEffects.reset(); // friss guminyom/porfelhő-állapot minden versenykezdésnél
 
   // A menüben választott autó-fizika (realistic/light) a globális CAR-ra — SP-ben
   // csak egy versenyt futtatunk ebben a lapban, ezt biztonságosan mutálhatjuk.
@@ -767,6 +774,7 @@ function startSingleplayer(hotLap = false) {
     prev.x = curr.x = spawn.x;
     prev.y = curr.y = spawn.y;
     prev.angle = curr.angle = spawn.angle;
+    carEffects.reset();
   };
 
   // Hot Lap reset: azonnal vissza a guruló-rajt pontra, új próba — a
@@ -786,6 +794,7 @@ function startSingleplayer(hotLap = false) {
       prev.y = curr.y = startPoint.y;
       prev.angle = curr.angle = startPoint.angle;
       hotLapArmed = true;
+      carEffects.reset();
     };
   }
 
@@ -815,6 +824,16 @@ function startSingleplayer(hotLap = false) {
     carMesh.position.set(x, 0.12, z);
     carMesh.rotation.y = -angle;
     carWheels.update(forwardSpeed(carBody), drive.steer, dt);
+    carEffects.update(
+      [{
+        id: 'me', x, z, angle,
+        lateralSpeed: lateralSpeed(carBody),
+        forwardSpeed: forwardSpeed(carBody),
+        corneringLoad: corneringLoad(carBody),
+      }],
+      dt,
+      offRoadExcess
+    );
 
     if (window.__TOP) {
       camera.position.set(x, window.__TOP, z + 0.001);
@@ -847,7 +866,7 @@ function startSingleplayer(hotLap = false) {
   requestAnimationFrame(frame);
 
   if (import.meta.env.DEV) {
-    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap };
+    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap, carEffects };
   }
 }
 
@@ -1021,6 +1040,7 @@ async function startMultiplayer(room) {
         scene.remove(mesh);
         meshes.delete(id);
         wheelAnims.delete(id);
+        carEffects.remove(id);
       }
     }
   }
@@ -1208,6 +1228,7 @@ async function startMultiplayer(room) {
       scene.remove(mesh);
       meshes.delete(id);
       wheelAnims.delete(id);
+      carEffects.remove(id);
     }
     // A TÁVOLI autók szimulált testét is a rajtrácsra tesszük (itt SZÁNDÉKOSAN
     // ugrunk — új verseny), különben az előző futam végállapotából indulnának,
@@ -1218,6 +1239,7 @@ async function startMultiplayer(room) {
       }
     }
     mpResetForRace();
+    carEffects.reset(); // friss pálya minden versenynél — mindenki nyoma törlődik
   });
 
   // Az init (pálya-adatok + a saját rajt-slot) a 'ready' üzenetünkre érkezik — ha a
@@ -1394,6 +1416,20 @@ async function startMultiplayer(room) {
         myMesh.rotation.y = -ownA;
       }
       carWheels.update(forwardSpeed(mpCar), mpDrive.steer, dt);
+      // Guminyom/porfelhő minden RENDERELT autóra — a sajátunkat rögtön
+      // felvesszük, a távoliakat a lenti ciklusban a TÉNYLEGESEN kirajzolt
+      // (esetleg szeparációval kitolt) pozíciójukkal egészítjük ki.
+      const mpEffectsCars = [
+        {
+          id: myId,
+          x: ownX,
+          z: ownY,
+          angle: ownA,
+          lateralSpeed: lateralSpeed(mpCar),
+          forwardSpeed: forwardSpeed(mpCar),
+          corneringLoad: corneringLoad(mpCar),
+        },
+      ];
 
       // --- TÁVOLI autók renderelése a HELYBEN SZIMULÁLT testükből ---
       // (al-lépés-interpolálva, mint a sajátunk → ugyanolyan sima 60 Hz+).
@@ -1423,7 +1459,17 @@ async function startMultiplayer(room) {
         // nem a korábbi, sebességből visszabecsült közelítésből.
         const anim = wheelAnims.get(id);
         if (anim) anim.update(forwardSpeed(rs.body), rs.steer, dt);
+        mpEffectsCars.push({
+          id,
+          x: px,
+          z: py,
+          angle: rs.angle,
+          lateralSpeed: lateralSpeed(rs.body),
+          forwardSpeed: forwardSpeed(rs.body),
+          corneringLoad: corneringLoad(rs.body),
+        });
       }
+      carEffects.update(mpEffectsCars, dt, offRoadExcess);
 
       // Kamera a saját autón.
       if (window.__TOP) {
@@ -1568,7 +1614,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap, remoteCars };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, minimap, remoteCars, carEffects };
   }
 }
 
