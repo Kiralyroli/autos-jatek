@@ -18,11 +18,20 @@ export async function apiGetLeaderboard(trackKey, physics) {
 }
 
 // Köridő beküldése (csak akkor ír felül, ha jobb — lásd leaderboardStore.recordLap).
+// `keepalive: true`: ÉLŐ HIBAJELENTÉS — a javított köridő gyakran "eltűnt",
+// mert a beküldés egy sima fetch() volt, amit a böngésző MEGSZAKÍT, ha az oldal
+// épp akkor navigál el/töltődik újra (pl. a "← Főmenü" gomb window.location.
+// reload()-ja) — a JAVÍTOTT kör pont az utolsó pillanatban (a versenyt/kört
+// épp befejezve, gyors kilépéssel) veszett el a leggyakrabban. A `keepalive`
+// a fetch specifikációja szerint túléli az oldal-elhagyást (ugyanaz a
+// mechanizmus, mint a navigator.sendBeacon), a kis JSON törzs (64 KB alatt)
+// bőven belefér a keepalive-kérések méretkorlátjába.
 export async function apiSubmitLap({ trackKey, trackName, physics, playerName, lapTime }) {
   return apiRequest('/api/leaderboard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ trackKey, trackName, physics, playerName, lapTime }),
+    keepalive: true,
   });
 }
 

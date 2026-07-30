@@ -658,13 +658,36 @@ let mode = 'menu'; // 'menu' | 'single' | 'multi'
 let currentRoom = null; // multiplayerben a Colyseus room — a Főmenü-gomb ebből lép ki
 let lastTime = performance.now();
 
+// SP-ben a köridő-beküldés (apiSubmitLap) folyamatban lévő Promise-a, vagy
+// null, ha épp nincs ilyen — lásd startSingleplayer recordState(). ÉLŐ
+// HIBAJELENTÉS: a javított köridő gyakran "eltűnt", mert a "← Főmenü" gomb
+// AZONNAL reload-olt, ami megszakította a még folyamatban lévő beküldést
+// (pont akkor, amikor a legvalószínűbb, hogy a versenyt/kört most fejezte be
+// és rögtön kilépett). A lenti kilépés-gomb ezért — a keepalive fetch
+// (leaderboardApi.js) mellett MÁSODIK védelmi rétegként — MEGVÁRJA (korlátos
+// ideig), amíg ez lezárul, mielőtt újratöltene.
+let pendingLapSubmission = null;
+
 // Verseny közben (SP vagy MP) elérhető "vissza a főmenübe" gomb — MP-ben
 // tisztán kilép a szobából, utána (mindkét módban) egyszerűen újratöltjük az
 // oldalt: ez ugyanaz a minta, mint a lobby/eredmény "Kilépés"/"Vissza" gombjai
 // (btnLeave, btnResultsLeave) — pending session-adat nélkül a reload után a
 // főmenü jelenik meg.
-document.getElementById('btnQuitRace').onclick = () => {
+const btnQuitRaceEl = document.getElementById('btnQuitRace');
+btnQuitRaceEl.onclick = async () => {
   if (currentRoom) currentRoom.leave();
+  if (pendingLapSubmission) {
+    // Rövid, LÁTHATÓ várakozás — a gomb ne tűnjön "beragadtnak", de a
+    // beküldésnek adjunk esélyt lezárulni (normál esetben ez ezredmásodpercek,
+    // csak "kihűlt" Railway-szerver ébredésekor tarthat pár másodpercig).
+    const prevText = btnQuitRaceEl.textContent;
+    const prevDisabled = btnQuitRaceEl.disabled;
+    btnQuitRaceEl.textContent = 'Köridő mentése…';
+    btnQuitRaceEl.disabled = true;
+    await Promise.race([pendingLapSubmission, new Promise((r) => setTimeout(r, 4000))]);
+    btnQuitRaceEl.textContent = prevText;
+    btnQuitRaceEl.disabled = prevDisabled;
+  }
   window.location.reload();
 };
 
@@ -711,6 +734,19 @@ function startSingleplayer(hotLap = false) {
   const { trackKey, trackName } = currentTrackInfo();
   let lastSubmittedBest = null;
   let submitInFlight = false; // egyszerre csak egy beküldés — lásd recordState
+  // ÉLŐ HIBAJELENTÉS: "gyakran nem menti el a köridőt". A gyökér-ok egy FÉKEZÉS
+  // NÉLKÜLI újrapróbálkozás volt — ha egy beküldés BÁRMIÉRT elbukott (átmeneti
+  // hálózati hiba, "kihűlt" Railway-szerver, forgalomkorlát), a régi kód a
+  // KÖVETKEZŐ fizika-lépésben (1/60 s múlva) AZONNAL újra megpróbálta, minden
+  // sikertelen próbálkozást is beleértve a szerver ÍRÁSI forgalomkorlátjába
+  // (30/perc) — így a saját újrapróbálkozás-áradata tartotta magát tartósan
+  // korlátozva, akár egy teljes percig, függetlenül attól, hány további kört
+  // futott közben a játékos. A hiba emellett CSENDBEN lett elnyelve
+  // (.catch(()=>{})), tehát semmi nyoma nem maradt. Növekvő várakozással
+  // (1s → max 20s) és console.error-ral javítva.
+  let nextSubmitAttemptAt = 0; // performance.now() időbélyeg — eddig NEM próbálkozunk újra
+  let submitBackoffMs = 1000;
+  let consecutiveSubmitFailures = 0;
 
   // Terelőkúpok VILÁG-koordinátái (lásd render3d/decorations.js ugyanezt a
   // world = dgx/dgy * TRACK.tile képletet) — a kör-érvényesség ellenőrzéséhez.
@@ -765,18 +801,20 @@ function startSingleplayer(hotLap = false) {
     if (raceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(drive);
 
     // FONTOS: lastSubmittedBest CSAK sikeres válasz után frissül (nem rögtön a
-    // hívás előtt) — így ha egy beküldés elhasal (hálózati hiba, Railway "kihűlt"
-    // szerver lassú ébredése), a KÖVETKEZŐ fizika-lépés újra megpróbálja UGYANEZT
-    // az időt, amíg nem sikerül. A submitInFlight csak azt akadályozza meg, hogy
-    // egyetlen still-in-progress kérésre percenként 60x rákérdezzünk.
+    // hívás előtt) — így ha egy beküldés elhasal, a KÖVETKEZŐ próbálkozás
+    // (lásd nextSubmitAttemptAt — NÖVEKVŐ várakozással, nem azonnal) újra
+    // megpróbálja UGYANEZT az időt, amíg nem sikerül.
     if (
       !submitInFlight &&
+      performance.now() >= nextSubmitAttemptAt &&
       race.bestLapTime !== null &&
       (lastSubmittedBest === null || race.bestLapTime < lastSubmittedBest - 1e-6)
     ) {
       submitInFlight = true;
       const timeToSubmit = race.bestLapTime;
-      apiSubmitLap({
+      // A modul-szintű pendingLapSubmission-be is elmentjük — a "← Főmenü"
+      // gomb ezt várja meg, mielőtt reload-olna (lásd ott a megjegyzést).
+      pendingLapSubmission = apiSubmitLap({
         trackKey,
         trackName,
         physics: physicsName,
@@ -785,11 +823,30 @@ function startSingleplayer(hotLap = false) {
       })
         .then(() => {
           lastSubmittedBest = timeToSubmit;
+          submitBackoffMs = 1000; // sikeres beküldés után a KÖVETKEZŐ hiba megint gyors próbával induljon
+          consecutiveSubmitFailures = 0;
+          race.lapSaveFailing = false;
           renderLeaderboard();
         })
-        .catch(() => {})
+        .catch((e) => {
+          // ÉLŐ HIBAJELENTÉS: korábban ez csendben el lett nyelve — most legalább
+          // a konzolban látszik, MIÉRT nem mentődött el a köridő.
+          console.error(`Köridő beküldése sikertelen (${timeToSubmit.toFixed(2)} s):`, e?.message || e);
+          consecutiveSubmitFailures++;
+          // Növekvő várakozás (1s → 2s → 4s ... max 20s), hogy a saját
+          // újrapróbálkozásunk ne tartsa magát tartósan a szerver írási
+          // forgalomkorlátján (30/perc) — élő hibajelentés: enélkül a
+          // visszapattanó kérések önmagukat tartották kizárva akár egy percig.
+          nextSubmitAttemptAt = performance.now() + submitBackoffMs;
+          submitBackoffMs = Math.min(submitBackoffMs * 2, 20000);
+          // 3+ egymást követő sikertelen próbálkozás után LÁTHATÓ jelzés
+          // (lásd hud.js) — egy-két átmeneti hiba még nem riaszt, de a
+          // játékos tudja meg, ha TARTÓSAN nem sikerül menteni.
+          if (consecutiveSubmitFailures >= 3) race.lapSaveFailing = true;
+        })
         .finally(() => {
           submitInFlight = false;
+          pendingLapSubmission = null;
         });
     }
   }
@@ -802,6 +859,12 @@ function startSingleplayer(hotLap = false) {
     prev.y = curr.y = spawn.y;
     prev.angle = curr.angle = spawn.angle;
     carEffects.reset();
+    // Friss próba — a HUD-figyelmeztetés (ha volt) ne ragadjon rajta, és a
+    // visszafogási időzítő se várakoztasson feleslegesen egy régi hibán.
+    race.lapSaveFailing = false;
+    nextSubmitAttemptAt = 0;
+    submitBackoffMs = 1000;
+    consecutiveSubmitFailures = 0;
   };
 
   // Hot Lap reset: azonnal vissza a guruló-rajt pontra, új próba — a

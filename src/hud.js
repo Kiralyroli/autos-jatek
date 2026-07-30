@@ -82,7 +82,15 @@ export function createHud(onRestart, onHotlapReset) {
     timeEl.textContent = (invalidLap ? '⚠ ' : '') + fmt(current);
     timeEl.style.color = invalidLap ? '#ff6b4a' : '';
     invalidLapEl.style.display = invalidLap ? 'flex' : 'none';
-    bestEl.textContent = fmt(race.bestLapTime);
+    // race.lapSaveFailing: main.js állítja, ha a köridő ranglistára küldése
+    // 3+ egymást követő alkalommal elbukott (élő hibajelentés: korábban ez
+    // csendben, láthatatlanul történt — a játékos csak a menüben, utólag vette
+    // észre, hogy a javított köre "eltűnt"). Egy-két átmeneti hiba még nem
+    // jelez itt semmit (a háttérben újrapróbálkozik), csak a TARTÓS probléma.
+    bestEl.textContent = fmt(race.bestLapTime) + (race.lapSaveFailing ? ' ⚠' : '');
+    bestEl.title = race.lapSaveFailing
+      ? 'A köridő mentése a ranglistára egyelőre nem sikerül — a játék a háttérben újrapróbálja.'
+      : '';
 
     // Boost-mérő: a hátralévő üzemanyag (s) aránya (BOOST.maxPerLap = tele).
     // A `race.boostRemaining`-et a hívó (main.js) írja rá a race-objektumra
