@@ -154,6 +154,17 @@ Minden romboló műveletet a SZERVERNEK kell védenie.
 - **CSP + védelmi fejlécek.** A `script-src 'self'` a tárolt XSS második védvonala.
   A build nem tartalmaz inline `<script>`-et, ezért ez nem tör el semmit; a beágyazott
   `<style>` miatt a `style-src`-nél viszont kell `'unsafe-inline'`.
+  - **A `connect-src`-nek is kell `blob:` — nem elég az `img-src`-ben.** A Three.js a
+    GLB-be ÁGYAZOTT textúrákat a `THREE.ImageBitmapLoader`-rel tölti, az pedig
+    **`fetch()`-csel** nyitja meg a saját maga készített `blob:` URL-t; a fetch-et a
+    `connect-src` szabályozza, nem az `img-src`. Enélkül élesben
+    `THREE.GLTFLoader: Couldn't load texture blob:…` hibával a textúrázott dekorációk
+    (kerítés-háló, garázs-molinó) **textúra nélkül, tömör fehér felületként** jelentek
+    meg — a geometria hibátlan volt, ezért nézett ki úgy, mintha „csak az alap modell"
+    töltődne be. **Ez csak ÉLESBEN jelentkezett**, mert a Vite dev-szerver nem küld
+    CSP-t: a lokális teszt tehát NEM bizonyítja, hogy a CSP nem tör el semmit —
+    a buildelt klienst a valódi szerverrel kell megnyitni (`npm run build` +
+    `npm run server` → `localhost:2567`), mert csak az küldi a CSP-fejlécet.
 - **XSS: escape a kimeneten.** Ami NEM tőlünk jön (játékosnév, PÁLYANÉV), az
   `escapeHtml`-en át kerülhet csak `innerHTML`-be (`src/main.js`). Ez volt a valódi
   rés: egy `<img src=x onerror=…>` nevű pálya MINDEN játékos böngészőjében lefutott,

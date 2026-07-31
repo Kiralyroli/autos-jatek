@@ -124,7 +124,16 @@ const CSP = [
   "img-src 'self' data: blob:",
   "media-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  // `blob:` KELL a fetch-hez is, nem csak az img-src-hez: a GLB-kbe ÁGYAZOTT
+  // textúrákat a Three.js a THREE.ImageBitmapLoader-rel tölti, az pedig
+  // `fetch()`-csel nyitja meg a saját maga készített blob: URL-t — a fetch-et
+  // viszont a connect-src szabályozza, nem az img-src. Enélkül élesben
+  // "THREE.GLTFLoader: Couldn't load texture blob:…" hibával a textúrázott
+  // dekorációk (kerítés-háló, garázs-molinó) TEXTÚRA NÉLKÜL, tömör fehér
+  // felületként jelentek meg — a geometria hibátlan volt, ezért nézett ki
+  // úgy, mintha "csak az alap modell" töltődne be. A blob: URL saját
+  // eredetű és csak a lapon belül él, kifelé nem nyit csatornát.
+  "connect-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
