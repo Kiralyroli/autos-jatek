@@ -447,6 +447,29 @@
       #restart:hover {
         background: var(--success-hover);
       }
+      /* Töltő-sáv az "R" gomb HOSSZAN nyomásához (lásd main.js RESET_HOLD_MS) —
+         ugyanaz az elv mindkét reset-gombon (#restart/#hotlapReset): a szülő már
+         eleve position:fixed, ez érvényes tartó-blokk az abszolút pozicionált
+         ::after-nek. `overflow:hidden` a szülőn, hogy a sáv ne lógjon ki a
+         lekerekített sarkon. */
+      #restart,
+      #hotlapReset {
+        overflow: hidden;
+      }
+      #restart::after,
+      #hotlapReset::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        width: 0%;
+        background: rgba(255, 255, 255, 0.28);
+        pointer-events: none;
+      }
+      #restart.holding::after,
+      #hotlapReset.holding::after {
+        width: 100%;
+        transition: width var(--reset-hold-ms, 550ms) linear;
+      }
       #restart:active {
         transform: translateX(-50%) scale(0.97);
       }
@@ -1726,6 +1749,7 @@
       <div class="keyrow"><span>Drift</span><span><kbd>Space</kbd></span></div>
       <div class="keyrow"><span>Boost</span><span><kbd>Shift</kbd></span></div>
       <div class="keyrow"><span>Némítás</span><span><kbd>M</kbd></span></div>
+      <div class="keyrow"><span>Újraindítás (tartva)</span><span><kbd>R</kbd></span></div>
       <div><a href="./editor.html">🏗️ Pálya szerkesztése</a></div>
     </div>
     <button id="infoBtn" type="button" title="Irányítás">i</button>

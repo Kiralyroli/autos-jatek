@@ -500,7 +500,7 @@ export const RACE = {
   // Hot Lap mód: a rajt/cél vonaltól ENNYI méterrel HÁTRÉBB indul a countdown
   // (lásd sim/trackFactory.js pointBeforeStart) — mire az autó eléri a tényleges
   // vonalat, már lendületben van (guruló rajt), így a mért kör valódi "flying lap".
-  hotlapRunupMeters: 60,
+  hotlapRunupMeters: 90,
   // Kör-érvényesség: ha a TELJES autó elhagyja a pályát (mind a 4 sarok a burkolaton
   // kívül — lásd sim/car.js isFullyOffRoad), az AKTUÁLIS kör érvénytelen lesz, és az
   // ideje nem számít a legjobb körhöz. (Amíg akár egy kerék az úton van, még ér.)

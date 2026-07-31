@@ -213,6 +213,56 @@ infoBtnEl.addEventListener('click', () => {
   infoBtnEl.classList.toggle('active', open);
 });
 
+// --- "R" gomb HOSSZAN nyomva = gyors újraindítás egérhez nyúlás nélkül ---
+// Amelyik reset-gomb ÉPP LÁTHATÓ (Hot Lapben a #hotlapReset, célba érés után
+// a #restart), azt "kattintjuk meg" programozottan — a hud.js-ben MÁR bekötött
+// click-figyelőket (onHotlapResetClick/onRestartClick) hívja, nincs duplikált
+// logika. RÖVID megnyomás szándékosan NEM elég, hogy egy véletlen billentyű-
+// koccanás közepén egy futó (esetleg rekordkísérlet) kör ne vesszen el.
+const RESET_HOLD_MS = 550;
+document.documentElement.style.setProperty('--reset-hold-ms', `${RESET_HOLD_MS}ms`);
+let resetHoldTimer = null;
+let resetHoldBtn = null;
+
+function activeResetButton() {
+  const hot = document.getElementById('hotlapReset');
+  if (hot && getComputedStyle(hot).display !== 'none') return hot;
+  const restart = document.getElementById('restart');
+  if (restart && getComputedStyle(restart).display !== 'none') return restart;
+  return null;
+}
+function cancelResetHold() {
+  if (resetHoldTimer) clearTimeout(resetHoldTimer);
+  resetHoldTimer = null;
+  if (resetHoldBtn) resetHoldBtn.classList.remove('holding');
+  resetHoldBtn = null;
+}
+window.addEventListener('keydown', (e) => {
+  // e.repeat: a lenyomva tartás automatikus ismétlő keydown-jait a böngésző
+  // küldi — enélkül minden ismétlésnél újraindulna a számláló, sosem érné el a
+  // küszöböt.
+  if (e.code !== 'KeyR' || e.repeat || resetHoldTimer) return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return; // ne zavarjon be gépelés közben
+  const btn = activeResetButton();
+  if (!btn) return;
+  resetHoldBtn = btn;
+  // Force-reflow, hogy a width:0% biztosan alkalmazódjon a .holding hozzáadása
+  // ELŐTT — enélkül a böngésző néha összevonja a két stílusváltást, és a sáv
+  // rögtön 100%-ról indulna animáció helyett.
+  btn.classList.remove('holding');
+  void btn.offsetWidth;
+  btn.classList.add('holding');
+  resetHoldTimer = setTimeout(() => {
+    btn.click();
+    cancelResetHold();
+  }, RESET_HOLD_MS);
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyR') cancelResetHold();
+});
+window.addEventListener('blur', cancelResetHold);
+
 // --- Menü / lobby DOM ---
 const menuEl = document.getElementById('menu');
 const lobbyEl = document.getElementById('lobby');
@@ -843,18 +893,29 @@ function startSingleplayer(hotLap = false) {
     curr.angle = carBody.getAngle();
     // Guruló rajt: a TÉNYLEGES rajtvonal első átszelésekor nullázzuk az órát
     // (lásd a hotLapArmed deklarációját fentebb) — ez a crossing raceStep-nek
-    // magának nem esemény, csak nekünk jelzi, hogy innentől "éles" a kör.
+    // magának nem esemény, csak nekünk jelzi, hogy innentől "éles" a kör. A
+    // boost is itt tölt újra: a guruló rajt szakaszán (a rajtvonalig hátrébb
+    // eső résztől) elhasznált üzemanyag NE vigyük át a mért körbe.
     if (hotLapArmed && segmentsCross(prev, curr, checkpoints[0].a, checkpoints[0].b)) {
       hotLapArmed = false;
       race.time = 0;
       race.lapStartTime = 0;
       race.lapValid = true; // a guruló-rajt szakasza (letérés, sarok) ne rontsa el az ELSŐ mért kört
       race.currentSplits = [];
+      refillBoost(drive);
     }
     // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
     const offTrack =
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
     const raceEvents = raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
+    // Amíg a guruló rajt tart (a countdown már lezajlott, phase='racing', de a
+    // rajtvonalat MÉG nem értük el), a raceStep MAGÁTÓL is méri az időt (a
+    // GO!/visszaszámlálás emiatt fut normálisan) — a KIJELZETT köridőt viszont
+    // (race.time - race.lapStartTime, lásd hud.js) 0-n tartjuk azzal, hogy
+    // lapStartTime-ot minden képkockában time-ra csúsztatjuk. Enélkül a
+    // számláló felfutott a guruló szakaszon, majd a vonalnál visszaugrott
+    // 0-ra — úgy tűnt, mintha az időmérés a vonal ELŐTT elindulna.
+    if (hotLapArmed) race.lapStartTime = race.time;
     // Boost-üzemanyag újratöltése minden körváltásnál (és célba éréskor) —
     // lásd config.js BOOST.maxPerLap / sim/car.js refillBoost.
     if (raceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(drive);
