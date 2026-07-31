@@ -1505,6 +1505,30 @@
         transition: background 0.15s ease, color 0.15s ease;
       }
       .lbRow .lbDel:hover { background: var(--danger); color: #fff; }
+      /* Ghost car (Hot Lap) kiválasztó gomb + aktív-sor kiemelés — lásd
+         main.js selectGhost/paintLeaderboardEntries. */
+      .lbRow.ghostActive {
+        border-color: rgba(166, 120, 224, 0.55); /* --purple, ugyanaz a szín, mint a HUD "mezőny-rekord" jelzésénél */
+        background: rgba(166, 120, 224, 0.1);
+      }
+      .lbRow .lbGhost {
+        padding: 3px 7px;
+        font-size: 13px;
+        line-height: 1;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        cursor: pointer;
+        flex: none;
+        opacity: 0.65;
+        transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+      }
+      .lbRow .lbGhost:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+      .lbRow.ghostActive .lbGhost {
+        opacity: 1;
+        background: rgba(166, 120, 224, 0.22);
+        border-color: rgba(166, 120, 224, 0.55);
+      }
       .overlay button.danger { background: var(--danger); color: #fff; }
       .overlay button.danger:hover:not(:disabled) { background: var(--danger-hover); }
       .overlay button {
@@ -1608,11 +1632,16 @@
         border: 1px solid var(--panel-border);
         padding: 14px 16px;
         border-radius: 10px;
-        pointer-events: none;
+        pointer-events: none; /* a panel maga áttetsző kattintásnak — de a
+          👻 ghost-gombnak KELL, hogy fusson, lásd .lbGhost pointer-events:auto
+          lejjebb, különben a Hot Lap közbeni ghost-váltás láthatatlanul
+          kattinthatatlan marad (a JS .click()-es teszt ezt hamisan "működik"-nek
+          mutatta, mert az megkerüli a pointer-events-et). */
         user-select: none;
         font-variant-numeric: tabular-nums;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
+      #raceLeaderboard .lbGhost { pointer-events: auto; }
       #raceLeaderboard h3 {
         margin: 0;
         font-size: 12.5px;

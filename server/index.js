@@ -25,7 +25,7 @@ const cors = require('cors');
 
 import { RaceRoom } from './RaceRoom.js';
 import { listTracks, getTrack, saveTrack, deleteTrack } from './trackStore.js';
-import { listEntries, recordLap, deleteEntry, clearBoard } from './leaderboardStore.js';
+import { listEntries, recordLap, deleteEntry, clearBoard, getGhost } from './leaderboardStore.js';
 import { resolveJoinCode } from './roomCodes.js';
 import {
   requireAdmin,
@@ -143,6 +143,14 @@ app.delete('/api/tracks/:id', adminLimit, requireAdmin, (req, res) => {
 // A TÖRLÉS viszont admin-művelet (a kliensen is csak dev módban látszik a gomb).
 app.get('/api/leaderboard/:trackKey/:physics', readLimit, (req, res) => {
   res.json({ entries: listEntries(req.params.trackKey, req.params.physics) });
+});
+// Ghost car (Hot Lap): egy KONKRÉT bejegyzés rögzített (x,y,angle) mintasora —
+// KÜLÖN végponton, nem a listánál (lásd leaderboardStore.js listEntries
+// megjegyzése), mert csak akkor kell, amikor a játékos ténylegesen kiválasztja.
+app.get('/api/leaderboard/:trackKey/:physics/:playerName/ghost', readLimit, (req, res) => {
+  const ghost = getGhost(req.params.trackKey, req.params.physics, req.params.playerName);
+  if (!ghost) return res.status(404).json({ error: 'Nincs ghost ehhez a bejegyzéshez.' });
+  res.json({ ghost });
 });
 app.post('/api/leaderboard', writeLimit, (req, res) => {
   const rec = recordLap(req.body || {}, Date.now());

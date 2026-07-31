@@ -18,21 +18,38 @@ export async function apiGetLeaderboard(trackKey, physics) {
 }
 
 // Köridő beküldése (csak akkor ír felül, ha jobb — lásd leaderboardStore.recordLap).
+// `ghost` OPCIONÁLIS: [[x,y,angle], ...] mintasor a Hot Lap ghost-autóhoz (lásd
+// main.js GHOST_SAMPLE_HZ) — hiánya nem hiba, csak nem lesz ghost ahhoz a körhöz.
 // `keepalive: true`: ÉLŐ HIBAJELENTÉS — a javított köridő gyakran "eltűnt",
 // mert a beküldés egy sima fetch() volt, amit a böngésző MEGSZAKÍT, ha az oldal
 // épp akkor navigál el/töltődik újra (pl. a "← Főmenü" gomb window.location.
 // reload()-ja) — a JAVÍTOTT kör pont az utolsó pillanatban (a versenyt/kört
 // épp befejezve, gyors kilépéssel) veszett el a leggyakrabban. A `keepalive`
 // a fetch specifikációja szerint túléli az oldal-elhagyást (ugyanaz a
-// mechanizmus, mint a navigator.sendBeacon), a kis JSON törzs (64 KB alatt)
-// bőven belefér a keepalive-kérések méretkorlátjába.
-export async function apiSubmitLap({ trackKey, trackName, physics, playerName, lapTime }) {
+// mechanizmus, mint a navigator.sendBeacon) — EZÉRT tartjuk a ghost mintavételi
+// rátáját (GHOST_SAMPLE_HZ) alacsonyan: a kis JSON törzsnek (64 KB alatt) a
+// ghost-tal együtt is bőven bele kell férnie a keepalive-kérések méretkorlátjába.
+export async function apiSubmitLap({ trackKey, trackName, physics, playerName, lapTime, ghost }) {
   return apiRequest('/api/leaderboard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trackKey, trackName, physics, playerName, lapTime }),
+    body: JSON.stringify({ trackKey, trackName, physics, playerName, lapTime, ghost }),
     keepalive: true,
   });
+}
+
+// Egy KONKRÉT bejegyzés ghost-mintasorának lekérése (lásd apiGetLeaderboard
+// entries[].hasGhost — csak akkor van értelme hívni, ha az igaz). Hiányzó
+// ghostnál 404-et ad a szerver, itt egyszerű null-lá szelídítve.
+export async function apiGetGhost(trackKey, physics, playerName) {
+  try {
+    const data = await apiRequest(
+      `/api/leaderboard/${encodeURIComponent(trackKey)}/${encodeURIComponent(physics)}/${encodeURIComponent(playerName)}/ghost`
+    );
+    return Array.isArray(data.ghost) ? data.ghost : null;
+  } catch {
+    return null;
+  }
 }
 
 // Egy játékos köridejének törlése (dev mód + admin-token).

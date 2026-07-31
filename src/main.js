@@ -67,6 +67,7 @@ import {
   apiSubmitLap,
   apiDeleteLeaderboardEntry,
   apiClearLeaderboard,
+  apiGetGhost,
 } from './net/leaderboardApi.js';
 import { hashLayout } from './sim/trackKey.js';
 import { TRACK, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
@@ -107,6 +108,29 @@ let carWheels = { update() {} }; // a saját autó kerék-animátora (modell bet
 function buildCarHolder(car, model) {
   if (!model) return new THREE.Group();
   return fitCarModel(model, car.colormap ? carColormapTex : null);
+}
+
+// Ghost car (Hot Lap) kinézete: a JELENLEG választott autómodell, csak
+// áttetszőre és halvány lilásra színezve — nem a rekord-tulajdonos autóját
+// próbáljuk visszaadni (a ranglista nem tárolja, melyik autóval futotta),
+// ez itt tisztán VIZUÁLIS jelzés, hogy "ez egy szellem, nem egy másik élő
+// versenyző". `depthWrite:false`, hogy áttetsző rétegek (pl. szélvédő) ne
+// takarják ki egymást hibásan.
+function tintGhostHolder(holder) {
+  holder.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = false;
+    o.receiveShadow = false;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      m.transparent = true;
+      m.opacity = 0.4;
+      m.depthWrite = false;
+      if (m.color) m.color.lerp(new THREE.Color(0xa678e0), 0.55); // --purple, lásd index.html HUD-paletta
+    }
+  });
+  return holder;
 }
 
 // A saját autó (carMesh) modelljét a választott CARS-elemre cseréli — az üresjárati
@@ -500,6 +524,7 @@ async function renderTrackPickerGrid(target) {
       } else {
         selectedTrackId = t.id;
         selectedTrackName = t.name;
+        clearGhostSelection(); // más pálya = más koordináták, a régi ghost értelmetlen lenne
         updateTrackPickButton();
         renderLeaderboard();
       }
@@ -653,26 +678,81 @@ function currentTrackInfo() {
   };
 }
 
+// =============================================================================
+//  GHOST CAR (Hot Lap) — egy KIVÁLASZTOTT ranglista-bejegyzés rögzített körét
+//  jelenítjük meg átlátszó autóként, a saját köridőnkkel szinkronban. Az
+//  ADATOT (a "hogyan mentsük el pontosan ugyanazt" kérdésre) NEM bemenet-
+//  visszajátszással oldjuk meg (az a Planck.js lebegőpontos determinizmusára
+//  bízná magát — kockázatos egy 10-60 s-os körön felhalmozódó eltéréssel),
+//  hanem közvetlen (x, y, angle) POZÍCIÓ-mintavétellel, GHOST_SAMPLE_HZ
+//  rátán — ez garantáltan ugyanazt mutatja, ami valójában történt, és a
+//  visszajátszás is csak egyszerű keret-interpoláció (lásd setupGhostPlayback
+//  a startSingleplayer hotLap ágában), nem újra-szimuláció.
+// =============================================================================
+const GHOST_SAMPLE_STRIDE = 3; // fixedDt=1/60 mellett 3 lépésenként → 20 Hz
+const GHOST_SAMPLE_HZ = 60 / GHOST_SAMPLE_STRIDE;
+
+// A jelenleg kiválasztott ghost forrás-játékosa + a letöltött mintasora — a
+// KIVÁLASZTÁS a menüben ÉS Hot Lap közben is elérhető (lásd paintLeaderboardEntries
+// 👻 gombja), a TÉNYLEGES lejátszás csak akkor történik, ha épp fut egy Hot Lap
+// (lásd startSingleplayer). Track/fizika-váltáskor törlődik (lásd lejjebb), mert
+// egy másik pálya ghost-koordinátái értelmezhetetlenek lennének az újon.
+let selectedGhostPlayerName = null;
+let activeGhostSamples = null;
+
+async function selectGhost(playerName) {
+  if (selectedGhostPlayerName === playerName) {
+    // Újra ugyanarra kattintva — kikapcsolás.
+    selectedGhostPlayerName = null;
+    activeGhostSamples = null;
+    renderLeaderboard();
+    return;
+  }
+  const { trackKey } = currentTrackInfo();
+  const samples = await apiGetGhost(trackKey, chosenPhysics(), playerName);
+  if (!samples) return; // 404/hálózati hiba — marad az eddigi kiválasztás
+  selectedGhostPlayerName = playerName;
+  activeGhostSamples = samples;
+  renderLeaderboard();
+}
+
+// Track/fizika-váltáskor a kiválasztott ghost ÉRTELMÉT VESZTI (más pálya
+// koordinátái) — ezt hívja meg a physicsSelect 'change' figyelője és a
+// pálya-választó kártya kattintása (lásd lejjebb).
+function clearGhostSelection() {
+  selectedGhostPlayerName = null;
+  activeGhostSamples = null;
+}
+
 // Egy ranglista-lista kirajzolása egy adott elembe — a menü sidepanelje ÉS a
 // Hot Lap oldali panel (raceLeaderboardListEl) is EZT hívja, azonos adatból
 // (lásd renderLeaderboard), hogy ne kelljen a köridőt kétszer lekérni.
 // A törlés-gomb (dev mód) csak ott jelenik meg, ahol `allowDelete` igaz — a
 // race-panel tisztán megjelenítő, versenyközben nincs értelme törlőgombnak.
-function paintLeaderboardEntries(el, entries, dev, allowDelete) {
+// A ghost-gomb (👻) fordítva: csak ott, ahol `allowGhost` igaz — a ghost autó
+// KIZÁRÓLAG Hot Lap KÖZBEN jelenik meg a pályán (lásd startSingleplayer), a
+// főmenüben a kiválasztásnak még nincs mit megjelenítenie, csak zavaró lenne.
+function paintLeaderboardEntries(el, entries, dev, allowDelete, allowGhost) {
   if (entries.length === 0) {
     el.innerHTML = '<p>Még nincs rögzített köridő ehhez a pályához.</p>';
     return;
   }
   el.innerHTML = entries
     .map((e, i) => `
-      <div class="lbRow">
+      <div class="lbRow${allowGhost && e.playerName === selectedGhostPlayerName ? ' ghostActive' : ''}">
         <span class="lbPos">${i + 1}.</span>
         <span class="lbName">${escapeHtml(e.playerName)}</span>
         <span class="lbTime">${fmtTime(e.lapTime)}</span>
+        ${allowGhost && e.hasGhost ? `<button class="lbGhost" data-name="${escapeHtml(e.playerName)}" title="Ghost autó ehhez a körhöz">👻</button>` : ''}
         ${dev && allowDelete ? `<button class="lbDel" data-name="${escapeHtml(e.playerName)}">✕</button>` : ''}
       </div>
     `)
     .join('');
+  if (allowGhost) {
+    el.querySelectorAll('.lbGhost').forEach((btn) => {
+      btn.onclick = () => selectGhost(btn.dataset.name);
+    });
+  }
   if (dev && allowDelete) {
     el.querySelectorAll('.lbDel').forEach((btn) => {
       btn.onclick = async () => {
@@ -711,11 +791,14 @@ async function renderLeaderboard() {
   selectedTrackRecord = entries.length > 0 ? entries[0].lapTime : null;
   renderTrackMeta();
 
-  paintLeaderboardEntries(leaderboardListEl, entries, dev, true);
-  paintLeaderboardEntries(raceLeaderboardListEl, entries, dev, false);
+  paintLeaderboardEntries(leaderboardListEl, entries, dev, true, false);
+  paintLeaderboardEntries(raceLeaderboardListEl, entries, dev, false, true);
 }
 
-physicsSelect.addEventListener('change', renderLeaderboard);
+physicsSelect.addEventListener('change', () => {
+  clearGhostSelection(); // más fizika = más köridők/ghostok, a régi kiválasztás nem passzol
+  renderLeaderboard();
+});
 btnClearLeaderboard.addEventListener('click', async () => {
   const { trackKey, trackName } = currentTrackInfo();
   if (!confirm(`Biztosan törlöd a(z) "${trackName}" pálya teljes ranglistáját?`)) return;
@@ -883,6 +966,28 @@ function startSingleplayer(hotLap = false) {
   const prev = { x: startPoint.x, y: startPoint.y, angle: startPoint.angle };
   const curr = { x: startPoint.x, y: startPoint.y, angle: startPoint.angle };
 
+  // --- Ghost car FELVÉTEL (Hot Lap) — lásd a paintLeaderboardEntries feletti
+  // fejléc-megjegyzést a "miért pozíció, nem input-visszajátszás" döntésről.
+  // `currentLapGhost`: az ÉPPEN futó (mért) kör eddigi mintái. `pendingGhostSamples`:
+  // a legutóbbi ÉRVÉNYES, ÚJ REKORD kör TELJES mintasora — ez megy a szerverre a
+  // köridővel együtt (lásd lejjebb a submit-blokkban).
+  let ghostStepCounter = 0;
+  let currentLapGhost = [];
+  let pendingGhostSamples = null;
+  // Ghost car MEGJELENÍTÉS: a kiválasztott (más játékos) rekord-köre, lásd
+  // selectGhost/activeGhostSamples fentebb — a mesh csak Hot Lapben létezik.
+  let ghostGroup = null;
+  if (hotLap) {
+    (async () => {
+      const car = CARS[selectedCar % CARS.length];
+      const model = await loadModel(car.model);
+      const holder = tintGhostHolder(buildCarHolder(car, model));
+      holder.visible = false;
+      scene.add(holder);
+      ghostGroup = holder;
+    })();
+  }
+
   function recordState() {
     prev.x = curr.x;
     prev.y = curr.y;
@@ -920,6 +1025,42 @@ function startSingleplayer(hotLap = false) {
     // lásd config.js BOOST.maxPerLap / sim/car.js refillBoost.
     if (raceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(drive);
 
+    // Ghost car felvétel: csak a TÉNYLEGES, mért kör alatt mintavételezünk
+    // (guruló rajton nem — az nem része a körnek). GHOST_SAMPLE_STRIDE
+    // lépésenként egy minta (lásd a konstans megjegyzését) — a curr itt MÁR a
+    // frissített pozíció, ugyanaz, amit raceStep is épp most használt. NEM csak
+    // Hot Lapben: normál egyjátékos versenyben is felvesszük (Hot Lapnél
+    // `hotLapArmed` a rajtvonalig igaz, normál versenynél viszont sosem — lásd
+    // `let hotLapArmed = hotLap;` — tehát `!hotLapArmed` itt magától is helyes
+    // mindkét módra). A LEJÁTSZÁS (ghostGroup) viszont továbbra is Hot Lap-only,
+    // lásd lejjebb a frame()-ben — normál versenyben csak MENTJÜK, nem mutatjuk.
+    if (!hotLapArmed) {
+      ghostStepCounter++;
+      if (ghostStepCounter >= GHOST_SAMPLE_STRIDE) {
+        ghostStepCounter = 0;
+        currentLapGhost.push([
+          Math.round(curr.x * 100) / 100,
+          Math.round(curr.y * 100) / 100,
+          Math.round(curr.angle * 100) / 100,
+        ]);
+      }
+      // A 'finish' esemény (normál verseny UTOLSÓ köre) is kör-lezárás — ha csak
+      // 'lap'-ot néznénk, egy záró, épp leggyorsabb kör ghostja sose mentődne el
+      // (a raceStep a lastLapTime/lastLapValid/bestLapTime mezőket MINDKÉT
+      // esetben ugyanúgy frissíti a event-küldés előtt, lásd sim/race.js — ezért
+      // ezeket olvassuk az eseményen lévő mezők helyett, mindkét típusra egyformán).
+      const lapDone = raceEvents.some((e) => e.type === 'lap' || e.type === 'finish');
+      if (lapDone) {
+        // Csak ÉRVÉNYES és ÚJ REKORD kör ghostja kerül beküldésre — egy lassabb
+        // (akár érvényes) kör ghostja félrevezető lenne a ranglistán a köridő mellett.
+        if (race.lastLapValid && Math.abs(race.bestLapTime - race.lastLapTime) < 1e-6) {
+          pendingGhostSamples = currentLapGhost;
+        }
+        currentLapGhost = [];
+        ghostStepCounter = 0;
+      }
+    }
+
     // FONTOS: lastSubmittedBest CSAK sikeres válasz után frissül (nem rögtön a
     // hívás előtt) — így ha egy beküldés elhasal, a KÖVETKEZŐ próbálkozás
     // (lásd nextSubmitAttemptAt — NÖVEKVŐ várakozással, nem azonnal) újra
@@ -932,6 +1073,12 @@ function startSingleplayer(hotLap = false) {
     ) {
       submitInFlight = true;
       const timeToSubmit = race.bestLapTime;
+      // pendingGhostSamples EBBEN a pillanatban a timeToSubmit-hez tartozó kör
+      // felvétele (a kettő UGYANANNÁL a 'lap' eseménynél frissül együtt — lásd
+      // recordState) — később, ha időközben egy MÉG jobb kör születne, mindkettő
+      // együtt lép tovább, sosem térnek el egymástól. Normál versenyben is megy
+      // (nem csak Hot Lapben) — csak a MEGJELENÍTÉS Hot Lap-only, a mentés nem.
+      const ghostToSubmit = pendingGhostSamples;
       // A modul-szintű pendingLapSubmission-be is elmentjük — a "← Főmenü"
       // gomb ezt várja meg, mielőtt reload-olna (lásd ott a megjegyzést).
       pendingLapSubmission = apiSubmitLap({
@@ -940,6 +1087,7 @@ function startSingleplayer(hotLap = false) {
         physics: physicsName,
         playerName: playerName(),
         lapTime: timeToSubmit,
+        ghost: ghostToSubmit,
       })
         .then(() => {
           lastSubmittedBest = timeToSubmit;
@@ -985,6 +1133,10 @@ function startSingleplayer(hotLap = false) {
     nextSubmitAttemptAt = 0;
     submitBackoffMs = 1000;
     consecutiveSubmitFailures = 0;
+    // A folyamatban lévő (be nem fejezett) kör felvétele eldobandó — lásd
+    // ugyanezt onHotlapResetClick-nél.
+    currentLapGhost = [];
+    ghostStepCounter = 0;
   };
 
   // Hot Lap reset: azonnal vissza a guruló-rajt pontra, új próba — a
@@ -1004,6 +1156,11 @@ function startSingleplayer(hotLap = false) {
       prev.y = curr.y = startPoint.y;
       prev.angle = curr.angle = startPoint.angle;
       hotLapArmed = true;
+      // A folyamatban lévő (be nem fejezett) kör felvétele eldobandó — a
+      // pendingGhostSamples (a legutóbbi KÉSZ rekord-kör) viszont megmarad,
+      // ugyanúgy, ahogy a bestLapTime is megmarad Hot Lap reset után.
+      currentLapGhost = [];
+      ghostStepCounter = 0;
       carEffects.reset();
     };
   }
@@ -1037,6 +1194,31 @@ function startSingleplayer(hotLap = false) {
     carMesh.position.set(x, 0.12, z);
     carMesh.rotation.y = -angle;
     carWheels.update(forwardSpeed(carBody), drive.steer, dt);
+
+    // Ghost car lejátszás: a SAJÁT jelenlegi kör-idővel (race.time - lapStartTime)
+    // szinkronban — keret-interpoláció a rögzített mintasoron, NEM újra-szimuláció
+    // (lásd a felvétel feletti fejléc-megjegyzést). Guruló rajton, vagy ha nincs
+    // kiválasztott ghost, egyszerűen rejtve marad.
+    if (hotLap && ghostGroup) {
+      const playing = activeGhostSamples && race.phase === 'racing' && !hotLapArmed;
+      if (playing) {
+        const elapsed = race.time - race.lapStartTime;
+        const idxF = elapsed * GHOST_SAMPLE_HZ;
+        const i0 = Math.floor(idxF);
+        if (i0 >= 0 && i0 < activeGhostSamples.length - 1) {
+          const s0 = activeGhostSamples[i0];
+          const s1 = activeGhostSamples[i0 + 1];
+          const f = idxF - i0;
+          ghostGroup.position.set(lerp(s0[0], s1[0], f), 0.12, lerp(s0[1], s1[1], f));
+          ghostGroup.rotation.y = -lerpAngle(s0[2], s1[2], f);
+          ghostGroup.visible = true;
+        } else {
+          ghostGroup.visible = false; // a rögzített kör ennyi ideje már véget ért — a következő kör elején jelenik meg újra
+        }
+      } else {
+        ghostGroup.visible = false;
+      }
+    }
     carEffects.update(
       [{
         id: 'me', x, z, angle,
@@ -1089,7 +1271,14 @@ function startSingleplayer(hotLap = false) {
   requestAnimationFrame(frame);
 
   if (import.meta.env.DEV) {
-    window.__GAME = { world, carBody, camera, scene, race, audio, renderer, drive, minimap, carEffects, updateHud };
+    window.__GAME = {
+      world, carBody, camera, scene, race, audio, renderer, drive, minimap, carEffects, updateHud,
+      // Ghost car belső állapota — csak DEV, hibakereséshez (lásd a felvétel/
+      // lejátszás fejléc-megjegyzését recordState/frame felett).
+      get ghostGroup() { return ghostGroup; },
+      get activeGhostSamples() { return activeGhostSamples; },
+      get pendingGhostSamples() { return pendingGhostSamples; },
+    };
   }
 }
 
@@ -1182,6 +1371,16 @@ async function startMultiplayer(room) {
   const mpRace = createRaceState(mpTotalLaps);
   const mpPrev = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
   const mpCurr = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
+  // Ghost car FELVÉTEL multiplayerben — ugyanaz az elv, mint egyjátékosban
+  // (lásd startSingleplayer recordState felette a bővebb megjegyzést), csak
+  // itt a "ez volt-e az új legjobb kör" döntést NEM a kliens hozza meg (a
+  // verseny szerver-mért, lásd CLAUDE.md), hanem elküldjük a SZERVERNEK minden
+  // helyben lezárt, érvényes kör felvételét ('lapGhost' üzenet), és a szerver
+  // csatolja a ranglistára, ha a SAJÁT mérése szerint tényleg ez lett a legjobb
+  // (lásd server/RaceRoom.js p.pendingGhost). Itt sosem jelenik meg (ghost
+  // LEJÁTSZÁS csak Hot Lapben van), csak felvétel+beküldés.
+  let mpGhostStepCounter = 0;
+  let mpCurrentLapGhost = [];
   // Terelőkúpok VILÁG-koordinátái (a kör-érvényességhez, mint egyjátékosban).
   const mpConePoints = loadCustomDecorations()
     .filter((d) => d.type === 'pylon')
@@ -1204,6 +1403,8 @@ async function startMultiplayer(room) {
     Object.assign(mpDrive, createDriveState());
     mpStartedRacing = false;
     mpSentFinish = false;
+    mpGhostStepCounter = 0;
+    mpCurrentLapGhost = [];
     mpPlaceAtSpawn();
   }
 
@@ -1621,6 +1822,30 @@ async function startMultiplayer(room) {
                 hitsCone(mpCar, mpConePoints, RACE.coneHitRadius);
               const mpRaceEvents = raceStep(mpRace, mpPrev, mpCurr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
               if (mpRaceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(mpDrive);
+
+              // Ghost car felvétel (lásd a mpCurrentLapGhost fenti megjegyzését) —
+              // ugyanaz a mintavételi ütem (GHOST_SAMPLE_STRIDE), mint egyjátékosban.
+              mpGhostStepCounter++;
+              if (mpGhostStepCounter >= GHOST_SAMPLE_STRIDE) {
+                mpGhostStepCounter = 0;
+                mpCurrentLapGhost.push([
+                  Math.round(mpCurr.x * 100) / 100,
+                  Math.round(mpCurr.y * 100) / 100,
+                  Math.round(mpCurr.angle * 100) / 100,
+                ]);
+              }
+              const mpLapDone = mpRaceEvents.some((e) => e.type === 'lap' || e.type === 'finish');
+              if (mpLapDone) {
+                // A DÖNTÉS ("ez az új legjobb kör?") a szerveré — itt csak akkor
+                // küldjük el, ha a HELYI mérésünk szerint érvényes volt (ne
+                // pazaroljunk hálózati forgalmat egy eleve érvénytelen felvételre,
+                // amit a szerver úgysem tudna felhasználni).
+                if (mpRace.lastLapValid && mpCurrentLapGhost.length > 0) {
+                  room.send('lapGhost', { samples: mpCurrentLapGhost });
+                }
+                mpCurrentLapGhost = [];
+                mpGhostStepCounter = 0;
+              }
             }
           }
         );

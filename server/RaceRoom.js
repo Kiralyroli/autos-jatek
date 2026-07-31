@@ -35,7 +35,7 @@ const { Room } = require('colyseus'); // a colyseus CJS — createRequire-rel t�
 import { TRACK, RACE, NET, DEFAULT_LAYOUT, resolvePhysicsPreset } from '../src/config.js';
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
 import { hashLayout } from '../src/sim/trackKey.js';
-import { recordLap } from './leaderboardStore.js';
+import { recordLap, MAX_GHOST_SAMPLES } from './leaderboardStore.js';
 import { sanitizeLayout } from './trackStore.js';
 import { registerJoinCode, unregisterJoinCode } from './roomCodes.js';
 import { createTrackerContext, createPlayerTracker } from './raceTracker.js';
@@ -191,10 +191,31 @@ export class RaceRoom extends Room {
             physics: this.physics,
             playerName: p.name,
             lapTime: r.bestLapTime,
+            // A legutóbb beküldött ghost-mintasor (lásd 'lapGhost' üzenet lejjebb)
+            // — a leaderboardStore.recordLap MAGA validálja (sanitizeGhost), itt
+            // nem kell megbízni benne; ha hibás/hiányzik, a köridő ghost nélkül
+            // mentődik, ugyanúgy, mint az egyjátékos REST-beküldésnél.
+            ghost: p.pendingGhost,
           },
           Date.now()
         );
       }
+    });
+
+    // A kliens EGY teljes kör (x,y,angle) mintasorát küldi, amikor a SAJÁT helyi
+    // mérése szerint most fejezett be egy kört — ez NEM a szerver hivatalos
+    // mérése (az fentebb, a 'state' kezelőben történik, p.tracker-rel), csak egy
+    // "ha ez lenne az új legjobb kör, ez a hozzá tartozó felvétel" jelzés. A
+    // szerver csak akkor őrzi meg TARTÓSAN (a ranglistán), ha a SAJÁT mérése
+    // szerint EZUTÁN tényleg új legjobb kör született (lásd fent). Méret-korlát
+    // MÁR ITT, mielőtt egyáltalán memóriában tartanánk — ugyanaz az elv, mint a
+    // pálya-layoutnál (lásd CLAUDE.md "Biztonság").
+    this.onMessage('lapGhost', (client, msg) => {
+      const p = this.players.get(client.sessionId);
+      if (!p) return;
+      const samples = msg?.samples;
+      if (!Array.isArray(samples) || samples.length === 0 || samples.length > MAX_GHOST_SAMPLES) return;
+      p.pendingGhost = samples;
     });
 
     this.onMessage('start', (client) => {
@@ -316,6 +337,10 @@ export class RaceRoom extends Room {
       finished: false,
       place: null,
       lastSubmittedBest: null,
+      // A kliens LEGUTÓBB beküldött, teljes körhöz tartozó ghost-mintasora
+      // (lásd 'lapGhost' üzenet-kezelő) — a szerver akkor csatolja a
+      // ranglistára, ha EZUTÁN a saját mérése szerint ez lett az új legjobb kör.
+      pendingGhost: null,
       // Szerver-oldali verseny-követő (lásd raceTracker.js). A startRace() minden
       // futam elején újat készít; ez itt csak azért kell, hogy egy lobbyban
       // beérkező 'state' üzenet se találjon üres helyet.
@@ -442,6 +467,7 @@ export class RaceRoom extends Room {
       p.finished = false;
       p.place = null;
       p.lastSubmittedBest = null;
+      p.pendingGhost = null; // előző futamból itt ragadt ghost sose keveredjen az újba
       // FRISS verseny-követő minden futamhoz (új kör-számláló, nullázott idő, a
       // pozíció-előzmény a rajtrácsról indul).
       p.tracker = createPlayerTracker(this.trackerCtx, slot);
