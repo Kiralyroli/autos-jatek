@@ -7,6 +7,12 @@ import { RACE, BOOST } from './config.js';
 const SPLIT_DISPLAY_SECONDS = 2.5;
 const SPLIT_ANIM_SECONDS = 0.22;
 
+// Az "Érvénytelen kör!" szalag csak EGYSZER, RÖVIDEN villan fel, amikor a kör
+// érvénytelenné válik — utána a piros, ⚠-es köridő önmagában elég jelzés.
+// (Korábban a kör végéig kint maradt, és folyamatosan takarta a pályát.)
+const INVALID_BANNER_SECONDS = 2.6;
+const INVALID_FADE_SECONDS = 0.4;
+
 // A szektor-delta jelvény opacitása/eltolása/mérete a split óta eltelt idő
 // (elapsed, s) TISZTA FÜGGVÉNYEKÉNT — nincs CSS-animáció/osztály-újraindítás,
 // ezért két gyorsan egymás utáni split (rövid szektorok) esetén sem "akad meg"
@@ -50,14 +56,22 @@ export function createHud(onRestart, onHotlapReset) {
   const restartEl = document.getElementById('restart');
   const sectorDeltaEl = document.getElementById('sectordelta');
   const hotlapResetEl = document.getElementById('hotlapReset');
+  const speedoRingEl = document.getElementById('speedoRing');
   const boostMeterEl = document.getElementById('boostMeter');
   const boostFillEl = document.getElementById('boostBarFill');
+  const boostValueEl = document.getElementById('boostValue');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
   if (onHotlapReset) hotlapResetEl.addEventListener('click', onHotlapReset);
 
+  // Mikor (race.time) vált a kör érvénytelenné — ebből számoljuk, hogy az
+  // "Érvénytelen kör!" szalag még látszik-e (lásd INVALID_BANNER_SECONDS).
+  // null = a jelenlegi kör érvényes, nincs mit mutatni.
+  let invalidSince = null;
+
   return function updateHud(race) {
     raceInfoEl.style.display = 'flex'; // updateHud csak játék közben fut
+    if (speedoRingEl) speedoRingEl.style.display = 'flex';
     if (boostMeterEl) boostMeterEl.style.display = 'flex';
     wrongWayEl.style.display =
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
@@ -76,12 +90,34 @@ export function createHud(onRestart, onHotlapReset) {
       : `${race.lap}`;
     const current =
       race.phase === 'racing' ? race.time - race.lapStartTime : race.lastLapTime;
-    // Érvénytelen kör (letért a pályáról): a köridőt pirosan, ⚠-vel jelezzük, és
-    // egy infó-szalag is megjelenik — ez a kör nem számít a legjobbhoz.
+    // Érvénytelen kör (letért a pályáról): a köridő VÉGIG pirosan, ⚠-vel
+    // jelzi az állapotot — ez a TARTÓS jelzés. Az "Érvénytelen kör!" szalag
+    // viszont csak a bekövetkezés pillanatában villan fel röviden, hogy a
+    // figyelmet odavigye, aztán eltűnik és nem takarja tovább a pályát.
     const invalidLap = race.phase === 'racing' && race.lapValid === false;
     timeEl.textContent = (invalidLap ? '⚠ ' : '') + fmt(current);
-    timeEl.style.color = invalidLap ? '#ff6b4a' : '';
-    invalidLapEl.style.display = invalidLap ? 'flex' : 'none';
+    timeEl.style.color = invalidLap ? 'var(--danger)' : '';
+
+    if (!invalidLap) {
+      invalidSince = null;
+    } else if (invalidSince === null || race.time < invalidSince) {
+      // Most vált érvénytelenné — VAGY visszaugrott az óra (új kör/verseny,
+      // pl. Hot Lap reset), ilyenkor újra kell indítani a visszaszámlálást,
+      // különben a szalag soha többé nem jelenne meg.
+      invalidSince = race.time;
+    }
+    const invalidElapsed = invalidSince === null ? Infinity : race.time - invalidSince;
+    const showInvalidBanner = invalidLap && invalidElapsed < INVALID_BANNER_SECONDS;
+    invalidLapEl.style.display = showInvalidBanner ? 'flex' : 'none';
+    if (showInvalidBanner) {
+      // Kicsengés az utolsó pillanatokban — a szektor-deltához hasonlóan
+      // minden frame-ben újraszámolva (nincs CSS-animáció, ami "megakadhat").
+      const fadeStart = INVALID_BANNER_SECONDS - INVALID_FADE_SECONDS;
+      invalidLapEl.style.opacity =
+        invalidElapsed < fadeStart
+          ? '1'
+          : String(Math.max(0, 1 - (invalidElapsed - fadeStart) / INVALID_FADE_SECONDS));
+    }
     // race.lapSaveFailing: main.js állítja, ha a köridő ranglistára küldése
     // 3+ egymást követő alkalommal elbukott (élő hibajelentés: korábban ez
     // csendben, láthatatlanul történt — a játékos csak a menüben, utólag vette
@@ -92,7 +128,8 @@ export function createHud(onRestart, onHotlapReset) {
       ? 'A köridő mentése a ranglistára egyelőre nem sikerül — a játék a háttérben újrapróbálja.'
       : '';
 
-    // Boost-mérő: a hátralévő üzemanyag (s) aránya (BOOST.maxPerLap = tele).
+    // Boost: a hátralévő üzemanyag (s) aránya (BOOST.maxPerLap = tele) — külön,
+    // alul középen ülő sávos mérőn (index.html #boostMeter).
     // A `race.boostRemaining`-et a hívó (main.js) írja rá a race-objektumra
     // csak megjelenítés céljából — a sim/car.js drive.boostRemaining a valódi forrás.
     if (boostMeterEl && boostFillEl) {
@@ -100,6 +137,7 @@ export function createHud(onRestart, onHotlapReset) {
       const frac = Math.max(0, Math.min(1, remaining / BOOST.maxPerLap));
       boostFillEl.style.width = `${(frac * 100).toFixed(1)}%`;
       boostMeterEl.classList.toggle('empty', remaining <= 0.001);
+      if (boostValueEl) boostValueEl.textContent = `${remaining.toFixed(1)} s`;
     }
 
     // Szektor-delta: a legutóbb átszelt checkponton mérve, a legjobb kör
@@ -113,7 +151,11 @@ export function createHud(onRestart, onHotlapReset) {
       const faster = d <= 0;
       sectorDeltaEl.innerHTML =
         `<span class="arrow">${faster ? '▼' : '▲'}</span><span>${faster ? '' : '+'}${d.toFixed(2)} s</span>`;
-      sectorDeltaEl.className = faster ? 'faster' : 'slower';
+      // race.sectorFieldBest: a hívó (main.js) állítja igazra, ha MP-ben épp MI
+      // tartjuk a mezőny (nem csak a saját magunk) legjobb idejét ezen a
+      // ponton — ilyenkor lila a zöld helyett (lásd index.html #sectordelta.purple).
+      // SP-ben nincs mezőny, akihez mérni, ezért ott ez sosem igaz.
+      sectorDeltaEl.className = faster ? (race.sectorFieldBest ? 'purple' : 'faster') : 'slower';
       const { opacity, translateY, scale } = splitAnimStyle(elapsed);
       sectorDeltaEl.style.opacity = String(opacity);
       sectorDeltaEl.style.transform = `translateX(-50%) translateY(${translateY}px) scale(${scale})`;

@@ -59,7 +59,16 @@ export function createCameraSettings() {
   btn.id = 'btnCamera';
   btn.type = 'button';
   btn.title = 'Kamera beállítása';
-  btn.textContent = '📷';
+  // Minimalista vonalas kamera-ikon (inline SVG, `currentColor` — így a gomb
+  // arany színét örökli). Emoji helyett azért, mert a színes emoji idegen
+  // folt volt a HUD egyszínű, tipográfiai jelein (pl. a szomszédos "i" gomb);
+  // a ⟳ viszont "újratöltés"-t sugallt, nem kamerát.
+  btn.innerHTML = `
+    <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
+         stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2.5" y="7" width="12" height="10" rx="2.5" />
+      <path d="M14.5 10.5 21 7.5v9l-6.5-3z" />
+    </svg>`;
 
   const panel = document.createElement('div');
   panel.id = 'cameraPanel';

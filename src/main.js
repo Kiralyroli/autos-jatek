@@ -153,7 +153,7 @@ function readInput() {
   };
 }
 const audio = createAudio();
-const speedEl = document.getElementById('speed');
+const speedNumEl = document.getElementById('speedNum');
 
 // Szöveg biztonságos beszúrása HTML-sablonba (XSS-védelem).
 //
@@ -202,6 +202,17 @@ const updateHud = createHud(() => onRestartClick(), () => onHotlapResetClick());
 const minimapEl = document.getElementById('minimap');
 const minimap = createMinimap(minimapEl, trackState.track.center);
 
+// Jobb felső "i" gomb — az irányítás-segédletet (#hud, lásd hud.js-től
+// független, mert versenymódtól függetlenül elérhető) nyitja/zárja. A
+// megjelenítést a startSingleplayer/MP-indítás kapcsolja be (lásd lent, a
+// minimap.style.display mellett) — csak verseny közben van értelme.
+const hudLegendEl = document.getElementById('hud');
+const infoBtnEl = document.getElementById('infoBtn');
+infoBtnEl.addEventListener('click', () => {
+  const open = hudLegendEl.classList.toggle('open');
+  infoBtnEl.classList.toggle('active', open);
+});
+
 // --- Menü / lobby DOM ---
 const menuEl = document.getElementById('menu');
 const lobbyEl = document.getElementById('lobby');
@@ -229,6 +240,7 @@ const btnCarPickerClose = document.getElementById('btnCarPickerClose');
 const btnPickCar = document.getElementById('btnPickCar');
 const carPickThumb = document.getElementById('carPickThumb');
 const carPickName = document.getElementById('carPickName');
+const carPickMeta = document.getElementById('carPickMeta');
 const btnMpPickCar = document.getElementById('btnMpPickCar');
 const mpCarPickThumb = document.getElementById('mpCarPickThumb');
 const mpCarPickName = document.getElementById('mpCarPickName');
@@ -242,6 +254,7 @@ const btnTrackPickerClose = document.getElementById('btnTrackPickerClose');
 const btnPickTrack = document.getElementById('btnPickTrack');
 const trackPickCanvas = document.getElementById('trackPickCanvas');
 const trackPickName = document.getElementById('trackPickName');
+const trackPickMeta = document.getElementById('trackPickMeta');
 const btnMpPickTrack = document.getElementById('btnMpPickTrack');
 const mpTrackPickCanvas = document.getElementById('mpTrackPickCanvas');
 const mpTrackPickName = document.getElementById('mpTrackPickName');
@@ -296,9 +309,13 @@ function renderCarPickerGrid() {
 // előnézete — mindig a JELENLEGI választást mutatja, akkor is, ha az a másik
 // gombon/panelen (vagy a hálózaton, lásd onCarChanged) keresztül változott.
 function updateCarPickButtons() {
-  const c = CARS[selectedCar % CARS.length];
+  const idx = selectedCar % CARS.length;
+  const c = CARS[idx];
   carPickThumb.src = withBase(c.preview);
   carPickName.textContent = c.name;
+  // Meta-sor a hero-kártyán a név alatt (a pálya-kártya hossz/rekord sorának
+  // párja) — itt a listabeli hely, hogy látszódjon, mekkora a választék.
+  if (carPickMeta) carPickMeta.textContent = `${c.icon} ${idx + 1}. a ${CARS.length} autóból`;
   mpCarPickThumb.src = withBase(c.preview);
   mpCarPickName.textContent = c.name;
 }
@@ -444,9 +461,45 @@ async function renderTrackPickerGrid(target) {
   }
 }
 
+// A pálya hero-kártya meta-sora: "1840 m · rekord 0:52.10". A két adat KÉT
+// külön forrásból, más-más időben érkezik (a hossz a pálya középvonalából
+// számolva, a rekord a ranglista-lekérésből), ezért mindkettő egy-egy modul-
+// szintű változóba kerül, és ez a függvény rakja össze, amelyik épp megvan.
+let selectedTrackLengthM = null;
+let selectedTrackRecord = null;
+
+function renderTrackMeta() {
+  if (!trackPickMeta) return;
+  const parts = [];
+  if (selectedTrackLengthM != null) parts.push(`${Math.round(selectedTrackLengthM)} m`);
+  parts.push(selectedTrackRecord != null ? `rekord ${fmtTime(selectedTrackRecord)}` : 'nincs még rekord');
+  trackPickMeta.textContent = parts.join(' · ');
+}
+
+// A pálya hossza a KÖZÉPVONAL zárt poligonjának kerülete (a mintapontok közti
+// húrok összege) — ugyanaz a görbe, amiből a minitérkép/thumbnail is rajzol.
+function trackLengthFromCenter(center) {
+  if (!center || center.length < 2) return null;
+  let len = 0;
+  for (let i = 0; i < center.length; i++) {
+    const a = center[i];
+    const b = center[(i + 1) % center.length]; // zárt kör: az utolsó→első is számít
+    len += Math.hypot(b.x - a.x, b.z - a.z);
+  }
+  return len;
+}
+
 function updateTrackPickButton() {
   trackPickName.textContent = selectedTrackName;
-  getTrackCenter(selectedTrackId).then((center) => drawTrackThumb(trackPickCanvas, center));
+  selectedTrackLengthM = null;
+  renderTrackMeta();
+  getTrackCenter(selectedTrackId).then((center) => {
+    drawTrackThumb(trackPickCanvas, center);
+    // Időközben másik pályára válthatott a felhasználó — az elavult választ eldobjuk.
+    if (trackPickName.textContent !== selectedTrackName) return;
+    selectedTrackLengthM = trackLengthFromCenter(center);
+    renderTrackMeta();
+  });
 }
 function updateMpTrackPickButton() {
   mpTrackPickName.textContent = mpSelectedTrackName;
@@ -603,6 +656,11 @@ async function renderLeaderboard() {
   const now = currentTrackInfo();
   if (now.trackKey !== trackKey || chosenPhysics() !== physics) return;
 
+  // A pálya-rekord a lista ELSŐ eleme (a szerver idő szerint rendezve adja
+  // vissza) — ez megy a pálya hero-kártya meta-sorába is.
+  selectedTrackRecord = entries.length > 0 ? entries[0].lapTime : null;
+  renderTrackMeta();
+
   paintLeaderboardEntries(leaderboardListEl, entries, dev, true);
   paintLeaderboardEntries(raceLeaderboardListEl, entries, dev, false);
 }
@@ -714,6 +772,7 @@ function startSingleplayer(hotLap = false) {
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
   cameraSettings.show();
+  infoBtnEl.style.display = 'flex';
   if (touch) touch.show();
   carEffects.reset(); // friss guminyom/porfelhő-állapot minden versenykezdésnél
 
@@ -959,7 +1018,7 @@ function startSingleplayer(hotLap = false) {
     if (boostDenied && !wasBoostDenied) audio.playBoostEmpty();
     wasBoostDenied = boostDenied;
 
-    if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(speedKmh(carBody))} km/h`;
+    if (speedNumEl) speedNumEl.textContent = String(Math.round(speedKmh(carBody)));
     race.boostRemaining = drive.boostRemaining; // csak megjelenítéshez (hud.js)
     updateHud(race);
     minimap.draw([{ x, z, color: CARS[selectedCar]?.color, isMe: true }]);
@@ -1010,6 +1069,7 @@ async function startMultiplayer(room) {
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
   cameraSettings.show();
+  infoBtnEl.style.display = 'flex';
   if (touch) touch.show();
 
   // Szerver-ping (RTT) mérése + kijelzése: időbélyeget küldünk, a szerver azonnal
@@ -1597,6 +1657,18 @@ async function startMultiplayer(room) {
       // azt kapja. Ha itt a helyi mérést mutatnánk, a HUD "Legjobb" értéke pár
       // század másodperccel eltérne a ranglistán látszó időtől, ami hibának tűnne.
       // Amíg nincs szerver-adat (első pillanatok), a helyi érték az átmeneti tartalék.
+      const myBestLap = me && me.bestLap != null ? me.bestLap : mpRace.bestLapTime;
+      // Mezőny-legjobb kör (a snapshot bestLap mezőiből, lásd RaceRoom.js) — nincs
+      // élő, checkpontonkénti szakasz-adatunk a TÖBBI játékostól, ezért a
+      // "mezőny-rekord" jelzést (sectordelta lila állapota, lásd hud.js) azzal
+      // közelítjük, hogy MOST a MI legjobb TELJES körünk-e a legjobb a szobában —
+      // ha igen, egy nálunk is jobb szakasz-idő valószínűleg tényleg vezető.
+      let fieldBestLap = null;
+      for (const p of Object.values(sampled.players)) {
+        if (p.bestLap != null && (fieldBestLap === null || p.bestLap < fieldBestLap)) fieldBestLap = p.bestLap;
+      }
+      const sectorFieldBest = myBestLap != null && fieldBestLap != null && myBestLap <= fieldBestLap + 1e-6;
+
       const hudRace = {
         phase: myFinished ? 'finished' : serverPhase === 'racing' ? 'racing' : 'countdown',
         countdownLeft: sampled.countdownLeft,
@@ -1605,11 +1677,12 @@ async function startMultiplayer(room) {
         totalLaps: mpTotalLaps,
         lapStartTime: mpRace.lapStartTime,
         lastLapTime: me && me.lastLap != null ? me.lastLap : mpRace.lastLapTime,
-        bestLapTime: me && me.bestLap != null ? me.bestLap : mpRace.bestLapTime,
+        bestLapTime: myBestLap,
         wrongWay: mpRace.wrongWay,
         lapValid: mpRace.lapValid,
         lastSplitDelta: mpRace.lastSplitDelta,
         lastSplitAt: mpRace.lastSplitAt,
+        sectorFieldBest,
         place: me ? me.place || null : null, // hányadikként értünk célba (szervertől)
         hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
         boostRemaining: mpDrive.boostRemaining, // csak megjelenítéshez (hud.js)
@@ -1635,7 +1708,7 @@ async function startMultiplayer(room) {
 
       const ownSpeed = speedKmh(mpCar);
       const ownCornering = myFinished ? 0 : corneringLoad(mpCar);
-      if (speedEl) speedEl.textContent = `Sebesség: ${Math.round(ownSpeed)} km/h`;
+      if (speedNumEl) speedNumEl.textContent = String(Math.round(ownSpeed));
 
       // Countdown-bipek a fázisból.
       if (serverPhase === 'countdown') {
@@ -1704,32 +1777,62 @@ async function startMultiplayer(room) {
     const myDist = me ? (me.lap - 1 + (me.progress || 0)) * trackLen : 0;
     const canEstimateGap = me && !me.finished && mySpeedMs > 2;
 
+    // A mezőny abszolút leggyorsabb köre — ez kapja a lila kiemelést a "Legj."
+    // oszlopban (lásd .standRow .stBest.fastest), ugyanaz a szín, mint a
+    // sectordelta 'mezőny-rekord' állapotánál (hud.js sectorFieldBest).
+    let fieldBestLap = null;
+    for (const p of list) {
+      if (p.bestLap != null && (fieldBestLap === null || p.bestLap < fieldBestLap)) fieldBestLap = p.bestLap;
+    }
+
     standingsEl.style.display = roomPhase === 'lobby' ? 'none' : 'flex';
-    standingsEl.innerHTML = list
+    const rows = list
       .map((p, i) => {
         const icon = carIcon(p.colorIdx);
-        const info = p.finished
-          ? `🏁 ${p.totalTime.toFixed(2)} s`
-          : `${p.lap}/${mpTotalLaps}. kör`;
-        // Legutóbbi kör + (ha van érvényes) legjobb kör — a snapshotból (lásd
-        // RaceRoom.js broadcastSnapshot: lastLap/bestLap mezők).
-        const lastLap = p.lastLap != null ? `Utolsó: ${fmtTime(p.lastLap)}` : '';
-        const bestLap = p.bestLap != null ? `Legjobb: ${fmtTime(p.bestLap)}` : '';
-        const laptimes = [lastLap, bestLap].filter(Boolean).join(' · ');
-        const lapLine = laptimes ? `<div class="standingsLapTimes">${laptimes}</div>` : '';
+        const isMe = p.id === myId;
 
-        let gapHtml = '';
-        if (p.id !== myId && !p.finished && canEstimateGap) {
-          const pDist = (p.lap - 1 + (p.progress || 0)) * trackLen;
-          const gapSec = (myDist - pDist) / mySpeedMs;
-          const cls = gapSec < 0 ? 'gapAhead' : 'gapBehind';
-          const sign = gapSec > 0 ? '+' : '';
-          gapHtml = `<span class="standingsGap ${cls}">${sign}${gapSec.toFixed(1)}s</span>`;
+        let gapHtml = '<span class="stGap gapSelf">—</span>';
+        if (!isMe) {
+          if (p.finished) {
+            gapHtml = '<span class="stGap">🏁</span>';
+          } else if (canEstimateGap) {
+            const pDist = (p.lap - 1 + (p.progress || 0)) * trackLen;
+            const gapSec = (myDist - pDist) / mySpeedMs;
+            const cls = gapSec < 0 ? 'gapAhead' : 'gapBehind';
+            const sign = gapSec > 0 ? '+' : '';
+            gapHtml = `<span class="stGap ${cls}">${sign}${gapSec.toFixed(1)}s</span>`;
+          } else {
+            gapHtml = '<span class="stGap gapSelf">–</span>';
+          }
         }
 
-        return `<div>${i + 1}. ${icon} ${escapeHtml(p.name)}${gapHtml} — ${info}${lapLine}</div>`;
+        const isFieldBest = p.bestLap != null && fieldBestLap != null && p.bestLap <= fieldBestLap + 1e-6;
+        const bestHtml = p.bestLap != null
+          ? `<span class="stBest${isFieldBest ? ' fastest' : ''}">${fmtTime(p.bestLap)}</span>`
+          : '<span class="stBest">–</span>';
+
+        let lastCls = '';
+        if (p.lastLap != null && p.bestLap != null) {
+          lastCls = p.lastLap <= p.bestLap + 1e-6 ? ' faster' : ' slower';
+        }
+        const lastHtml = p.lastLap != null
+          ? `<span class="stLast${lastCls}">${fmtTime(p.lastLap)}</span>`
+          : '<span class="stLast">–</span>';
+
+        return `<div class="standRow${isMe ? ' me' : ''}${i === 0 ? ' p1' : ''}">` +
+          `<span class="stPos">${i + 1}</span>` +
+          `<span class="stName">${icon} ${escapeHtml(p.name)}${isMe ? ' (te)' : ''}</span>` +
+          `${gapHtml}${bestHtml}${lastHtml}</div>`;
       })
       .join('');
+
+    standingsEl.innerHTML =
+      `<div class="standHead"><span>Verseny állás</span><span>${list.length} induló</span></div>` +
+      `<div class="standCols"><span>#</span><span>Név</span><span>Rés</span><span>Legj.</span><span>Utolsó</span></div>` +
+      rows +
+      '<div class="standFoot">Rés: <span class="kAhead">−</span> előtted · ' +
+      '<span class="kBehind">+</span> mögötted &nbsp;·&nbsp; ' +
+      '<span class="kBest">lila</span> = mezőny-rekord</div>';
   }
 
   if (import.meta.env.DEV) {
@@ -1806,17 +1909,70 @@ async function doReconnect(token, fallbackCode) {
 // A teljes képernyő kérése (touch-eszközön) MINDIG a kattintás-eseményből,
 // szinkron módon, MIELŐTT bármi async munka (pl. szerver-csatlakozás) elindulna
 // — a böngésző csak közvetlenül egy felhasználói gesztusból engedi a kérést.
-document.getElementById('btnSingle').onclick = () => {
-  if (touch) requestFullscreen();
-  playWithSelectedTrack('single');
+// --- MÓD-VÁLASZTÓ (Verseny / Hot Lap / Többjátékos) ---
+// A három játékmód EGY szegmens-kapcsolóban él (index.html #modeSwitch), és a
+// kiválasztott mód dönti el, (a) mit csinál az egyetlen indító-gomb, (b) mely
+// mezők értelmesek, (c) látszik-e a szoba-csatlakozás blokk. Korábban három
+// külön, eltérő színű gomb volt egymás alatt — abból nem derült ki, hogy ezek
+// EGYMÁST KIZÁRÓ módok, és a multiplayer csatlakozás is mindig ott lógott.
+const MENU_MODES = {
+  single: {
+    cta: '🏁 Verseny indítása',
+    hint: 'Fix körszám, álló rajt visszaszámlálással. A legjobb köröd felkerül a ranglistára.',
+    laps: true,
+    join: false,
+  },
+  hotlap: {
+    cta: '🔥 Hot Lap indítása',
+    hint: 'Végtelen kör, guruló rajtból — tiszta időmérő edzés. A körszám itt nem számít.',
+    laps: false,
+    join: false,
+  },
+  create: {
+    cta: '👥 Szoba létrehozása',
+    hint: 'Létrehozol egy szobát, és a kódját elküldöd 2–4 játékosnak. A pályát és a körszámot te (a host) állítod.',
+    laps: true,
+    join: true,
+  },
 };
-document.getElementById('btnHotLap').onclick = () => {
+
+const modeSwitchEl = document.getElementById('modeSwitch');
+const modeHintEl = document.getElementById('modeHint');
+const btnStartModeEl = document.getElementById('btnStartMode');
+const fieldLapsEl = document.getElementById('fieldLaps');
+const mpJoinBlockEl = document.getElementById('mpJoinBlock');
+
+let selectedMode = localStorage.getItem('autos-jatek:mode');
+if (!MENU_MODES[selectedMode]) selectedMode = 'single';
+
+function setMode(mode) {
+  if (!MENU_MODES[mode]) return;
+  selectedMode = mode;
+  localStorage.setItem('autos-jatek:mode', mode);
+  const cfg = MENU_MODES[mode];
+  for (const btn of modeSwitchEl.querySelectorAll('.modeBtn')) {
+    const on = btn.dataset.mode === mode;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  btnStartModeEl.textContent = cfg.cta;
+  modeHintEl.textContent = cfg.hint;
+  fieldLapsEl.classList.toggle('is-disabled', !cfg.laps);
+  lapsInput.disabled = !cfg.laps;
+  mpJoinBlockEl.classList.toggle('is-open', cfg.join);
+}
+
+modeSwitchEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.modeBtn');
+  if (btn) setMode(btn.dataset.mode);
+});
+setMode(selectedMode);
+
+// A teljes képernyő kérése (touch-eszközön) MINDIG a kattintás-eseményből,
+// szinkron módon, MIELŐTT bármi async munka (pl. szerver-csatlakozás) elindulna.
+btnStartModeEl.onclick = () => {
   if (touch) requestFullscreen();
-  playWithSelectedTrack('hotlap');
-};
-document.getElementById('btnCreate').onclick = () => {
-  if (touch) requestFullscreen();
-  playWithSelectedTrack('create');
+  playWithSelectedTrack(selectedMode);
 };
 document.getElementById('btnJoin').onclick = () => {
   if (touch) requestFullscreen();

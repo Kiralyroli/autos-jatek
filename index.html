@@ -21,20 +21,27 @@
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <style>
       :root {
-        --bg: #0d0e13;
-        --panel: rgba(19, 20, 27, 0.86);
+        /* "Korona" paletta — antracit/mogyoróbarna alap, arany kiemelés (lásd
+           a 👑 Racing King márka), lila a "mezőny-rekord" jelzésekhez (hud.js
+           sectordelta 'purple' állapot + standings legjobb-kör kiemelés). */
+        --bg: #14100b;
+        --panel: rgba(29, 24, 17, 0.78);
         --panel-soft: rgba(255, 255, 255, 0.05);
-        --panel-border: rgba(255, 255, 255, 0.09);
+        --panel-border: rgba(212, 169, 78, 0.28);
         --accent: #4f8dfd;
         --accent-soft: rgba(79, 141, 253, 0.14);
         --success: #2fae66;
         --success-hover: #35bf71;
-        --danger: #e0505a;
-        --danger-hover: #e96570;
-        --gold: #e0b13d;
-        --text: #eef0f4;
-        --text-dim: #8b93a6;
+        --danger: #d9765a;
+        --danger-hover: #e4886c;
+        --gold: #d4a94e;
+        --gold2: #f2dca3;
+        --purple: #a678e0;
+        --purple2: #d2b8f5;
+        --text: #f4ede0;
+        --text-dim: #a3927b;
         --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-disp: Georgia, "Times New Roman", serif;
       }
       * { box-sizing: border-box; }
       html, body {
@@ -61,137 +68,230 @@
         background: rgba(255, 255, 255, 0.16);
         border-radius: 8px;
       }
+      /* Irányítás-segédlet — alapból REJTETT, a jobb felső "i" gomb (#infoBtn)
+         nyitja/zárja (lásd main.js). A gomb alá horgonyzott lapocska, Korona
+         stílus (arany szegély, sötét üveg-háttér). */
       #hud {
         position: fixed;
-        left: 14px;
-        top: 14px;
+        right: 18px;
+        top: 68px;
+        width: 226px;
         font-size: 12.5px;
         color: var(--text-dim);
-        background: var(--panel);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid var(--panel-border);
-        padding: 10px 14px;
-        border-radius: 10px;
+        background: rgba(29, 24, 17, 0.92);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid var(--gold);
+        padding: 14px 16px;
+        border-radius: 12px;
         line-height: 1.6;
         pointer-events: none;
         user-select: none;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+        display: none;
+        z-index: 16;
       }
+      #hud.open { display: block; pointer-events: auto; }
+      #hud .hudTitle {
+        font-family: var(--font-disp);
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--gold2);
+        margin-bottom: 8px;
+      }
+      #hud .keyrow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--panel-border);
+      }
+      #hud .keyrow:last-of-type { border-bottom: none; }
       #hud b {
         color: var(--text);
         font-weight: 700;
       }
       #hud kbd {
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: var(--bg);
+        border: 1px solid var(--panel-border);
         border-radius: 5px;
         padding: 1px 7px;
         font-family: ui-monospace, monospace;
-        color: var(--text);
+        font-size: 11px;
+        color: var(--gold2);
+        white-space: nowrap;
       }
       #hud a {
-        color: var(--accent);
+        color: var(--gold2);
         pointer-events: auto;
         text-decoration: none;
         font-weight: 600;
+        display: inline-block;
+        margin-top: 10px;
       }
       #hud a:hover { text-decoration: underline; }
-      /* Kör- és időkijelző — felül középen, jól látható. */
+      /* Kör- és időkijelző — felül középen, PANEL NÉLKÜL (lásd a markup
+         megjegyzését). Minden sor `white-space: nowrap`, hogy a blokk
+         magassága kiszámítható maradjon — az alatta ülő szektor-delta
+         (#sectordelta, top:92px) helyét ez határozza meg. */
       #raceinfo {
         position: fixed;
         top: 14px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
+        flex-direction: column;
         align-items: center;
-        gap: 20px;
+        text-align: center;
         color: var(--text);
+        /* Háttér-panel: puszta text-shadow-val a világos égbolt előtt nehezen
+           volt olvasható a futó idő. A panel diszkrét (üveg, arany hajszál-
+           szegély), de a szöveg-oszlopos elrendezés marad. */
         background: var(--panel);
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border: 1px solid var(--panel-border);
-        padding: 12px 26px;
-        border-radius: 14px;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(212, 169, 78, 0.3);
+        border-radius: 12px;
+        padding: 8px 26px 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         pointer-events: none;
         user-select: none;
         font-variant-numeric: tabular-nums;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-      }
-      #raceinfo .ri-lap {
-        font-size: 30px;
-        font-weight: 800;
-        line-height: 1;
         white-space: nowrap;
-        color: var(--text);
       }
-      #raceinfo .ri-lap #lap { font-size: 34px; }
-      #raceinfo .ri-times {
-        border-left: 1px solid rgba(255, 255, 255, 0.12);
-        padding-left: 20px;
+      /* Kör-számláló: a "KÖR" szó apró, halk címke marad, de MAGA A SZÁM
+         kiemelt — dísz-betűs, arany, nagyobb. Így a három sor hierarchiája
+         egyértelmű: KÖR 2 → futó idő (legnagyobb) → legjobb kör. */
+      #raceinfo .ri-lap {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      #raceinfo .ri-row {
-        font-size: 18px;
-        white-space: nowrap; /* mint a testvér .ri-lap-nál — enélkül a sor
-          bizonyos betűtípus-környezetben 2-3 sorba törhet, és a #raceinfo
-          panel kiszámíthatatlanul magas lesz, felboríthatva az alatta
-          lévő elemek (boost-mérő/érvénytelen kör/szektor-delta) helyét. */
-      }
-      #raceinfo .ri-row b { font-weight: 700; }
-      #raceinfo .ri-best b { color: var(--gold); }
-      #raceinfo .ri-label {
+        align-items: baseline;
+        justify-content: center;
+        gap: 7px;
         font-size: 11px;
-        letter-spacing: 0.07em;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        font-weight: 600;
+        margin-bottom: 1px;
+      }
+      #raceinfo .ri-lap #lap {
+        font-family: var(--font-disp);
+        font-size: 19px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--gold2);
+        text-transform: none;
+      }
+      #raceinfo .ri-time {
+        font-family: var(--font-disp);
+        font-size: 30px;
+        font-weight: 700;
+        line-height: 1.15;
+      }
+      #raceinfo .ri-best {
+        font-size: 11px;
+        color: var(--gold2);
+        margin-top: 1px;
+      }
+      #raceinfo .ri-best b { font-weight: 700; }
+      /* Sebességmérő — önálló, kiemelt HUD-elem (jobb alsó): tiszta óra, csak a
+         sebességgel. A boost KÜLÖN elemre került (lásd #boostMeter, alul
+         középen) — gyűrűként a szám körül túl diszkrét volt, vezetés közben nem
+         esett a látótérbe. */
+      #speedoRing {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 168px;
+        height: 168px;
+        display: none; /* JS: flex, versenyközben (lásd hud.js) */
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        border-radius: 50%;
+        background: radial-gradient(circle at 50% 38%, var(--panel), var(--bg));
+        border: 2px solid rgba(212, 169, 78, 0.55);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        pointer-events: none;
+        user-select: none;
+      }
+      #speedoRing .speedNum {
+        font-family: var(--font-disp);
+        font-size: 44px;
+        font-weight: 700;
+        color: var(--gold2);
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      #speedoRing .speedUnit {
+        font-size: 10px;
+        letter-spacing: 0.12em;
         color: var(--text-dim);
         text-transform: uppercase;
+        margin-top: 4px;
       }
-      /* Boost-mérő — a #raceinfo alatt, középen. A hátralévő üzemanyag (BOOST.
-         maxPerLap-ból, körönként újratöltve) sávja. */
+
+      /* BOOST-mérő — külön, jól látható helyen: ALUL KÖZÉPEN, a vezetési
+         látótér alsó peremén (a bal alsó sarok a minitérképé, a jobb alsó a
+         sebességmérőé, a középső alsó sáv szabad). Vízszintes sáv + hátralévő
+         másodperc, hogy egy pillantással leolvasható legyen. */
       #boostMeter {
         position: fixed;
-        top: 92px;
         left: 50%;
+        bottom: 26px;
         transform: translateX(-50%);
         display: none; /* JS: flex, versenyközben (lásd hud.js) */
         align-items: center;
-        gap: 8px;
-        pointer-events: none;
-        user-select: none;
+        gap: 12px;
+        padding: 10px 18px;
         color: var(--text);
         background: var(--panel);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border: 1px solid var(--panel-border);
-        padding: 6px 14px;
-        border-radius: 10px;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(212, 169, 78, 0.35);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+        user-select: none;
         font-variant-numeric: tabular-nums;
       }
       #boostMeter .boostLabel {
         font-size: 11px;
         font-weight: 800;
-        letter-spacing: 0.06em;
-        color: var(--danger);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--gold);
         white-space: nowrap;
       }
-      #boostMeter.empty .boostLabel { color: var(--text-dim); }
       #boostMeter .boostBarTrack {
-        width: 110px;
-        height: 8px;
-        border-radius: 4px;
-        background: rgba(255, 255, 255, 0.12);
+        width: 230px;
+        height: 11px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--panel-border);
         overflow: hidden;
       }
       #boostMeter .boostBarFill {
         height: 100%;
-        background: linear-gradient(90deg, #ff8a3d, var(--danger));
-        border-radius: 4px;
+        width: 100%;
+        background: linear-gradient(90deg, var(--gold), var(--gold2));
         transition: width 0.1s linear;
       }
-      #boostMeter.empty .boostBarFill { background: rgba(255, 255, 255, 0.15); }
+      #boostMeter .boostValue {
+        font-size: 12.5px;
+        font-weight: 700;
+        color: var(--gold2);
+        min-width: 42px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      /* Kifogyott: minden elhalványul — egyértelmű, hogy most nincs mit használni. */
+      #boostMeter.empty .boostLabel,
+      #boostMeter.empty .boostValue { color: var(--text-dim); }
+      #boostMeter.empty .boostBarFill { background: rgba(255, 255, 255, 0.18); }
       /* Végeredmény-lista (a #results overlay panelben). */
       #resultsList {
         display: flex;
@@ -265,12 +365,13 @@
           opacity: 0.15;
         }
       }
-      /* Pálya-elhagyás → érvénytelen kör infó-szalag (felül, a kör-panel ÉS a
-         boost-mérő ALATT — lásd #boostMeter/#sectordelta, a három elem együtt
-         egy függőleges oszlopot alkot, hogy sose fedjék egymást). */
+      /* Pálya-elhagyás → érvénytelen kör infó-szalag. A felső, középre zárt
+         oszlop HARMADIK eleme: #raceinfo (top:14, 93px magas) → #sectordelta
+         (top:118, 44px magas) → #invalidlap (top:170) — a boost-mérő MÁR NEM
+         tartozik ide, az alul középen ül (lásd #boostMeter). */
       #invalidlap {
         position: fixed;
-        top: 132px;
+        top: 170px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
@@ -292,18 +393,22 @@
          be- és kicsengő animációval. Az opacity/transform ÉRTÉKÉT a hud.js
          számolja minden frame-ben (nincs CSS @keyframes/transition — így
          két gyorsan egymás utáni split esetén sincs "megakadt" animáció,
-         mindig a friss `elapsed` idő alapján, tisztán számolt állapot). */
+         mindig a friss `elapsed` idő alapján, tisztán számolt állapot).
+         MÉRVE: a #raceinfo panel alja 107px-nél van (14px top + 93px magas a
+         háttér-panel paddingjével és a kiemelt kör-számlálóval együtt), ezért
+         ez 118px-nél kezdődik — a ~10px tartalék azért kell, hogy eltérő
+         betűtípus-környezetben (más gép/böngésző) se csússzon össze a kettő. */
       #sectordelta {
         position: fixed;
-        top: 180px;
+        top: 118px;
         left: 50%;
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 21px;
+        font-size: 19px;
         font-weight: 800;
         font-variant-numeric: tabular-nums;
-        padding: 9px 20px;
+        padding: 8px 18px;
         border-radius: 999px;
         background: var(--panel);
         backdrop-filter: blur(14px);
@@ -314,9 +419,13 @@
         user-select: none;
         opacity: 0;
       }
-      #sectordelta .arrow { font-size: 14px; }
+      #sectordelta .arrow { font-size: 13px; }
       #sectordelta.faster { color: var(--success); border-color: rgba(47, 174, 102, 0.45); }
       #sectordelta.slower { color: var(--danger); border-color: rgba(224, 80, 90, 0.45); }
+      /* Lila: MINDENKI közül (nem csak a saját legjobbunknál) mi vagyunk a
+         leggyorsabbak ezen a szakaszon — lásd main.js sectorFieldBest, csak
+         MP-ben lehet igaz (SP-ben nincs mezőny, akihez mérni). */
+      #sectordelta.purple { color: var(--purple2); border-color: rgba(166, 120, 224, 0.55); }
       #restart {
         position: fixed;
         left: 50%;
@@ -370,7 +479,7 @@
       #hotlapReset {
         position: fixed;
         right: 14px;
-        bottom: 14px;
+        bottom: 206px; /* a sebességmérő-gyűrű (#speedoRing, bottom:24px + 168px magas) fölött */
         display: none;
         padding: 10px 16px;
         font-family: var(--font);
@@ -389,30 +498,38 @@
       #hotlapReset:hover {
         background: rgba(255, 255, 255, 0.1);
       }
-      /* 📷 Kamera-gomb — verseny közben, a "← Főmenü" gomb mellett. Kis ikon,
-         a kamera-beállító panelt (#cameraPanel) nyitja/zárja. */
+      /* Sarok-gombok (jobb felül): infó (irányítás-segédlet) + kamera-beállítás.
+         Kör alakú, halvány — nem vonják el a figyelmet, amíg nem kell őket
+         használni. A #btnCamera-t a cameraSettings.js hozza létre dinamikusan,
+         de a HELYE és a KINÉZETE innen jön. */
+      #infoBtn,
       #btnCamera {
         position: fixed;
-        left: 132px;
-        bottom: 14px;
-        display: none; /* JS: flex verseny közben (cameraSettings show/hide) */
+        top: 18px;
+        display: none; /* JS: flex verseny közben */
         align-items: center;
         justify-content: center;
-        width: 44px;
-        height: 44px;
-        font-size: 20px;
-        color: var(--text);
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+        font-weight: 700;
+        font-family: var(--font-disp);
+        color: var(--gold2);
         background: var(--panel);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         border: 1px solid var(--panel-border);
-        border-radius: 10px;
+        border-radius: 50%;
         cursor: pointer;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-        transition: background 0.15s ease;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        transition: background 0.15s ease, border-color 0.15s ease;
         -webkit-tap-highlight-color: transparent;
       }
-      #btnCamera:hover { background: rgba(255, 255, 255, 0.1); }
+      #infoBtn { right: 18px; }
+      #btnCamera { right: 68px; font-size: 19px; }
+      #infoBtn:hover,
+      #btnCamera:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--gold); }
+      #infoBtn.active { border-color: var(--gold); color: var(--gold); }
       /* Kamera-beállító panel — oldalt (bal-közép), kompakt, hogy a kép közepén
          lévő autó látszódjon állítás közben (élő előnézet). Alapból rejtett. */
       #cameraPanel {
@@ -512,7 +629,7 @@
         background: var(--panel);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border: 1px solid var(--panel-border);
+        border: 1px solid rgba(212, 169, 78, 0.4);
         border-radius: 10px;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
         opacity: 0.82; /* enyhe átlátszóság, hogy a 3D nézetet ne takarja el túlzottan */
@@ -522,7 +639,7 @@
       #ping {
         position: fixed;
         right: 14px;
-        bottom: 14px;
+        bottom: 206px; /* a sebességmérő-gyűrű (#speedoRing) fölött, mint a #hotlapReset */
         display: none;
         font-size: 12.5px;
         font-variant-numeric: tabular-nums;
@@ -654,8 +771,9 @@
          - a billentyű-jelmagyarázat (#hud) értelmetlen touchon → elrejtjük,
          - a mini-térkép kisebb, bal fent,
          - a "← Főmenü" gomb + a ping a mini-térkép mellé, szintén fentre. */
-      body.has-touch-controls #hud {
-        display: none;
+      body.has-touch-controls #hud,
+      body.has-touch-controls #infoBtn {
+        display: none !important;
       }
       body.has-touch-controls #minimap {
         left: 14px;
@@ -694,26 +812,32 @@
       /* A kör/idő-kijelző touchon KOMPAKTABB és FELJEBB — a nagy asztali méret
          fekvő telefonon túl sokat takart a pályából. Kisebb betűk, szűkebb
          belső margó, felül tapadva. */
-      body.has-touch-controls #raceinfo {
-        top: 6px;
-        gap: 12px;
-        padding: 6px 14px;
-        border-radius: 11px;
+      body.has-touch-controls #raceinfo { top: 6px; padding: 5px 16px 6px; }
+      body.has-touch-controls #raceinfo .ri-lap { font-size: 9px; }
+      body.has-touch-controls #raceinfo .ri-time { font-size: 21px; }
+      body.has-touch-controls #raceinfo .ri-best { font-size: 9px; }
+      /* Sebességmérő-gyűrű touchon: a jobb ALSÓ sarkot a gáz-/fék-/boost-gombok
+         foglalják (lásd touchControls.js tc-group-right), ezért ide, a jobb
+         FELSŐ sarokba kerül, kisebb méretben — a hotlapReset (top:14) alá. */
+      body.has-touch-controls #speedoRing {
+        top: 60px;
+        right: 14px;
+        bottom: auto;
+        width: 92px;
+        height: 92px;
       }
-      body.has-touch-controls #raceinfo .ri-lap { font-size: 20px; }
-      body.has-touch-controls #raceinfo .ri-lap #lap { font-size: 23px; }
-      body.has-touch-controls #raceinfo .ri-times { padding-left: 12px; gap: 1px; }
-      body.has-touch-controls #raceinfo .ri-row { font-size: 13px; }
-      body.has-touch-controls #raceinfo .ri-label { font-size: 9px; }
-      /* Boost-mérő touchon a kompakt kör/idő-panel ALÁ (top:58px) — a lenti
-         sectordelta/invalidlap ezért lejjebb tolva, hogy ne fedjék egymást. */
+      body.has-touch-controls #speedoRing .speedNum { font-size: 26px; }
+      /* Boost-sáv touchon: a képernyő alján a két szélső sarkot a kormány- és
+         pedál-gombok foglalják, a középső sáv viszont szabad — ott marad, csak
+         kompaktabban, és feljebb csúszik a home-sáv (safe-area) elől. */
       body.has-touch-controls #boostMeter {
-        top: 58px;
-        padding: 4px 10px;
-        gap: 6px;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        gap: 8px;
+        padding: 6px 12px;
       }
       body.has-touch-controls #boostMeter .boostLabel { font-size: 9px; }
-      body.has-touch-controls #boostMeter .boostBarTrack { width: 80px; height: 6px; }
+      body.has-touch-controls #boostMeter .boostBarTrack { width: 130px; height: 8px; }
+      body.has-touch-controls #boostMeter .boostValue { font-size: 10.5px; min-width: 34px; }
       /* Szektor-delta touchon KISEBB és FELJEBB — a kompakt kör/idő-panel +
          boost-mérő ALÁ (top:94px), közvetlenül a felső HUD alatt, hogy ne a
          vezetési nézet közepén (a korábbi 132px pont a képernyő közepére esett
@@ -790,18 +914,16 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgba(5, 6, 10, 0.72);
+        background: rgba(10, 8, 5, 0.72);
         font-family: var(--font);
         z-index: 20;
       }
-      /* A főmenü paneljei — bal oldalt az autó-választó, középen a fő panel,
-         jobb oldalt a ranglista — mindhárom külön oszlopban, hogy egyik se
-         legyen zsúfolt (lásd .sidepanel). */
-      #menu .menuLayout {
-        display: flex;
-        align-items: flex-start;
-        gap: 16px;
-      }
+      /* A főmenü mögött a lassan forgó pálya-nézet fut (lásd main.js idleFrame)
+         — a menü-KÁRTYÁN KÍVÜL (lásd .menuWrap) ez halványabb sötétítés, hogy
+         a mozgó pálya jól látszódjon; a kártya BELÜL viszont egy összefüggő,
+         majdnem tömör panel (lásd .menuWrap), nem külön-külön lebegő dobozok
+         nagy résekkel, amik közt a nyers 3D jelenet villant ki. */
+      #menu.overlay { background: rgba(15, 11, 6, 0.45); }
       .overlay .panel {
         width: 340px;
         max-height: 90vh;
@@ -818,25 +940,262 @@
         gap: 12px;
         box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
       }
-      .overlay .panel.sidepanel {
-        width: 240px;
-      }
-      /* Keskeny nézeten (mobil, kis ablak) a panelek egymás alá kerülnek,
-         különben kilógnának a képernyőből. */
+      /* Keskeny nézeten (mobil, kis ablak) a lobby/eredmény/beállítás-panelek
+         (.overlay .panel, a #menu MÁR NEM ezt használja — lásd lejjebb
+         .menuWrap) kisebb szélességre váltanak. */
       @media (max-width: 900px) {
-        #menu .menuLayout {
-          flex-direction: column;
-          align-items: stretch;
-          max-height: 90vh;
-          overflow-y: auto;
-        }
-        .overlay .panel,
-        .overlay .panel.sidepanel {
+        .overlay .panel {
           width: 340px;
           max-width: 92vw; /* nagyon keskeny (pl. 360px-es) telefonon a 340px is túllógna */
-          max-height: none;
-          overflow-y: visible;
         }
+      }
+
+      /* --- Főmenü elrendezés — KÜLÖNÁLLÓ üveg-panelek a mögöttük élőben forgó
+         pálya fölött (main.js idleFrame), SZÉLES, a képernyőt kitöltő
+         kompozícióban: felül a márka-sáv, alatta a KIEMELT autó/pálya
+         hero-kártyák, legalul a verseny-beállítás + ranglista. */
+      .menuWrap {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        width: 100%;
+        max-width: 1180px;
+        max-height: 94vh;
+        overflow-y: auto;
+        padding: 22px 30px;
+      }
+      .glassPanel {
+        background: rgba(29, 24, 17, 0.62);
+        backdrop-filter: blur(8px) saturate(120%);
+        -webkit-backdrop-filter: blur(8px) saturate(120%);
+        border: 1px solid rgba(212, 169, 78, 0.28);
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      }
+      .menuTop {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 20px;
+        border-radius: 10px;
+      }
+      .menuBrand {
+        font-family: var(--font-disp);
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .menuBrand .crown { color: var(--gold); margin-right: 8px; }
+      .menuPlayerField {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .menuPlayerField label {
+        font-size: 11px;
+        color: var(--text-dim);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .menuPlayerField input {
+        width: 170px;
+        padding: 8px 12px;
+      }
+      .menuHeroRow {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .menuLowerRow {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 16px;
+        align-items: start;
+      }
+      .menuPanel {
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        color: var(--text);
+      }
+      .menuPanelTag {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--gold);
+        font-weight: 700;
+      }
+      .menuFieldRow {
+        display: flex;
+        gap: 10px;
+      }
+      .menuField { flex: 1; }
+      .menuField label {
+        display: block;
+        font-size: 9px;
+        color: var(--text-dim);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 4px;
+      }
+      .menuField input,
+      .menuField select {
+        background: rgba(0, 0, 0, 0.28);
+        padding: 9px 11px;
+        font-size: 13px;
+      }
+      /* A fő indító-gomb ARANY (a Korona-koncepció fő hívó eleme), nem a
+         korábbi zöld/kék — azok kilógtak a palettából. A másodlagos gombok
+         (Hot Lap, Csatlakozás) diszkrét, szegélyes változatok maradnak.
+         A `#menu` az ID a szelektorban SZÁNDÉKOS: a lentebb következő
+         `.overlay button.primary` UGYANOLYAN specificitású (2 osztály + 1
+         elem), és mivel később áll a fájlban, forrás-sorrend alapján
+         felülírná ezt — az ID billenti el a javunkra. */
+      #menu .menuPanel button.primary {
+        background: var(--gold);
+        color: #241a08;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      #menu .menuPanel button.primary:hover:not(:disabled) { background: var(--gold2); }
+      #menu .menuPanel button.accent {
+        background: transparent;
+        color: var(--gold2);
+        border: 1px solid rgba(212, 169, 78, 0.5);
+      }
+      #menu .menuPanel button.accent:hover:not(:disabled) { background: rgba(212, 169, 78, 0.12); }
+      #menu .menuPanel hr { border-top-color: rgba(212, 169, 78, 0.2); }
+
+      /* --- MÓD-VÁLASZTÓ szegmens-kapcsoló. A `#menu` prefix mindenhol
+         SZÁNDÉKOS: az általános `.overlay button` szabály (0,1,1) különben
+         felülírná a gomb-stílust, mert később áll a fájlban. */
+      #menu .modeSwitch {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+        padding: 4px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+      }
+      #menu .modeBtn {
+        padding: 10px 6px;
+        font-family: var(--font);
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-dim);
+        background: transparent;
+        border: none;
+        border-radius: 7px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      #menu .modeBtn:hover:not(.is-active) {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.05);
+      }
+      #menu .modeBtn.is-active {
+        color: var(--gold2);
+        background: rgba(212, 169, 78, 0.16);
+        box-shadow: inset 0 0 0 1px rgba(212, 169, 78, 0.5);
+      }
+      /* A kiválasztott módhoz tartozó rövid magyarázat — így a mód-nevek
+         maradhatnak rövidek, a jelentésük mégis egyértelmű. */
+      #menu .modeHint {
+        margin: 0;
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: var(--text-dim);
+      }
+      /* Hot Lap módban a körszám értelmetlen (végtelen kör) — a mezőt
+         letiltjuk és halványítjuk, hogy látszódjon, miért nem állítható. */
+      #menu .menuField.is-disabled { opacity: 0.4; pointer-events: none; }
+
+      /* --- Csatlakozás meglévő szobához (csak többjátékos módban) --- */
+      #menu .mpJoin {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #menu .mpJoin.is-open { display: flex; }
+      #menu .mpJoinSep {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--text-dim);
+      }
+      #menu .mpJoinSep::before,
+      #menu .mpJoinSep::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgba(212, 169, 78, 0.22);
+      }
+      #menu #joinCode {
+        font-family: ui-monospace, monospace;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.26em;
+        text-align: center;
+        text-transform: uppercase;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.3);
+        color: var(--gold2);
+      }
+      #menu #joinCode::placeholder {
+        font-family: var(--font);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        color: var(--text-dim);
+      }
+      #menu .joinrow button {
+        padding: 10px 18px;
+        font-size: 13.5px;
+        color: var(--gold2);
+        background: transparent;
+        border: 1px solid rgba(212, 169, 78, 0.5);
+      }
+      #menu .joinrow button:hover:not(:disabled) { background: rgba(212, 169, 78, 0.12); }
+      /* A panel-címke halkabb kiegészítő része (pl. "· a választott pálya +
+         fizika") — ne vigye el a hangsúlyt magától a címtől. */
+      .menuPanelTag .tagNote {
+        color: var(--text-dim);
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: none;
+      }
+      /* Romboló, DEV-MÓD-only művelet (tábla törlése): halk, szegélyes gomb —
+         a tömör piros tömb vizuálisan elvitte a fő CTA szerepét a paneltől. */
+      #menu button.danger.subtle {
+        background: transparent;
+        color: var(--danger);
+        border: 1px solid rgba(217, 118, 90, 0.45);
+        font-size: 12.5px;
+        padding: 8px 12px;
+      }
+      #menu button.danger.subtle:hover:not(:disabled) { background: rgba(217, 118, 90, 0.14); }
+      /* Keskeny nézeten (mobil, kis ablak) a hero-kártyák és az alsó sor is
+         egy oszlopba kerülnek, a tetejük egymás alá — különben kilógnának. */
+      @media (max-width: 760px) {
+        .menuHeroRow,
+        .menuLowerRow {
+          grid-template-columns: 1fr;
+        }
+        .menuTop {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 10px;
+          text-align: center;
+        }
+        .menuPlayerField { justify-content: center; }
       }
       .overlay h2 {
         font-size: 12px;
@@ -849,9 +1208,10 @@
       .overlay h1 {
         margin: 0 0 6px;
         font-size: 22px;
-        font-weight: 800;
+        font-weight: 700;
+        font-family: var(--font-disp);
         text-align: center;
-        color: var(--text);
+        color: var(--gold2);
       }
       .overlay label {
         font-size: 12.5px;
@@ -913,6 +1273,77 @@
       }
       .carPickBtn:hover { border-color: rgba(255, 255, 255, 0.22); }
       .carPickBtn .carThumb { width: 36px; height: 36px; object-fit: contain; flex-shrink: 0; }
+      /* "Hero" változat — a főmenüben az autó- ÉS pálya-választó gomb, KIEMELVE
+         (a felhasználó kérése: legyen "kiemeltebb" a két legfontosabb választás).
+         Nagyobb előnézet, arany szegély, dísz-betűs cím — az mpSettings kompakt
+         gombjai (nincs .heroPick) érintetlenek maradnak. */
+      .carPickBtn.heroPick {
+        position: relative;
+        flex-direction: column;
+        align-items: stretch;
+        flex-shrink: 0;
+        gap: 0;
+        padding: 16px;
+        text-align: left;
+        border: 1px solid rgba(212, 169, 78, 0.28);
+        border-radius: 12px;
+        background: rgba(29, 24, 17, 0.62);
+        backdrop-filter: blur(8px) saturate(120%);
+        -webkit-backdrop-filter: blur(8px) saturate(120%);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        transition: border-color 0.15s ease, transform 0.1s ease;
+      }
+      .carPickBtn.heroPick:hover { border-color: var(--gold); }
+      .carPickBtn.heroPick:active { transform: scale(0.995); }
+      .carPickBtn.heroPick .heroEyebrow {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--gold);
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      .carPickBtn.heroPick .heroVisual {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 150px;
+        border-radius: 8px;
+        background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.05), transparent 70%);
+        border: 1px solid rgba(212, 169, 78, 0.2);
+      }
+      .carPickBtn.heroPick .carThumb { width: 110px; height: 110px; }
+      .carPickBtn.heroPick .trackThumbSmall {
+        width: 82%;
+        height: 78%;
+        border-radius: 0;
+        background: transparent;
+      }
+      .carPickBtn.heroPick .carPickName {
+        display: block;
+        font-family: var(--font-disp);
+        font-size: 19px;
+        font-weight: 700;
+        color: var(--text);
+        margin: 12px 0 2px;
+      }
+      /* Meta-sor a név ALATT — a pályánál a hossz és a pálya-rekord (lásd
+         main.js updateTrackPickButton/renderLeaderboard), az autónál a
+         listabeli helye. Ez volt a terv szerinti, de kimaradt elem. */
+      .carPickBtn.heroPick .heroMeta {
+        display: block;
+        font-size: 11px;
+        color: var(--text-dim);
+        font-variant-numeric: tabular-nums;
+        min-height: 15px;
+      }
+      .carPickBtn.heroPick .chev {
+        position: absolute;
+        right: 16px;
+        top: 14px;
+        color: var(--text-dim);
+        font-size: 16px;
+      }
       /* A pálya-választó gombon egy kis RAJZ (canvas) van kép helyett — lásd
          main.js drawTrackThumb / #btnPickTrack, #btnMpPickTrack. */
       .carPickBtn .trackThumbSmall {
@@ -1133,12 +1564,14 @@
         padding: 8px 12px;
         font-size: 14px;
       }
-      /* Hot Lap: mindig látható ranglista, jobb oldalt — UGYANOTT, ahol MP-ben
+      /* Hot Lap: mindig látható ranglista, bal oldalt — UGYANOTT, ahol MP-ben
          az élő állás (#standings) lenne. Nem ütköznek: a kettő sosem jelenik
-         meg egyszerre (Hot Lap tisztán SP-only mód). */
+         meg egyszerre (Hot Lap tisztán SP-only mód). Bal oldal, mert a jobb
+         felső sarok az infó/kamera gomboké (#infoBtn/#btnCamera), a jobb alsó
+         a sebességmérő-gyűrűé (#speedoRing). */
       #raceLeaderboard {
         position: fixed;
-        right: 14px;
+        left: 14px;
         top: 14px;
         display: none; /* JS: flex Hot Lap módban (lásd main.js) */
         flex-direction: column;
@@ -1179,81 +1612,146 @@
         font-size: 12.5px;
         margin: 0;
       }
-      /* Mobilon (touch) a hely már a HUD-elemekkel is szűkös — a ranglista itt
-         inkább zavarna, mint segítene, ezért ott elrejtjük. */
-      body.has-touch-controls #raceLeaderboard {
+      /* Mobilon (touch) a hely már a HUD-elemekkel is szűkös — a ranglista/
+         állás itt inkább zavarna, mint segítene, ezért ott elrejtjük. */
+      body.has-touch-controls #raceLeaderboard,
+      body.has-touch-controls #standings {
         display: none !important;
       }
+      /* Élő verseny-állás (bal felül) — táblázatos: pozíció / név / rés-idő
+         HOZZÁM képest / legjobb kör / legutóbbi kör. A mezőny abszolút
+         leggyorsabb köre LILÁVAL kiemelve (lásd .standRow .stBest.fastest) —
+         ugyanaz a lila, mint a szektor-delta 'mezőny-rekord' jelzésénél
+         (#sectordelta.purple), hogy a két jelzés vizuálisan összetartozzon. */
       #standings {
         position: fixed;
-        right: 14px;
+        left: 14px;
         top: 14px;
         display: none;
         flex-direction: column;
-        gap: 6px;
-        min-width: 230px;
-        font-size: 15.5px;
+        min-width: 268px;
         color: var(--text);
         background: var(--panel);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border: 1px solid var(--panel-border);
-        padding: 14px 18px;
+        border: 1px solid rgba(212, 169, 78, 0.35);
+        padding: 12px 14px 10px;
         border-radius: 10px;
         pointer-events: none;
         font-variant-numeric: tabular-nums;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
-      #standings > div {
-        padding: 3px 0;
-      }
-      #standings > div:first-child {
+      #standings .standHead {
+        display: flex; /* enélkül a két span összecsúszik: "VERSENY ÁLLÁS4 INDULÓ" */
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
         color: var(--gold);
         font-weight: 700;
+        margin-bottom: 6px;
       }
-      .standingsLapTimes {
-        font-size: 12px;
-        font-weight: 400 !important;
-        color: var(--text-dim, #9aa0a8);
-        opacity: 0.8;
-        padding-left: 18px;
+      #standings .standHead span:last-child {
+        color: var(--text-dim);
+        font-weight: 600;
+        letter-spacing: 0.06em;
       }
-      /* Időrés HOZZÁM képest (lásd main.js updateStandings): előttem álló
-         versenyző mínuszban (zöldes — "előnyben vagyok tőle lemaradva"),
-         mögöttem lévő pluszban (pirosas). */
-      .standingsGap {
-        font-weight: 700;
-        margin-left: 6px;
+      #standings .standCols,
+      .standRow {
+        display: grid;
+        grid-template-columns: 18px 1fr 44px 44px 44px;
+        gap: 6px;
+        align-items: baseline;
       }
-      .standingsGap.gapAhead { color: #ff6b6b; }
-      .standingsGap.gapBehind { color: #5fd97a; }
+      #standings .standCols {
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-dim);
+        border-bottom: 1px solid var(--panel-border);
+        padding-bottom: 3px;
+        margin-bottom: 3px;
+      }
+      #standings .standCols span:nth-child(n + 3) { text-align: right; }
+      .standRow {
+        font-size: 13px;
+        padding: 3px 0;
+      }
+      .standRow.me {
+        background: rgba(212, 169, 78, 0.1);
+        border-radius: 5px;
+        margin: 0 -6px;
+        padding: 3px 6px;
+      }
+      .standRow .stPos { font-weight: 700; color: var(--text-dim); }
+      .standRow.p1 .stPos { color: var(--gold); }
+      .standRow .stName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .standRow.me .stName { color: var(--gold2); font-weight: 700; }
+      /* Időrés HOZZÁM képest: előttem álló versenyző negatívban (piros —
+         "ezt kell behoznod"), mögöttem lévő pozitívban (zöld). */
+      .standRow .stGap { text-align: right; }
+      .standRow .stGap.gapAhead { color: var(--danger); }
+      .standRow .stGap.gapBehind { color: var(--success); }
+      .standRow .stGap.gapSelf { color: var(--text-dim); }
+      .standRow .stBest { text-align: right; }
+      .standRow .stBest.fastest { color: var(--purple2); font-weight: 700; }
+      .standRow .stLast { text-align: right; color: var(--text-dim); }
+      .standRow .stLast.faster { color: var(--success); }
+      .standRow .stLast.slower { color: var(--danger); }
+      /* Jelmagyarázat a panel alján — a "Rés" előjele és a lila kiemelés
+         jelentése magától nem egyértelmű, verseny közben pedig nincs idő
+         kitalálni. A színkulcsok UGYANAZOK a változók, mint a soroknál. */
+      #standings .standFoot {
+        margin-top: 6px;
+        padding-top: 5px;
+        border-top: 1px solid var(--panel-border);
+        font-size: 9px;
+        line-height: 1.5;
+        color: var(--text-dim);
+      }
+      #standings .standFoot .kAhead { color: var(--danger); font-weight: 700; }
+      #standings .standFoot .kBehind { color: var(--success); font-weight: 700; }
+      #standings .standFoot .kBest { color: var(--purple2); font-weight: 700; }
     </style>
   </head>
   <body>
     <div id="game"></div>
     <div id="hud">
-      <b>👑 Racing King</b><br />
-      Gyorsítás: <kbd>W</kbd> / <kbd>↑</kbd> &nbsp; Fék/tolatás: <kbd>S</kbd> / <kbd>↓</kbd><br />
-      Kormány: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> &nbsp; Drift: <kbd>Space</kbd> &nbsp; Boost: <kbd>Shift</kbd> &nbsp; Némítás: <kbd>M</kbd><br />
-      <span id="speed">Sebesség: 0 km/h</span>
-      <div style="margin-top: 6px;">
-        <a href="./editor.html">🏗️ Pálya szerkesztése</a>
-      </div>
+      <div class="hudTitle">Irányítás</div>
+      <div class="keyrow"><span>Gyorsítás</span><span><kbd>W</kbd> / <kbd>↑</kbd></span></div>
+      <div class="keyrow"><span>Fék / tolatás</span><span><kbd>S</kbd> / <kbd>↓</kbd></span></div>
+      <div class="keyrow"><span>Kormányzás</span><span><kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd></span></div>
+      <div class="keyrow"><span>Drift</span><span><kbd>Space</kbd></span></div>
+      <div class="keyrow"><span>Boost</span><span><kbd>Shift</kbd></span></div>
+      <div class="keyrow"><span>Némítás</span><span><kbd>M</kbd></span></div>
+      <div><a href="./editor.html">🏗️ Pálya szerkesztése</a></div>
     </div>
+    <button id="infoBtn" type="button" title="Irányítás">i</button>
 
-    <!-- Kör- és időkijelző (jól látható, felül középen) -->
+    <!-- Kör- és időkijelző (felül középen). Szándékosan PANEL NÉLKÜL, tiszta
+         szöveg-oszlopként: apró nagybetűs kör-sor, nagy dísz-betűs futó idő,
+         alatta arany "legjobb kör" — a keretes doboz elvonta a figyelmet és
+         sokat takart a pályából. Az olvashatóságot text-shadow adja. -->
     <div id="raceinfo">
-      <div class="ri-lap"><span class="ri-label">KÖR</span> <span id="lap">–</span></div>
-      <div class="ri-times">
-        <div class="ri-row"><span class="ri-label">Köridő</span> <b id="laptime">–</b></div>
-        <div class="ri-row ri-best"><span class="ri-label">🏆 Legjobb</span> <b id="bestlap">–</b></div>
-      </div>
+      <div class="ri-lap"><span class="ri-label">Kör</span> <span id="lap">–</span></div>
+      <div class="ri-time"><b id="laptime">–</b></div>
+      <div class="ri-best">legjobb kör <b id="bestlap">–</b></div>
     </div>
 
-    <!-- Boost-mérő: a hátralévő üzemanyag, körönként újratöltve (config.js BOOST) -->
+    <!-- Sebességmérő (jobb alul) -->
+    <div id="speedoRing">
+      <span class="speedNum" id="speedNum">0</span>
+      <span class="speedUnit">km/h</span>
+    </div>
+
+    <!-- Boost-mérő (alul középen): a hátralévő üzemanyag, körönként újratöltve
+         (config.js BOOST) — külön, jól látható elem, lásd hud.js. -->
     <div id="boostMeter">
-      <span class="boostLabel">🔥 BOOST</span>
+      <span class="boostLabel">🔥 Boost</span>
       <div class="boostBarTrack"><div id="boostBarFill" class="boostBarFill"></div></div>
+      <span class="boostValue" id="boostValue">3.0 s</span>
     </div>
 
     <div id="countdown"></div>
@@ -1276,48 +1774,87 @@
       <div class="rn-text">Fordítsd el a készüléket fekvő nézetbe a játékhoz!</div>
     </div>
 
-    <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba) -->
+    <!-- Főmenü: mód-választás (egyjátékos / multiplayer szoba). Az elrendezés
+         szándékosan NEM a régi 3-oszlopos .menuLayout/.sidepanel vázat
+         használja: egy KÖZÉPRE zárt, két sorból álló kompozíció — felül a
+         két KIEMELT hero-kártya (autó/pálya, .menuHeroRow), alul a
+         beállítások + ranglista (.menuLowerRow) — üveg-panelekkel a mögötte
+         élőben forgó pálya-háttér (main.js idleFrame) fölött. -->
     <div id="menu" class="overlay">
-      <div class="menuLayout">
-        <div class="panel sidepanel">
-          <h2>🚗 Autó</h2>
-          <button id="btnPickCar" type="button" class="carPickBtn">
-            <img id="carPickThumb" class="carThumb" src="" alt="" draggable="false" />
-            <span id="carPickName" class="carPickName"></span>
-            <span class="chev">▾</span>
-          </button>
-        </div>
-        <div class="panel">
-          <h1>👑 Racing King</h1>
-          <label for="playerName">Neved</label>
-          <input id="playerName" maxlength="20" placeholder="Játékos" />
-          <label>Pálya</label>
-          <button id="btnPickTrack" type="button" class="carPickBtn">
-            <canvas id="trackPickCanvas" class="trackThumbSmall" width="72" height="48"></canvas>
-            <span id="trackPickName" class="carPickName"></span>
-            <span class="chev">▾</span>
-          </button>
-          <label for="lapsInput">Körök száma</label>
-          <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
-          <label for="physicsSelect">Autó-fizika</label>
-          <select id="physicsSelect">
-            <option value="realistic">Realisztikus</option>
-            <option value="light">Könnyített (arcade)</option>
-          </select>
-          <button id="btnSingle" class="primary">🏁 Egyjátékos</button>
-          <button id="btnHotLap">🔥 Hot Lap (guruló rajt)</button>
-          <hr />
-          <button id="btnCreate" class="accent">👥 Szoba létrehozása</button>
-          <div class="joinrow">
-            <input id="joinCode" placeholder="Szoba-kód" />
-            <button id="btnJoin">Csatlakozás</button>
+      <div class="menuWrap">
+        <div class="menuTop glassPanel">
+          <div class="menuBrand"><span class="crown">♛</span>Racing King</div>
+          <div class="menuPlayerField">
+            <label for="playerName">Pilóta</label>
+            <input id="playerName" maxlength="20" placeholder="Játékos" />
           </div>
-          <div id="menuStatus" class="status"></div>
         </div>
-        <div class="panel sidepanel">
-          <h2>🏆 Ranglista (ehhez a pályához + fizikához)</h2>
-          <div id="leaderboardList"></div>
-          <button id="btnClearLeaderboard" class="danger" style="display:none">🗑️ Tábla törlése</button>
+
+        <div class="menuHeroRow">
+          <button id="btnPickCar" type="button" class="carPickBtn heroPick">
+            <span class="chev">›</span>
+            <span class="heroEyebrow">Autó</span>
+            <span class="heroVisual"><img id="carPickThumb" class="carThumb" src="" alt="" draggable="false" /></span>
+            <span id="carPickName" class="carPickName"></span>
+            <span id="carPickMeta" class="heroMeta"></span>
+          </button>
+          <button id="btnPickTrack" type="button" class="carPickBtn heroPick">
+            <span class="chev">›</span>
+            <span class="heroEyebrow">Pálya</span>
+            <span class="heroVisual"><canvas id="trackPickCanvas" class="trackThumbSmall" width="300" height="130"></canvas></span>
+            <span id="trackPickName" class="carPickName"></span>
+            <span id="trackPickMeta" class="heroMeta"></span>
+          </button>
+        </div>
+
+        <div class="menuLowerRow">
+          <div class="menuPanel glassPanel">
+            <div class="menuPanelTag">Verseny beállítása</div>
+            <!-- MÓD-VÁLASZTÓ: a három játékmód EGYENRANGÚ, egy pillantással
+                 átlátható szegmens-kapcsolóban (a korábbi három külön, eltérő
+                 színű gomb helyett) — a mód dönti el, mit csinál az EGYETLEN
+                 alsó indító-gomb (#btnStartMode), lásd main.js setMode(). -->
+            <div class="menuField">
+              <label id="modeLabel">Mód</label>
+              <div class="modeSwitch" id="modeSwitch" role="radiogroup" aria-labelledby="modeLabel">
+                <button type="button" class="modeBtn is-active" data-mode="single" role="radio" aria-checked="true">🏁 Verseny</button>
+                <button type="button" class="modeBtn" data-mode="hotlap" role="radio" aria-checked="false">🔥 Hot Lap</button>
+                <button type="button" class="modeBtn" data-mode="create" role="radio" aria-checked="false">👥 Többjátékos</button>
+              </div>
+            </div>
+            <div class="menuFieldRow">
+              <div class="menuField" id="fieldLaps">
+                <label for="lapsInput">Körök</label>
+                <input id="lapsInput" type="number" min="1" max="50" step="1" value="3" />
+              </div>
+              <div class="menuField">
+                <label for="physicsSelect">Fizika</label>
+                <select id="physicsSelect">
+                  <option value="realistic">Realisztikus</option>
+                  <option value="light">Könnyített (arcade)</option>
+                </select>
+              </div>
+            </div>
+            <p id="modeHint" class="modeHint"></p>
+            <button id="btnStartMode" class="primary">🏁 Verseny indítása</button>
+
+            <!-- Csatlakozás meglévő szobához — CSAK többjátékos módban látszik.
+                 A kód-mező szándékosan "kód-beviteli" formájú (nagybetűs,
+                 ritkított, monospace), nem egy sima szövegdoboz. -->
+            <div id="mpJoinBlock" class="mpJoin">
+              <div class="mpJoinSep"><span>vagy csatlakozz egy szobához</span></div>
+              <div class="joinrow">
+                <input id="joinCode" placeholder="SZOBA-KÓD" maxlength="8" autocomplete="off" spellcheck="false" />
+                <button id="btnJoin">Csatlakozás</button>
+              </div>
+            </div>
+            <div id="menuStatus" class="status"></div>
+          </div>
+          <div class="menuPanel glassPanel">
+            <div class="menuPanelTag">🏆 Ranglista <span class="tagNote">· a választott pálya + fizika</span></div>
+            <div id="leaderboardList"></div>
+            <button id="btnClearLeaderboard" class="danger subtle" style="display:none">🗑️ Tábla törlése</button>
+          </div>
         </div>
       </div>
     </div>

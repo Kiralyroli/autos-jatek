@@ -49,7 +49,9 @@ export function createMinimap(canvas, centerPoints) {
   function draw(dots) {
     ctx.clearRect(0, 0, W, H);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    // Arany pályavonal (a "Korona" HUD-paletta, lásd index.html --gold) — a
+    // korábbi fehér kilógott a menü/HUD többi eleme közül.
+    ctx.strokeStyle = 'rgba(212,169,78,0.85)';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     trackPoints.forEach((p, i) => (i === 0 ? ctx.moveTo(p.cx, p.cy) : ctx.lineTo(p.cx, p.cy)));
