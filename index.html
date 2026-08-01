@@ -6,7 +6,33 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <title>Racing King</title>
+    <title>Racing King — Ingyenes böngészős autóverseny barátokkal online</title>
+    <meta
+      name="description"
+      content="Ingyenes 3D autóversenyzős játék közvetlenül a böngészőben, telepítés nélkül. Hívj meg 2–4 barátot multiplayer versenyre, vagy fuss egyedül Hot Lap edzést és hajszold a ranglista-rekordot."
+    />
+    <link rel="canonical" href="https://racing-king.kiroland.hu/" />
+
+    <!-- Open Graph — hogyan néz ki a link, ha Discordban/Facebookon/WhatsAppon
+         megosztják (nem a Google-találatot, hanem a MEGOSZTÁS-előnézetet
+         alakítja). A ranking szempontjából a lenti leírás/canonical/JSON-LD
+         számít többet — ez itt a kattintás-csábítás. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Racing King" />
+    <meta property="og:title" content="Racing King — Ingyenes böngészős autóverseny barátokkal online" />
+    <meta
+      property="og:description"
+      content="3D autóversenyzős játék közvetlenül a böngészőben, telepítés nélkül — versenyezz 2–4 barátoddal online, vagy edzz egyedül Hot Lap módban."
+    />
+    <meta property="og:url" content="https://racing-king.kiroland.hu/" />
+    <meta property="og:locale" content="hu_HU" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Racing King — Ingyenes böngészős autóverseny barátokkal online" />
+    <meta
+      name="twitter:description"
+      content="3D autóversenyzős játék közvetlenül a böngészőben, telepítés nélkül — versenyezz 2–4 barátoddal online, vagy edzz egyedül Hot Lap módban."
+    />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- Web App Manifest — "Kezdőképernyőhöz adás" után teljesen chrome-mentes
          (böngésző-sáv nélküli) indítás, mindkét platformon (lásd manifest.webmanifest
@@ -19,6 +45,32 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Racing King" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- Strukturált adat (schema.org VideoGame) — a Google ebből érti meg,
+         hogy MI ez az oldal (nem csak a szöveges leírásból), és jobb eséllyel
+         mutat gazdagabb találatot (pl. típus/műfaj) a sima kék linknél. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Racing King",
+        "url": "https://racing-king.kiroland.hu/",
+        "description": "Ingyenes 3D autóversenyzős böngészős játék, telepítés nélkül. Egyjátékos verseny, Hot Lap edzésmód és 2–4 fős online multiplayer.",
+        "genre": ["Racing", "Sports"],
+        "gamePlatform": "Web Browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "playMode": ["SinglePlayer", "MultiPlayer"],
+        "inLanguage": "hu",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "HUF"
+        }
+      }
+    </script>
+
     <style>
       :root {
         /* "Korona" paletta — antracit/mogyoróbarna alap, arany kiemelés (lásd

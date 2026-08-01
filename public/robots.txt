@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://racing-king.kiroland.hu/sitemap.xml
