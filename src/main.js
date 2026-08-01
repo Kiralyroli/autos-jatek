@@ -435,14 +435,29 @@ trackCenterCache.set(
   }).track.center
 );
 
+// ÉLŐ HIBAJELENTÉS: "néha a ranglista/köridő-mentés az Alap pályára esik
+// vissza, pedig egyedi pályán vagyok". A gyökér-ok EZ a függvény volt: sikertelen
+// lekérésnél korábban `trackCatalog = []`-t állított — az `[]` viszont IGAZ
+// értékű, ezért a fenti `if (trackCatalog) return trackCatalog;` a KÖVETKEZŐ
+// hívásnál rögtön visszaadta ezt az üres tömböt, ÚJRAPRÓBÁLKOZÁS NÉLKÜL, a
+// session hátralévő részére. Egyetlen átmeneti hálózati hiba (pl. "kihűlt"
+// Railway-szerver — lásd a köridő-beküldés retry-backoff megjegyzését lentebb)
+// tehát VÉGLEGESEN üresre zárta a katalógust: a `findCatalogEntry(selectedTrackId)`
+// utána sosem találta meg az egyedi pályát, és a `currentTrackInfo()` a
+// `hashLayout(DEFAULT_LAYOUT)`-ra esett vissza — MIND a ranglista-lekérésnél,
+// MIND a köridő-beküldésnél. A 3D pálya maga eközben helyesen futott (az a
+// config.js induláskori, localStorage-alapú betöltéséből jön, FÜGGETLEN ettől
+// a katalógustól) — ezért tűnt úgy, mintha "minden jó, csak a mentés rossz".
+// Most: siker esetén cache-elünk (mint eddig), hiba esetén NEM — a következő
+// hívás (pl. a következő menü-megnyitás) újra megpróbálja.
 async function loadTrackCatalog() {
   if (trackCatalog) return trackCatalog;
   try {
     trackCatalog = await apiListTracks();
+    return trackCatalog;
   } catch {
-    trackCatalog = []; // szerver nem elérhető — marad csak az "Alap pálya"
+    return []; // csak ERRE a hívásra — a katalógus MARAD null, legközelebb újra próbálkozunk
   }
-  return trackCatalog;
 }
 function findCatalogEntry(id) {
   return (trackCatalog || []).find((t) => t.id === id) || null;
@@ -504,9 +519,13 @@ function drawTrackThumb(canvas, centerPoints) {
 }
 
 async function renderTrackPickerGrid(target) {
-  await loadTrackCatalog();
+  // A VISSZATÉRÉSI értéket használjuk, NEM a modul-szintű trackCatalog-ot —
+  // sikertelen lekérésnél a kettő eltér (lásd loadTrackCatalog megjegyzését):
+  // a modul-változó ilyenkor SZÁNDÉKOSAN marad üres (null), hogy legközelebb
+  // újrapróbálkozzon, a visszatérési érték viszont mindig biztonságos tömb.
+  const catalog = await loadTrackCatalog();
   const currentId = target === 'mp' ? mpSelectedTrackId : selectedTrackId;
-  const entries = [{ id: '', name: 'Alap pálya (beépített)' }, ...trackCatalog];
+  const entries = [{ id: '', name: 'Alap pálya (beépített)' }, ...catalog];
   trackPickerGridEl.innerHTML = '';
   for (const t of entries) {
     const btn = document.createElement('button');
@@ -659,9 +678,25 @@ const initialTrackSig = JSON.stringify({
 // Ugyanaz a preselect-logika, mint korábban a <select>-es populateTrackSelect
 // vitte véghez; itt a #btnPickTrack gombot és a ranglistát frissíti.
 async function initTrackSelection() {
-  await loadTrackCatalog();
+  // Ez a hívás dönti el a TELJES session pálya-kiválasztását — ha itt a
+  // katalógus-lekérés elbukik (pl. "kihűlt" Railway-szerver épp induláskor),
+  // a régi kód CSENDBEN "Alap pálya"-ra váltott, akkor is, ha a játékos
+  // valójában egy egyedi pályán állt (a 3D jelenet ettől függetlenül helyesen
+  // futott tovább, lásd loadTrackCatalog megjegyzését) — ez okozta, hogy a
+  // ranglista/köridő-mentés "néha" rossz pályára ment. Néhány gyors
+  // újrapróbálkozás (rövid, növekvő várakozással) egy egyszeri hálózati
+  // döccenőt átvisz anélkül, hogy a játékos ezt észrevenné.
   const activeName = getActiveTrackName();
-  const match = activeName ? trackCatalog.find((t) => t.name === activeName) : null;
+  let catalog = await loadTrackCatalog();
+  // Csak akkor éri meg újrapróbálkozni, ha VAN mit keresni benne (a játékos
+  // előzőleg egy egyedi pályán állt) ÉS a katalógus üresen jött vissza —
+  // egy valóban üres szerver-tár (nincs mentett egyedi pálya) esetén ez
+  // ugyanígy üres lenne, ott a próbálkozás felesleges várakozás lenne.
+  for (let attempt = 0; activeName && catalog.length === 0 && attempt < 2; attempt++) {
+    await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    catalog = await loadTrackCatalog();
+  }
+  const match = activeName ? catalog.find((t) => t.name === activeName) : null;
   selectedTrackId = match ? match.id : '';
   selectedTrackName = match ? match.name : 'Alap pálya';
   updateTrackPickButton();
@@ -1543,11 +1578,15 @@ async function startMultiplayer(room) {
     updateCarPickButtons();
     if (isHost) {
       if (!mpTrackListLoaded) {
-        mpTrackListLoaded = true;
-        await loadTrackCatalog();
+        // `mpTrackListLoaded` CSAK sikeres lekérés után áll igazra (lásd lejjebb)
+        // — korábban ELŐRE lett igazra állítva, ezért egy sikertelen próbálkozás
+        // után a panel ÚJRAnyitásakor sem próbálkozott újra (lásd loadTrackCatalog
+        // megjegyzését ugyanerről a hibaosztályról).
+        const catalog = await loadTrackCatalog();
+        if (trackCatalog) mpTrackListLoaded = true;
         // Preselect: a szoba JELENLEGI pályáját (mpTrackName, a szervertől)
         // keressük névre a katalógusban — ua. elv, mint korábban a <select>.
-        const match = trackCatalog.find((t) => t.name === mpTrackName);
+        const match = catalog.find((t) => t.name === mpTrackName);
         mpSelectedTrackId = match ? match.id : '';
         mpSelectedTrackName = match ? match.name : 'Alap pálya';
       }
