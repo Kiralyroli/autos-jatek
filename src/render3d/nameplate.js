@@ -10,6 +10,23 @@ import * as THREE from 'three';
 const HEIGHT = 4.2; // m — ilyen magasan lebeg az autó fölött
 const WORLD_WIDTH = 7; // m — a névtábla világ-szélessége (a magasság ebből arányos)
 
+// ÉLŐ HIBAJELENTÉS (multiplayer): ha egy ellenfél közvetlenül MÖGÖTTED halad,
+// a névtábla — mivel `depthTest:false`, tehát MINDIG a kép tetején van, és
+// FIX VILÁG-méretű (WORLD_WIDTH) — közelről a képernyő nagy részét kitakarja
+// (a kamerához közeli tárgy vetített mérete nő). Ezért a kamerától mért
+// TÁVOLSÁG alapján elhalványítjuk: FADE_NEAR alatt teljesen átlátszó (ez
+// tipikusan pont "ütközés-közeli" távolság, ahol egyébként is takarná a
+// kilátást), FADE_FAR fölött teljesen látszik — a kettő közt lineárisan.
+const FADE_NEAR = 9; // m
+const FADE_FAR = 16; // m
+
+// A sprite opacitása a kamerától mért távolság alapján — a hívó (main.js,
+// ahol a kamera pozíciója amúgy is rendelkezésre áll a képkocka-frissítéskor)
+// minden képkockában beállítja ezzel, lásd ott a távoli-autó renderelő ciklust.
+export function nameplateOpacityForDistance(distanceToCamera) {
+  return Math.max(0, Math.min(1, (distanceToCamera - FADE_NEAR) / (FADE_FAR - FADE_NEAR)));
+}
+
 // Névtábla-sprite létrehozása a megadott szöveggel (és opcionális szín-pöttyel).
 export function createNameplate(text, colorHex = '#ffffff') {
   const canvas = document.createElement('canvas');

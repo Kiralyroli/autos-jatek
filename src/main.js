@@ -35,7 +35,7 @@ import { addGrassField } from './render3d/grassField.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
 import { setupWheels } from './render3d/wheels.js';
 import { createCarEffects } from './render3d/carEffects.js';
-import { createNameplate } from './render3d/nameplate.js';
+import { createNameplate, nameplateOpacityForDistance } from './render3d/nameplate.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { applyStoredCamera, createCameraSettings } from './cameraSettings.js';
 import { createHud, fmt as fmtTime } from './hud.js';
@@ -1483,6 +1483,10 @@ async function startMultiplayer(room) {
   const loadingMeshes = new Set();
   // Kerék-animátorok id-nként (gördülés + kormányzás). A sajátunk a fő carWheels.
   const wheelAnims = new Map([[myId, carWheels]]);
+  // Névtábla-sprite id-nként — a kamerától mért távolság alapján halványítjuk
+  // el frame-ről frame-re (lásd lejjebb), hogy közvetlen közelről (pl. valaki
+  // mögöttünk hajt) ne takarja ki a kilátást.
+  const nameplates = new Map();
 
   async function ensureMesh(id, colorIdx, name) {
     if (meshes.has(id) || loadingMeshes.has(id)) return;
@@ -1492,7 +1496,11 @@ async function startMultiplayer(room) {
     // A kit-jének megfelelően (Car Kit: colormap, Racing Kit: natív anyagszín).
     const group = buildCarHolder(car, model);
     // A TÖBBI játékos autója fölé lebegő névtábla (a sajátunk fölé nem kell).
-    if (id !== myId) group.add(createNameplate(name, carColor(colorIdx)));
+    if (id !== myId) {
+      const plate = createNameplate(name, carColor(colorIdx));
+      group.add(plate);
+      nameplates.set(id, plate);
+    }
     scene.add(group);
     meshes.set(id, group);
     wheelAnims.set(id, setupWheels(group));
@@ -1505,6 +1513,7 @@ async function startMultiplayer(room) {
         scene.remove(mesh);
         meshes.delete(id);
         wheelAnims.delete(id);
+        nameplates.delete(id);
         carEffects.remove(id);
       }
     }
@@ -1955,6 +1964,12 @@ async function startMultiplayer(room) {
         // nem a korábbi, sebességből visszabecsült közelítésből.
         const anim = wheelAnims.get(id);
         if (anim) anim.update(forwardSpeed(rs.body), rs.steer, dt);
+        // Névtábla elhalványítása közelről (lásd nameplate.js megjegyzését) —
+        // a `camera` ITT még az ELŐZŐ képkocka pozícióján áll (updateCamera
+        // lejjebb fut), egy képkockányi késés a fokozatos elhalványodásnál
+        // észrevehetetlen.
+        const plate = nameplates.get(id);
+        if (plate) plate.material.opacity = nameplateOpacityForDistance(camera.position.distanceTo(mesh.position));
         mpEffectsCars.push({
           id,
           x: px,
@@ -2161,7 +2176,7 @@ async function startMultiplayer(room) {
   }
 
   if (import.meta.env.DEV) {
-    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, mpDrive, minimap, remoteCars, carEffects };
+    window.__GAME = { camera, scene, audio, renderer, room, buffer, mpCar, mpRace, mpDrive, minimap, remoteCars, carEffects, meshes, nameplates };
   }
 }
 
