@@ -132,11 +132,25 @@ export function isInPitLane(x, y, pitLanePoints) {
 // szándékosan nem ismeri a boxutcát (lásd trackFactory.js fejléc-megjegyzését:
 // pálya-független marad).
 export function withPitLaneOffRoad(offRoadExcess, pitLanePoints) {
-  if (splitPitLane(pitLanePoints).path.length < 2) return offRoadExcess;
+  const { path, boxes } = splitPitLane(pitLanePoints);
+  if (path.length < 2) return offRoadExcess;
+  // A boxhely köré is jár ez a "burkolat" tűrés, NEM CSAK az útvonal
+  // középvonala köré — élő hibajelentés: szűk hely esetén (a boxutca és a
+  // fő pálya közt kevés a tér) a boxhely SZÉLE a középvonaltól mérve épp
+  // kieshet a laneWidth/2 sugarú tűrésből (a boxhely a lane jobb szélére
+  // van eltolva, lásd editor.js offsetToRightSide), miközben a versenyző
+  // vizuálisan egyértelműen "a boxban/a boxutcán" van, nem a fűben. A
+  // boxhely félátlója (+ kis ráhagyás) garantálja, hogy a TELJES rács-
+  // terület, ne csak a középpontja, burkolatnak számítson.
+  const boxRadius = Math.hypot(RACE.pitStop.boxWidth, RACE.pitStop.boxDepth) / 2 + 2;
   return (x, y) => {
     const base = offRoadExcess(x, y);
     if (base <= 0) return base; // már úgyis a pályán van
-    return distanceToPitLane(x, y, pitLanePoints) <= RACE.pitStop.laneWidth / 2 ? 0 : base;
+    if (distanceToPitLane(x, y, pitLanePoints) <= RACE.pitStop.laneWidth / 2) return 0;
+    for (const b of boxes) {
+      if (Math.hypot(x - b.x, y - b.z) <= boxRadius) return 0;
+    }
+    return base;
   };
 }
 
@@ -155,9 +169,21 @@ export function withPitLaneOffRoad(offRoadExcess, pitLanePoints) {
 export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
   const { path: points } = splitPitLane(pitLanePoints);
   if (points.length < 2) return checkpoints;
-  // "Közeli" = a checkpointtól a HALADÁSI IRÁNYBAN (a checkpoint saját
-  // tengelyére MERŐLEGESEN) mérve ilyen távolságon belül — ez csak azt dönti
-  // el, releváns-e ez a boxutca-pont EHHEZ a checkpointhoz.
+  // "Közeli" = a checkpont KÖZÉPPONTJÁTÓL mért VALÓDI (mindkét irányú)
+  // távolság ezen belül van — ELSŐ javítási kísérletnél ezt tévesen csak a
+  // HALADÁSI IRÁNYÚ komponensre szűkítettem, a keresztirányút EGYÁLTALÁN nem
+  // korlátozva — élő hibajelentés (ugyanazon a pályán, tisztán a középvonalon
+  // haladva is "sarok-vágás" miatt érvénytelenné vált a kör) mutatta meg,
+  // hogy ez ÖNMAGÁBAN nem elég: egy pont, ami hosszirányban közeli, DE
+  // keresztirányban több száz méterre van, simán átment a szűrőn, és a teljes
+  // keresztirányú távolságával szélesítette a checkpointot (mért eset: 312 m
+  // hosszú vonal) — ami a pálya EGY EGÉSZEN MÁS pontján, a versenyző valódi
+  // (pályán belüli!) útját is átmetszette, hamis "kihagyott checkpoint"
+  // jelzést adva. A javítás: a szűrés a VALÓDI távolságot nézi (mindkét
+  // komponens együtt bezárva NEARBY_M-be), a szélesítés MÉRTÉKE viszont
+  // továbbra is csak a keresztirányú komponens — így a widen soha nem lehet
+  // nagyobb, mint NEARBY_M + MARGIN_M, FÜGGETLENÜL attól, milyen irányban áll
+  // a boxutca-pont a checkponthoz képest.
   const NEARBY_M = 80;
   const MARGIN_M = 5;
   return checkpoints.map((cp) => {
@@ -169,29 +195,14 @@ export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
     if (len < 1e-6) return cp;
     const ux = dirX / len; // a checkpoint SAJÁT tengelye (keresztirányban, ebbe szélesítünk)
     const uy = dirY / len;
-    const alongX = -uy; // erre MERŐLEGES (haladási irány) — csak relevancia-szűrésre
-    const alongY = ux;
     let maxReach = 0;
     let found = false;
-    // KORÁBBAN a checkpoint MIDPONTJÁTÓL mért NYERS (Euklideszi) távolságot
-    // használtuk a szélesítés MÉRTÉKÉNEK is — ez hibás volt: egy boxutca-pont,
-    // ami a checkpointtól távol, DE majdnem a checkpoint vonalán fut (kicsi
-    // keresztirányú, nagy hosszirányú eltéréssel), a teljes Euklideszi
-    // távolsággal (akár 80+5 m-rel MINDKÉT irányban, tehát 170 m HOSSZÚ
-    // vonallal) hízlalta a checkpointot — ami egy szűk/hurkos pályán a
-    // versenyző útját EGY EGÉSZEN MÁS ponton is metszhette, hamis kör/cél-
-    // eseményt (majdnem nulla köridővel) okozva → a szerver ezt "fizikailag
-    // lehetetlen köridő"-ként AZONNAL kirúgta (élő hibajelentés: célvonal
-    // után, véletlenszerű játékosoknál, folyamatosan). A javítás: a szélesítés
-    // mértéke KIZÁRÓLAG a KERESZTIRÁNYÚ (a checkpoint saját tengelye menti)
-    // eltérés lehet, a hosszirányú csak azt dönti el, számít-e egyáltalán.
     for (const p of points) {
       const dx = p.x - mx;
       const dy = p.z - my;
-      const alongDist = Math.abs(dx * alongX + dy * alongY);
-      if (alongDist > NEARBY_M) continue;
+      if (Math.hypot(dx, dy) > NEARBY_M) continue; // valódi távolság a checkpont középpontjától
       found = true;
-      const across = Math.abs(dx * ux + dy * uy);
+      const across = Math.abs(dx * ux + dy * uy); // csak a keresztirányú komponens hízlalja a widen-t
       if (across > maxReach) maxReach = across;
     }
     if (!found) return cp;
