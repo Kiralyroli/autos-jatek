@@ -69,12 +69,18 @@ const AVG_SPEED_MARGIN = 1.15;
 // jelzés, mert (a) egy teljes körön a zaj kiátlagolódik, és (b) a valódi útvonalat
 // méri, tehát a kanyarvágás NEM zavarja meg (szemben a köridő-alsókorláttal, aminek
 // pont ezért kell 30%-os kanyarvágási ráhagyást adni).
-// Ez a SZIGORÚBB küszöb (1,08 az 1 másodperces ablak 1,15-éhez képest), és pontosan
-// azért lehet szigorúbb, mert egy teljes körön több száz mintából átlagolunk — a
-// hálózati zaj itt gyakorlatilag eltűnik. Ráadásul a húrokból összegzett útvonal
-// ALULBECSÜLI a valódi ívet, tehát a mérés eleve a játékos javára téved.
-// Ez fogja meg a "finom" csalót (tartós 1,1×), amit az ablakos szűrő átengedne.
-const LAP_SPEED_MARGIN = 1.08;
+// KORÁBBAN 1,08 volt — élő hibajelentés + szimuláció (a valódi fizikát/pálya-
+// geometriát végigfuttatva, csúcssebességen, realisztikus vezetési
+// hullámzással és löketes csomag-kézbesítéssel) kimutatta, hogy ez a szoros
+// küszöb HAMIS RIASZTÁST adhat: mért érték 1,087×, tehát a becézetten
+// "gyakorlatilag eltűnő" hálózati zaj + a billentyűzetes kormányzás sosem
+// tökéletesen sima vonala EGYÜTT bőven képes 8%-kal megnyújtani a mért
+// útvonalat, csalás nélkül is. Ez okozta a "mindig célvonal után, véletlen-
+// szerű játékosnál" kirúgást — a kör-lezáráskor lefutó ellenőrzés pontosan
+// oda időzítve sütötte el. Az AVG_SPEED_MARGIN-nal (1,15) egyező értékre
+// emelve ugyanúgy elkapja a tartós, valódi csalást (1,4×), csak a mért
+// zaj-tartományt (max ~1,09×) már nem.
+const LAP_SPEED_MARGIN = 1.15;
 // Durva, EGYETLEN ugrásra szóló korlát (a fenti ablak mellett, gyors reagáláshoz).
 // A tényleges eltelt időből számol, ezért egy 2 másodperces hálózati kimaradás utáni
 // nagy, de JOGOS elmozdulást nem büntet. Az alsó időkorlát a löketesség ellen van.

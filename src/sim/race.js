@@ -155,27 +155,46 @@ export function withPitLaneOffRoad(offRoadExcess, pitLanePoints) {
 export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
   const { path: points } = splitPitLane(pitLanePoints);
   if (points.length < 2) return checkpoints;
-  const NEARBY_M = 80; // ha a boxutca legközelebbi pontja ennél messzebb, nem érinti a checkpointot
+  // "Közeli" = a checkpointtól a HALADÁSI IRÁNYBAN (a checkpoint saját
+  // tengelyére MERŐLEGESEN) mérve ilyen távolságon belül — ez csak azt dönti
+  // el, releváns-e ez a boxutca-pont EHHEZ a checkpointhoz.
+  const NEARBY_M = 80;
   const MARGIN_M = 5;
   return checkpoints.map((cp) => {
     const mx = (cp.a.x + cp.b.x) / 2;
     const my = (cp.a.y + cp.b.y) / 2;
-    let maxReach = 0;
-    let found = false;
-    for (const p of points) {
-      const d = Math.hypot(p.x - mx, p.z - my);
-      if (d <= NEARBY_M) {
-        found = true;
-        if (d > maxReach) maxReach = d;
-      }
-    }
-    if (!found) return cp;
     const dirX = cp.b.x - cp.a.x;
     const dirY = cp.b.y - cp.a.y;
     const len = Math.hypot(dirX, dirY);
     if (len < 1e-6) return cp;
-    const ux = dirX / len;
+    const ux = dirX / len; // a checkpoint SAJÁT tengelye (keresztirányban, ebbe szélesítünk)
     const uy = dirY / len;
+    const alongX = -uy; // erre MERŐLEGES (haladási irány) — csak relevancia-szűrésre
+    const alongY = ux;
+    let maxReach = 0;
+    let found = false;
+    // KORÁBBAN a checkpoint MIDPONTJÁTÓL mért NYERS (Euklideszi) távolságot
+    // használtuk a szélesítés MÉRTÉKÉNEK is — ez hibás volt: egy boxutca-pont,
+    // ami a checkpointtól távol, DE majdnem a checkpoint vonalán fut (kicsi
+    // keresztirányú, nagy hosszirányú eltéréssel), a teljes Euklideszi
+    // távolsággal (akár 80+5 m-rel MINDKÉT irányban, tehát 170 m HOSSZÚ
+    // vonallal) hízlalta a checkpointot — ami egy szűk/hurkos pályán a
+    // versenyző útját EGY EGÉSZEN MÁS ponton is metszhette, hamis kör/cél-
+    // eseményt (majdnem nulla köridővel) okozva → a szerver ezt "fizikailag
+    // lehetetlen köridő"-ként AZONNAL kirúgta (élő hibajelentés: célvonal
+    // után, véletlenszerű játékosoknál, folyamatosan). A javítás: a szélesítés
+    // mértéke KIZÁRÓLAG a KERESZTIRÁNYÚ (a checkpoint saját tengelye menti)
+    // eltérés lehet, a hosszirányú csak azt dönti el, számít-e egyáltalán.
+    for (const p of points) {
+      const dx = p.x - mx;
+      const dy = p.z - my;
+      const alongDist = Math.abs(dx * alongX + dy * alongY);
+      if (alongDist > NEARBY_M) continue;
+      found = true;
+      const across = Math.abs(dx * ux + dy * uy);
+      if (across > maxReach) maxReach = across;
+    }
+    if (!found) return cp;
     const extend = maxReach + MARGIN_M;
     return {
       a: { x: mx - ux * extend, y: my - uy * extend },
