@@ -123,10 +123,11 @@
       button.danger:hover:not(:disabled) { background: var(--danger-hover); }
       #modeToggle {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
       #modeToggle button {
-        flex: 1;
+        flex: 1 1 calc(50% - 4px);
       }
       #modeToggle button.active {
         background: var(--accent);
@@ -264,6 +265,8 @@
         <div id="modeToggle">
           <button id="modeTrackBtn" class="active">🛣️ Pálya rajzolása</button>
           <button id="modeDecorBtn">🌳 Dekoráció</button>
+          <button id="modePitLaneBtn">🔧 Boxutca</button>
+          <button id="modePitBoxBtn">🎯 Boxhely</button>
         </div>
 
         <p id="instructions">

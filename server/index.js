@@ -120,6 +120,7 @@ app.get('/api/tracks/:id', readLimit, (req, res) => {
     name: t.name,
     layout: t.layout,
     decorations: t.decorations,
+    pitLane: t.pitLane,
     editorPath: t.editorPath,
     editorDecorations: t.editorDecorations,
   });

@@ -153,8 +153,9 @@ export function buildCurbVertexData(center, fallbackRoadHalf, curbWidth) {
 //  hívó (a régi, csempés utat érintetlenül hagyva a rács-alapú pályáknak).
 // =============================================================================
 import * as THREE from 'three';
-import { ASSETS } from '../config.js';
+import { ASSETS, RACE } from '../config.js';
 import { loadTexture } from './assets.js';
+import { splitPitLane } from '../sim/race.js';
 
 function toGeometry(positions, normals, indices, uvs) {
   const geo = new THREE.BufferGeometry();
@@ -295,13 +296,108 @@ function addLightGate(scene, p0, roadHalf) {
   scene.add(glow);
 }
 
+// Boxutca-útvonal felülete — NYITOTT, szabadon rajzolt polyline (lásd
+// editor.js "Boxutca rajzolása" mód, sim/race.js distanceToPitLane), UGYANAZZAL
+// az aszfalt-anyaggal (`roadMat`, a hívó már betöltötte a textúrát), mint a fő
+// pálya-szalag. Minden EGYES szakaszt (points[i]→points[i+1]) egy KÜLÖN,
+// SAJÁT irányú négyszög ad — nincs "illesztő" geometria a töréspontokon (mint
+// a fő pálya buildRibbonVertexData-jában), mert a boxutca szándékosan
+// enyhén ívelt (nem éles kanyarú) — a szomszédos szakaszok téglalapjai
+// egyszerűen kicsit átfednek/résznyire elválnak a töréspontnál, ami ekkora
+// szélesség/szegmenshossz mellett gyakorlatilag észrevehetetlen.
+function buildPitLaneRibbon(pitLanePoints, roadMat) {
+  const group = new THREE.Group();
+  // A kijelölt boxhely (isBox:true) NEM az útvonal RÉSZE — lásd sim/race.js
+  // splitPitLane -, a szalag csak a valódi útvonal-pontok közt épül.
+  const { path } = splitPitLane(pitLanePoints);
+  if (path.length < 2) return group;
+  const half = RACE.pitStop.laneWidth / 2;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i];
+    const b = path[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.z - a.z;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+    const dir = Math.atan2(dy, dx);
+    const geo = new THREE.PlaneGeometry(len, half * 2);
+    const mesh = new THREE.Mesh(geo, roadMat);
+    mesh.rotation.x = -Math.PI / 2; // lay-flat (lokális tér, a yaw ELŐTT)
+    const yawGroup = new THREE.Group();
+    yawGroup.rotation.y = -dir; // a szakasz iránya a világ X-tengelyhez képest
+    yawGroup.add(mesh);
+    yawGroup.position.set((a.x + b.x) / 2, 0.06, (a.z + b.z) / 2); // ua. magasság, mint a fő aszfalt-szalag
+    mesh.receiveShadow = true;
+    group.add(yawGroup);
+  }
+  return group;
+}
+
+// A boxhelyhez legközelebbi útvonal-SZAKASZ iránya (radián) — a téglalap
+// ezzel az iránnyal forog, hogy úgy nézzen ki, mintha a boxutcára
+// "festették" volna. Ha nincs (elég hosszú) útvonal, 0. UGYANAZ a logika,
+// mint editor.js laneDirectionNear-ja (a szerkesztő-előnézetnek pontosan
+// ugyanígy kell kinéznie, mint a végleges 3D-nek).
+function laneDirectionNear(pos, path) {
+  if (path.length < 2) return 0;
+  let bestDist = Infinity;
+  let bestDir = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i];
+    const b = path[i + 1];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lenSq = dx * dx + dz * dz;
+    const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((pos.x - a.x) * dx + (pos.z - a.z) * dz) / lenSq));
+    const cx = a.x + t * dx;
+    const cz = a.z + t * dz;
+    const d = Math.hypot(pos.x - cx, pos.z - cz);
+    if (d < bestDist) {
+      bestDist = d;
+      bestDir = Math.atan2(dz, dx);
+    }
+  }
+  return bestDir;
+}
+
+// A boxhelyek FEHÉR, üres KERETE (nincs kitöltés) — MINDEGYIK boxhely (nem
+// csak a sajátunk) mindig látszik, mint egy valódi festett box-jelölés
+// vonala. A JÁTÉKOS SAJÁT boxhelyének kiemelését (arany fény + felirat)
+// KÜLÖN a render3d/pitMarker.js adja hozzá, erre a statikus, mindig látható
+// rétegre ráülve. UGYANAZT a rotateX(-PI/2) + rotation.y=-dir mintát
+// használja, mint a buildPitLaneRibbon szegmensei: a PlaneGeometry ELSŐ
+// paramétere ezután a HALADÁSI irányban (hosszában), a MÁSODIK a lane-en
+// belül, arra MERŐLEGESEN (keresztben) fut — ezért a hosszú oldal a
+// boxDepth, a keskeny (jobb oldalig érő) oldal a boxWidth.
+function buildPitBoxMarkers(pitLanePoints) {
+  const group = new THREE.Group();
+  const { path, boxes } = splitPitLane(pitLanePoints);
+  if (boxes.length === 0) return group;
+  const forwardLen = RACE.pitStop.boxDepth; // hosszában
+  const lateralLen = RACE.pitStop.boxWidth; // keresztben (csak a jobb oldalig)
+  const mat = new THREE.LineBasicMaterial({ color: 0xffffff });
+  for (const b of boxes) {
+    const dir = laneDirectionNear(b, path);
+    const plane = new THREE.PlaneGeometry(forwardLen, lateralLen);
+    plane.rotateX(-Math.PI / 2);
+    const edges = new THREE.EdgesGeometry(plane);
+    const line = new THREE.LineSegments(edges, mat);
+    line.rotation.y = -dir;
+    line.position.set(b.x, 0.065, b.z); // a fő aszfalt (0.06) fölé, ne z-fighteljen
+    group.add(line);
+  }
+  return group;
+}
+
 // `track`: a trackFactory.js/trackSpline.js `center[]`-jét tartalmazó objektum
 // (ugyanaz az alak, mint amit sim/track.js exportál) — a `center[i].width`
 // (ha van) SZAKASZONKÉNT felülírja ezt. `roadHalf`: méterben (lásd config.js
 // TRACK) — csak FALLBACK azokra a pontokra, amelyeknek nincs saját width-je
 // (régebbi, e funkció előtt mentett pályák). A szegély szélessége (curb) NEM
-// paraméter — lásd VISUAL_CURB_WIDTH lent.
-export async function loadTrackRibbon(scene, track, roadHalf) {
+// paraméter — lásd VISUAL_CURB_WIDTH lent. `pitLanePoints` (opcionális):
+// trackStorage.js loadPitLane() eredménye — ha van (≥2 pont), a boxutca-
+// útvonal felülete is lerakódik, UGYANAZZAL az aszfalt-textúrával.
+export async function loadTrackRibbon(scene, track, roadHalf, pitLanePoints) {
   const { center } = track;
 
   // Aszfalt-szalag — FrontSide (NEM DoubleSide!): a winding (lásd
@@ -334,6 +430,8 @@ export async function loadTrackRibbon(scene, track, roadHalf) {
     roadMat.map = asphaltTex;
     roadMat.needsUpdate = true;
   }
+
+  if (pitLanePoints && pitLanePoints.length >= 2) scene.add(buildPitLaneRibbon(pitLanePoints, roadMat));
 
   // Szegély — keskeny, FEHÉR sáv mindkét oldalon (textúrázott vakolat-minta a
   // Kenney-csempés pályák vékony fehér szegély-festéséhez hasonló hatásért).
@@ -371,6 +469,11 @@ export async function loadTrackRibbon(scene, track, roadHalf) {
   // szerint túl rossz volt vizuálisan, egyelőre elhagyjuk.
   const startHalf = Number.isFinite(center[0].width) ? center[0].width / 2 : roadHalf;
   addStartStripe(scene, center[0], startHalf, curbTex);
+
+  // Boxhely-jelölések — UGYANAZZAL a szegély-textúrával, mindig láthatóak
+  // (lásd buildPitBoxMarkers megjegyzését); a SAJÁT boxhely arany kiemelését
+  // külön a render3d/pitMarker.js adja hozzá.
+  if (pitLanePoints && pitLanePoints.length >= 2) scene.add(buildPitBoxMarkers(pitLanePoints));
 
   return { roadMesh, curbMesh };
 }

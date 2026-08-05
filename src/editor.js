@@ -27,11 +27,12 @@ import {
   clearCustomLayout,
   loadCustomLayout,
   loadCustomDecorations,
+  loadPitLane,
   setActiveTrack,
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
-import { DECORATION_TYPES, TRACK } from './config.js';
+import { DECORATION_TYPES, TRACK, RACE } from './config.js';
 import { isDevMode } from './devmode.js';
 import { isSplineLayout } from './sim/trackFactory.js';
 import { sampleSpline } from './sim/trackSpline.js';
@@ -53,6 +54,10 @@ const CLOSE_RADIUS_PX = 16; // az első pont közelébe kattintva zár a hurok
 const CURVE_HIT_RADIUS_PX = 10; // a görbe/akkord közelébe kattintva szúr be pontot
 const REMOVE_RADIUS_M = 3; // egy meglévő dekoráció közelébe kattintva törli (csak ha nincs ismert mérete)
 const SNAP_DISTANCE_M = 3; // egy `snap` típusú elem élétől ennyin belül illeszkedik rá lerakáskor
+// Ennyin belül a főút középvonalától egy boxutca-pont PONTOSAN arra a
+// középvonal-pontra kerül (nem csak közelébe) — így a boxutca-útvonal és a
+// főút fizikailag/vizuálisan biztosan összeér (lásd snapToTrackCenterline).
+const PIT_LANE_SNAP_M = 20;
 const WIDTH_STEP = 2; // m — egy görgő-kattanás ennyivel változtatja egy pont szélességét
 const DEFAULT_WIDTH = TRACK.tile; // m — új kontrollpont alap-szélessége
 
@@ -68,6 +73,8 @@ const saveBtn = document.getElementById('saveBtn');
 const resetDefaultBtn = document.getElementById('resetDefaultBtn');
 const modeTrackBtn = document.getElementById('modeTrackBtn');
 const modeDecorBtn = document.getElementById('modeDecorBtn');
+const modePitLaneBtn = document.getElementById('modePitLaneBtn');
+const modePitBoxBtn = document.getElementById('modePitBoxBtn');
 const instructionsEl = document.getElementById('instructions');
 const trackLegendEl = document.getElementById('trackLegend');
 const decorControlsEl = document.getElementById('decorControls');
@@ -95,7 +102,25 @@ const decorTypeKeys = Object.keys(DECORATION_TYPES);
 let activeDecorType = decorTypeKeys[0];
 let activeRot = 0;
 
-let mode = 'track'; // 'track' | 'decor'
+// Boxutca-útvonal — {x,z}[] VILÁG-méterben, SZABADON rajzolt, NYITOTT vonal
+// (nincs "zárás", mint a fő pályánál — lásd a "pitlane" módot lent). Egyenes
+// szakaszokból áll (nincs Catmull-Rom simítás, mint a fő pályánál — a
+// boxutcának nem kell éles kanyar-validáció, egy pár pontos, enyhén ívelt
+// vonal bőven elég, és így a renderelés/fizika is jóval egyszerűbb marad,
+// lásd sim/race.js distanceToPitLane). A tényleges szélesség egységes
+// (RACE.pitStop.laneWidth), nincs pontonkénti állítás.
+const pitLanePoints = [];
+
+// A KIJELÖLT boxhelyek — {x,z}[] VILÁG-méterben (legfeljebb RACE.pitStop.
+// maxBoxes, egy multiplayer játékosonként, lásd sim/race.js pitBoxForSlot).
+// KÜLÖN áll a pitLanePoints-tól (nem eleme az útvonal-tömbnek szerkesztés
+// közben — csak MENTÉSKOR/BETÖLTÉSKOR fésülődik egybe egyetlen tömbbé, lásd
+// pitLaneForSave/loadLayoutIntoEditor), mert így a boxutca ALAKJÁT rajzoló/
+// mutató kód (render, undo, mentés-hossz) egyszerűen csak a pitLanePoints
+// tiszta útvonal-tömbjét látja, nem kell mindenhol kiszűrnie a boxhelyeket.
+const pitBoxPoints = [];
+
+let mode = 'track'; // 'track' | 'decor' | 'pitlane' | 'pitbox'
 let problemPos = null; // { x, z } — az aktuális validációs hiba helye a vásznon (ha van)
 
 // --- Koordináta-átváltás (világ-méter ⇄ vászon-pixel) ---
@@ -117,6 +142,22 @@ function pixelToScreen(clientX, clientY) {
 function findPointNear(screenPt) {
   for (let i = 0; i < points.length; i++) {
     const s = worldToScreen(points[i]);
+    if (Math.hypot(s.x - screenPt.x, s.y - screenPt.y) < HIT_RADIUS_PX) return i;
+  }
+  return -1;
+}
+
+function findPitLanePointNear(screenPt) {
+  for (let i = 0; i < pitLanePoints.length; i++) {
+    const s = worldToScreen(pitLanePoints[i]);
+    if (Math.hypot(s.x - screenPt.x, s.y - screenPt.y) < HIT_RADIUS_PX) return i;
+  }
+  return -1;
+}
+
+function findPitBoxNear(screenPt) {
+  for (let i = 0; i < pitBoxPoints.length; i++) {
+    const s = worldToScreen(pitBoxPoints[i]);
     if (Math.hypot(s.x - screenPt.x, s.y - screenPt.y) < HIT_RADIUS_PX) return i;
   }
   return -1;
@@ -282,6 +323,104 @@ function computeSnap(worldPt, type, rot) {
   };
 }
 
+// Egy boxutca-pont AUTOMATIKUS illesztése a főút középvonalához — ha a
+// kattintás PIT_LANE_SNAP_M-en belül esik a legközelebbi útponthoz, PONTOSAN
+// arra a pontra kerül (nem csak közelébe), hogy a boxutca-útvonal és a főút
+// fizikailag/vizuálisan biztosan összeérjen (lásd sim/race.js
+// withPitLaneOffRoad — mindkettő burkolatnak számít, tehát a köztük lévő rés
+// nulla, ha a végpontok egybeesnek). Ha nincs (lezárt) főút a közelben, a
+// nyers kattintás-pozíció marad.
+function snapToTrackCenterline(worldPt) {
+  if (!closed || points.length < MIN_CONTROL_POINTS) return worldPt;
+  let sampled;
+  try {
+    sampled = sampleSpline(points, 2);
+  } catch {
+    return worldPt;
+  }
+  let best = null;
+  let bestDist = PIT_LANE_SNAP_M;
+  for (const p of sampled) {
+    const d = Math.hypot(worldPt.x - p.x, worldPt.z - p.z);
+    if (d < bestDist) {
+      bestDist = d;
+      best = p;
+    }
+  }
+  return best ? { x: best.x, z: best.z } : worldPt;
+}
+
+// A boxhely PONTOS illesztése a MEGRAJZOLT boxutca-útvonal legközelebbi
+// pontjára (nem csak a kontrollpontokra — a szakaszok MENTÉN bárhová, hogy a
+// boxhely a lane bármely pontjára tehető legyen, nem csak a törésekre). A
+// visszaadott `dir` a szakasz haladási iránya (radián) — ebből számolja a
+// hívó, merre van a "jobb oldal" (lásd offsetToRightSide). null-t ad, ha még
+// nincs (legalább 2 pontos) boxutca-útvonal.
+function snapToPitLane(worldPt) {
+  if (pitLanePoints.length < 2) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < pitLanePoints.length - 1; i++) {
+    const a = pitLanePoints[i];
+    const b = pitLanePoints[i + 1];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lenSq = dx * dx + dz * dz;
+    const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((worldPt.x - a.x) * dx + (worldPt.z - a.z) * dz) / lenSq));
+    const cx = a.x + t * dx;
+    const cz = a.z + t * dz;
+    const d = Math.hypot(worldPt.x - cx, worldPt.z - cz);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { x: cx, z: cz, dir: Math.atan2(dz, dx) };
+    }
+  }
+  return best;
+}
+
+// A boxutca-útvonal JOBB OLDALÁRA tolja a pontot (mint egy valódi boxutca
+// falhoz simuló parkolóhelye) — "jobb" a HALADÁSI IRÁNYHOZ (dir) képest,
+// UGYANAZZAL a forgatással, mint amit sim/car.js rightNormal-ja a fizikában
+// használ (jobb = a haladási irány -90°-os elforgatása). Az eltolás mértéke
+// pont annyi, hogy a boxhely a lane szélén, de MÉG belül üljön (nem lóg ki).
+// A megadott ponthoz legközelebbi útvonal-SZAKASZ iránya (radián) — a
+// boxhely-rács ezzel forog, hogy úgy nézzen ki, mintha a boxutcára
+// "festették" volna. Ugyanaz a logika, mint render3d/pitMarker.js-é.
+function laneDirectionNear(pos) {
+  if (pitLanePoints.length < 2) return 0;
+  let bestDist = Infinity;
+  let bestDir = 0;
+  for (let i = 0; i < pitLanePoints.length - 1; i++) {
+    const a = pitLanePoints[i];
+    const b = pitLanePoints[i + 1];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lenSq = dx * dx + dz * dz;
+    const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((pos.x - a.x) * dx + (pos.z - a.z) * dz) / lenSq));
+    const cx = a.x + t * dx;
+    const cz = a.z + t * dz;
+    const d = Math.hypot(pos.x - cx, pos.z - cz);
+    if (d < bestDist) { bestDist = d; bestDir = Math.atan2(dz, dx); }
+  }
+  return bestDir;
+}
+
+function offsetToRightSide(pos, dir) {
+  // Ugyanaz a jobb-vektor, mint sim/car.js rightNormal-ja: a testet R(dir)-vel
+  // elforgatva a helyi (0,1) "jobb" világ-irányba (-sin(dir), cos(dir)) esik
+  // (fizika x,y ⇔ világ x,z, lásd CLAUDE.md 2.5D leképezés).
+  const rightX = -Math.sin(dir);
+  const rightZ = Math.cos(dir);
+  // A boxhely BELSŐ (középvonal felőli) éle a középvonalon TÚL, a lane JOBB
+  // felében kezdődjön — ne csak feléje toljuk el. Enélkül (pl. korábban:
+  // laneWidth/2 - boxWidth/2) egy széles boxhely még mindig átlógott a
+  // középvonalon, és úgy nézett ki, mintha "középen" lenne, nem a jobb
+  // oldalon. A +0.3 m egy apró rés a középvonaltól, hogy vizuálisan is
+  // egyértelműen elváljon.
+  const offset = RACE.pitStop.boxWidth / 2 + 0.3;
+  return { x: pos.x + rightX * offset, z: pos.z + rightZ * offset };
+}
+
 function nearestChordSegment(worldPt) {
   const n = points.length;
   let best = 0;
@@ -302,14 +441,25 @@ function nearestChordSegment(worldPt) {
 
 function setMode(newMode) {
   mode = newMode;
-  const isTrack = mode === 'track';
-  modeTrackBtn.classList.toggle('active', isTrack);
-  modeDecorBtn.classList.toggle('active', !isTrack);
-  trackLegendEl.style.display = isTrack ? 'flex' : 'none';
-  decorControlsEl.style.display = isTrack ? 'none' : 'block';
-  instructionsEl.textContent = isTrack
-    ? 'Kattints bárhova a pálya rajzolásának megkezdéséhez, majd folytasd további pontokkal — a görbe automatikusan simán illeszkedik közéjük. Legalább 4 pont után kattints vissza az első (arany) pontra a hurok zárásához. Zárás után: húzd a pontokat az áthelyezéshez, kattints a görbe közelébe új pont beszúrásához, jobb-kattints egy pontra a törléséhez, görgess egy pont fölött a szélességének (a "Xm" felirat) állításához, vagy dupla kattints egy pontra, hogy éles sarokká (négyzet) váltson — így sikánok, hajtűk is rajzolhatók.'
-    : 'Válaszd ki az elemet lent (a neve mellett a valós mérete is látszik, amint betöltődött), állítsd be a "Forgatás" gombbal az irányát (a sárga nyíl + "E" felirat mutatja az elejét), majd kattints a pálya bármely pontjára a lerakáshoz. A fal/kerítés/garázs/iroda/lelátó/terelőkorlát egy MÁSIK ilyen elem éléhez közel automatikusan a PONTOS illesztett helyre kerül (rés/átfedés nélkül) — a FORGATÁSA mindig a beállított marad, tehát derékszögű sarok is építhető (forgasd 90°-kal, majd kattints a szomszéd sarkához). Máshova kattintva szabadon kerül le. Egy meglévő elemre (a téglalapján belül) kattintva eltávolítod.';
+  modeTrackBtn.classList.toggle('active', mode === 'track');
+  modeDecorBtn.classList.toggle('active', mode === 'decor');
+  if (modePitLaneBtn) modePitLaneBtn.classList.toggle('active', mode === 'pitlane');
+  if (modePitBoxBtn) modePitBoxBtn.classList.toggle('active', mode === 'pitbox');
+  trackLegendEl.style.display = mode === 'track' ? 'flex' : 'none';
+  decorControlsEl.style.display = mode === 'decor' ? 'block' : 'none';
+  if (mode === 'track') {
+    instructionsEl.textContent =
+      'Kattints bárhova a pálya rajzolásának megkezdéséhez, majd folytasd további pontokkal — a görbe automatikusan simán illeszkedik közéjük. Legalább 4 pont után kattints vissza az első (arany) pontra a hurok zárásához. Zárás után: húzd a pontokat az áthelyezéshez, kattints a görbe közelébe új pont beszúrásához, jobb-kattints egy pontra a törléséhez, görgess egy pont fölött a szélességének (a "Xm" felirat) állításához, vagy dupla kattints egy pontra, hogy éles sarokká (négyzet) váltson — így sikánok, hajtűk is rajzolhatók.';
+  } else if (mode === 'decor') {
+    instructionsEl.textContent =
+      'Válaszd ki az elemet lent (a neve mellett a valós mérete is látszik, amint betöltődött), állítsd be a "Forgatás" gombbal az irányát (a sárga nyíl + "E" felirat mutatja az elejét), majd kattints a pálya bármely pontjára a lerakáshoz. A fal/kerítés/garázs/iroda/lelátó/terelőkorlát egy MÁSIK ilyen elem éléhez közel automatikusan a PONTOS illesztett helyre kerül (rés/átfedés nélkül) — a FORGATÁSA mindig a beállított marad, tehát derékszögű sarok is építhető (forgasd 90°-kal, majd kattints a szomszéd sarkához). Máshova kattintva szabadon kerül le. Egy meglévő elemre (a téglalapján belül) kattintva eltávolítod.';
+  } else if (mode === 'pitlane') {
+    instructionsEl.textContent =
+      'Kattints a pálya mentén, ahol a boxutcát szeretnéd — nyitott vonalat rajzolsz, NEM kell zárni. Ha a kattintás a főút közelébe esik, a pont automatikusan pontosan az útra illeszkedik (nincs fű-rés). Legalább 2 pont kell. Jobb-kattintással törölhetsz egy pontot.';
+  } else {
+    instructionsEl.textContent =
+      `Kattints a MEGRAJZOLT boxutcára (előbb rajzold meg "Boxutca" módban), hogy kijelölj egy PONTOS helyet, ahol meg kell állni a kerékcseréhez — a kattintás a boxutca legközelebbi pontjára illeszkedik. Legfeljebb ${RACE.pitStop.maxBoxes} boxhely rakható le (multiplayerben minden játékosnak a SAJÁTJA jut, sorrendben — 1. hely = 1. beszálló, stb.). Egy MEGLÉVŐ boxhelyre kattintva törlöd.`;
+  }
   hover = null;
   render();
   updateStatus();
@@ -317,6 +467,8 @@ function setMode(newMode) {
 
 modeTrackBtn.addEventListener('click', () => setMode('track'));
 modeDecorBtn.addEventListener('click', () => setMode('decor'));
+if (modePitLaneBtn) modePitLaneBtn.addEventListener('click', () => setMode('pitlane'));
+if (modePitBoxBtn) modePitBoxBtn.addEventListener('click', () => setMode('pitbox'));
 
 // Dekoráció-paletta felépítése a config.js DECORATION_TYPES alapján, réteg
 // szerint csoportosítva (a réteg-fogalom csak vizuális csoportosítás — a
@@ -378,6 +530,52 @@ rotateBtn.addEventListener('click', () => {
 // --- Interakció ---
 
 canvas.addEventListener('mousedown', (e) => {
+  if (mode === 'pitlane') {
+    const screenPt = pixelToScreen(e.clientX, e.clientY);
+    const worldPt = screenToWorld(screenPt.x, screenPt.y);
+    // Egy MEGLÉVŐ boxutca-ponton kattintva húzhatóvá tesszük (mint a fő
+    // pályánál) — a mozgatás a mousemove-ban folytatódik (lásd dragIndex).
+    const hitIdx = findPitLanePointNear(screenPt);
+    if (hitIdx !== -1) {
+      dragIndex = hitIdx;
+      return;
+    }
+    pitLanePoints.push(snapToTrackCenterline(worldPt));
+    render();
+    updateStatus();
+    return;
+  }
+  if (mode === 'pitbox') {
+    const screenPt = pixelToScreen(e.clientX, e.clientY);
+    // Egy MEGLÉVŐ boxhelyre kattintva eltávolítjuk (mint a dekorációknál) —
+    // így nem kell külön "törlés" módra váltani egy tévesen lerakott boxhely
+    // miatt.
+    const hitIdx = findPitBoxNear(screenPt);
+    if (hitIdx !== -1) {
+      pitBoxPoints.splice(hitIdx, 1);
+      render();
+      updateStatus();
+      return;
+    }
+    if (pitBoxPoints.length >= RACE.pitStop.maxBoxes) {
+      statusEl.textContent = `Elérted a boxhelyek felső korlátját (${RACE.pitStop.maxBoxes}) — előbb törölj egyet.`;
+      statusEl.classList.remove('closed');
+      return;
+    }
+    const worldPt = screenToWorld(screenPt.x, screenPt.y);
+    const snapped = snapToPitLane(worldPt);
+    if (!snapped) {
+      statusEl.textContent = 'Előbb rajzold meg a boxutcát ("Boxutca" mód, legalább 2 pont).';
+      statusEl.classList.remove('closed');
+      return;
+    }
+    // A boxutca JOBB oldalára toljuk (mint egy valódi, falhoz simuló
+    // parkolóhely) — lásd offsetToRightSide.
+    pitBoxPoints.push(offsetToRightSide(snapped, snapped.dir));
+    render();
+    updateStatus();
+    return;
+  }
   if (mode !== 'track') return;
   const screenPt = pixelToScreen(e.clientX, e.clientY);
   const worldPt = screenToWorld(screenPt.x, screenPt.y);
@@ -435,6 +633,12 @@ canvas.addEventListener('mousemove', (e) => {
     updateStatus();
     return;
   }
+  if (mode === 'pitlane' && dragIndex !== null) {
+    pitLanePoints[dragIndex] = snapToTrackCenterline(worldPt);
+    render();
+    updateStatus();
+    return;
+  }
   hover = { screenPt, worldPt };
   render();
 });
@@ -457,6 +661,24 @@ window.addEventListener('mouseup', () => {
 // pontnak meg kell maradnia.
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
+  if (mode === 'pitlane') {
+    const screenPt = pixelToScreen(e.clientX, e.clientY);
+    const hitIdx = findPitLanePointNear(screenPt);
+    if (hitIdx === -1) return;
+    pitLanePoints.splice(hitIdx, 1);
+    render();
+    updateStatus();
+    return;
+  }
+  if (mode === 'pitbox') {
+    const screenPt = pixelToScreen(e.clientX, e.clientY);
+    const hitIdx = findPitBoxNear(screenPt);
+    if (hitIdx === -1) return;
+    pitBoxPoints.splice(hitIdx, 1);
+    render();
+    updateStatus();
+    return;
+  }
   if (mode !== 'track') return;
   const screenPt = pixelToScreen(e.clientX, e.clientY);
   const hitIdx = findPointNear(screenPt);
@@ -530,6 +752,10 @@ canvas.addEventListener('click', (e) => {
 undoBtn.addEventListener('click', () => {
   if (mode === 'decor') {
     decorations.pop();
+  } else if (mode === 'pitlane') {
+    pitLanePoints.pop();
+  } else if (mode === 'pitbox') {
+    pitBoxPoints.pop();
   } else if (closed) {
     closed = false;
   } else {
@@ -543,6 +769,8 @@ clearBtn.addEventListener('click', () => {
   points.length = 0;
   closed = false;
   decorations.length = 0;
+  pitLanePoints.length = 0;
+  pitBoxPoints.length = 0;
   render();
   updateStatus();
 });
@@ -572,20 +800,33 @@ function decorationsForSave() {
   }));
 }
 
+// A boxutca-útvonal mentésre kész alakja — VILÁG-méterben, akárcsak a layout
+// (nincs dgx/dgy grid-skálázás, mint a dekorációknál), mert sim/race.js
+// distanceToPitLane közvetlenül {x,z} világ-koordinátákat vár. A kijelölt
+// boxhelyeket plusz pontokként fűzzük a tömb VÉGÉRE, isBox:true jelöléssel
+// (lásd sim/race.js splitPitLane — ezek NEM az útvonal RÉSZEI, a
+// szerkesztőben ezért is külön állapotban tartjuk, lásd pitBoxPoints).
+function pitLaneForSave() {
+  const path = pitLanePoints.map((p) => ({ x: p.x, z: p.z }));
+  const boxes = pitBoxPoints.map((p) => ({ x: p.x, z: p.z, isBox: true }));
+  return [...path, ...boxes];
+}
+
 saveBtn.addEventListener('click', async () => {
   const layout = currentLayout();
   if (!layout) return;
   const relDecorations = decorationsForSave();
+  const relPitLane = pitLaneForSave();
   const name = trackNameInput.value.trim();
   // Ez a pálya induljon a játékban (lokális átadás a config.js felé). Nincs
   // külön "editor-nézet" — a layout maga a WYSIWYG forrás (lásd fenti komment).
-  setActiveTrack(name, layout, relDecorations);
+  setActiveTrack(name, layout, relDecorations, relPitLane);
   // Ha van neve, GLOBÁLISAN is elmentjük a szerverre (minden gépről elérhető).
   // Ha a szerver nem elérhető, akkor is elindul lokálisan — csak nem lesz globális.
   if (name) {
     saveBtn.disabled = true;
     try {
-      await apiSaveTrack({ name, layout, decorations: relDecorations });
+      await apiSaveTrack({ name, layout, decorations: relDecorations, pitLane: relPitLane });
     } catch (e) {
       statusEl.textContent = `⚠️ Globális mentés sikertelen (${e.message}). Lokálisan indítom.`;
       statusEl.classList.remove('closed');
@@ -599,6 +840,8 @@ resetDefaultBtn.addEventListener('click', () => {
   points.length = 0;
   closed = false;
   decorations.length = 0;
+  pitLanePoints.length = 0;
+  pitBoxPoints.length = 0;
   trackNameInput.value = '';
   render();
   renderSavedTracksList();
@@ -631,7 +874,13 @@ function updateStatus() {
     return;
   }
   const decorNote = decorations.length ? `, ${decorations.length} dekoráció` : '';
-  statusEl.textContent = `Kész! ${points.length} kontrollpont, érvényes zárt pálya${decorNote}.`;
+  let pitNote = '';
+  if (pitLanePoints.length >= 2 && pitBoxPoints.length > 0) {
+    pitNote = `, boxutca + ${pitBoxPoints.length} boxhely kész`;
+  } else if (pitLanePoints.length >= 2) {
+    pitNote = ', boxutca kész (⚠️ nincs boxhely kijelölve)';
+  }
+  statusEl.textContent = `Kész! ${points.length} kontrollpont, érvényes zárt pálya${decorNote}${pitNote}.`;
   statusEl.classList.add('closed');
   saveBtn.disabled = false;
 }
@@ -819,6 +1068,119 @@ function render() {
     drawFacingArrow(d, '#f2c14e');
   }
 
+  // Boxutca-útvonal: NYITOTT, egyenes szakaszos vonal (nincs Catmull-Rom
+  // simítás, mint a fő pályánál — lásd a pitLanePoints deklarációját), arany
+  // színnel, a tényleges szélességét (RACE.pitStop.laneWidth) áttetsző sávval
+  // jelezve, hogy a szerkesztőben is lásd, mekkora terület lesz burkolat.
+  if (pitLanePoints.length >= 1) {
+    if (pitLanePoints.length >= 2) {
+      const halfPx = (RACE.pitStop.laneWidth / 2) * PX_PER_METER;
+      ctx.beginPath();
+      for (let i = 0; i < pitLanePoints.length - 1; i++) {
+        const a = pitLanePoints[i];
+        const b = pitLanePoints[i + 1];
+        const dir = Math.atan2(b.z - a.z, b.x - a.x);
+        const sa = worldToScreen(a);
+        const sb = worldToScreen(b);
+        const ox = -Math.sin(dir) * halfPx;
+        const oy = Math.cos(dir) * halfPx;
+        ctx.moveTo(sa.x - ox, sa.y - oy);
+        ctx.lineTo(sb.x - ox, sb.y - oy);
+        ctx.lineTo(sb.x + ox, sb.y + oy);
+        ctx.lineTo(sa.x + ox, sa.y + oy);
+        ctx.closePath();
+      }
+      ctx.fillStyle = 'rgba(212,169,78,0.28)';
+      ctx.fill();
+    }
+    ctx.strokeStyle = '#d4a94e';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pitLanePoints.forEach((p, i) => {
+      const s = worldToScreen(p);
+      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+    });
+    ctx.stroke();
+    pitLanePoints.forEach((p) => {
+      const s = worldToScreen(p);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#d4a94e';
+      ctx.fill();
+      ctx.strokeStyle = '#12141a';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  // Boxutca-mód hover-előnézet: a KÖVETKEZŐ pont pozíciója (a főúthoz illesztve,
+  // ha elég közel van, lásd snapToTrackCenterline) — halvány jelölő, mielőtt
+  // ténylegesen kattintanál.
+  if (hover && mode === 'pitlane' && dragIndex === null) {
+    const snapped = snapToTrackCenterline(hover.worldPt);
+    const s = worldToScreen(snapped);
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#f2c14e';
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Egy boxhely "rács" jelölése — valódi versenypályához hasonló, festett
+  // doboz (külső keret + 2 harmadoló vonal), a lane helyi irányához igazítva.
+  function drawBoxGrid(pos, label) {
+    const dir = laneDirectionNear(pos);
+    // toScreen(lx, lz): lx = HALADÁSI irányban (hosszában), lz = arra
+    // MERŐLEGESEN (jobb oldal felé) — ezért a hosszú oldal a boxDepth, a
+    // keskeny (lane-en belüli) oldal a boxWidth (VILÁG-méterben).
+    const hw = RACE.pitStop.boxDepth / 2; // hosszában
+    const hd = RACE.pitStop.boxWidth / 2; // keresztben
+    const s = worldToScreen(pos);
+    // worldToScreen egyenes (nem tükrözött) skálázás — screenX=worldX,
+    // screenY=worldZ —, ezért a világ-térbeli forgatás UGYANÚGY, tükrözés
+    // nélkül vetül a vászonra.
+    const cos = Math.cos(dir);
+    const sin = Math.sin(dir);
+    const toScreen = (lx, lz) => ({ x: s.x + (lx * cos - lz * sin) * PX_PER_METER, y: s.y + (lx * sin + lz * cos) * PX_PER_METER });
+    // Egyszerű téglalap — csak a külső keret (nincs belső osztóvonal).
+    const local = [
+      [[-hw, -hd], [hw, -hd]], [[hw, -hd], [hw, hd]], [[hw, hd], [-hw, hd]], [[-hw, hd], [-hw, -hd]],
+    ];
+    ctx.strokeStyle = '#e05a5a';
+    ctx.lineWidth = 2;
+    for (const [p1, p2] of local) {
+      const a = toScreen(p1[0], p1[1]);
+      const b = toScreen(p2[0], p2[1]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    if (label) {
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#e05a5a';
+      ctx.fillText(label, s.x, s.y);
+    }
+  }
+
+  // A kijelölt BOXHELYEK — mindegyik egy egyszerű téglalap, sorszámmal (hogy
+  // multiplayerben lásd, melyik játékosnak melyik jut, lásd sim/race.js
+  // pitBoxForSlot: az 1. jelölt hely a slotIndex=0 játékosé, stb.).
+  pitBoxPoints.forEach((p, i) => drawBoxGrid(p, String(i + 1)));
+
+  // Boxhely-mód hover-előnézet: a legközelebbi pont a MEGRAJZOLT boxutcán.
+  if (hover && mode === 'pitbox' && pitBoxPoints.length < RACE.pitStop.maxBoxes) {
+    const snapped = snapToPitLane(hover.worldPt);
+    if (snapped) {
+      ctx.globalAlpha = 0.6;
+      drawBoxGrid(offsetToRightSide(snapped, snapped.dir), null);
+      ctx.globalAlpha = 1;
+    }
+  }
+
   // Hover-visszajelzés (decor mód): törlés-célpont (piros keret/gyűrű) / lerakás-
   // előnézet — ha az aktív típus `snap`-elhető és van elég közeli illeszthető
   // szomszéd, a PONTOS illesztett helyen/forgással mutatja (sárga téglalap +
@@ -967,10 +1329,19 @@ function layoutToPath(layout) {
 // TRACK.tile — pontosan az a világ-pozíció, amit eddig a trackbuilder.js épített),
 // így a pálya alakja nem változik, csak mostantól szabadon szerkeszthető ponttá
 // alakul. ÚJ (szabadvonalas) formátumnál a pontok közvetlenül betöltődnek.
-function loadLayoutIntoEditor(savedLayout, savedDecorations) {
+function loadLayoutIntoEditor(savedLayout, savedDecorations, savedPitLane) {
   points.length = 0;
   decorations.length = 0;
+  pitLanePoints.length = 0;
+  pitBoxPoints.length = 0;
   closed = false;
+  // A boxhely-jelölők (isBox:true) KÜLÖN kerülnek ki a tömbből — lásd
+  // pitBoxPoints/pitLaneForSave megjegyzését.
+  for (const p of savedPitLane || []) {
+    if (!Number.isFinite(p?.x) || !Number.isFinite(p?.z)) continue;
+    if (p.isBox) pitBoxPoints.push({ x: p.x, z: p.z });
+    else pitLanePoints.push({ x: p.x, z: p.z });
+  }
   if (!savedLayout) return;
 
   if (isSplineLayout(savedLayout)) {
@@ -1037,9 +1408,9 @@ async function renderSavedTracksList() {
     loadBtn.addEventListener('click', async () => {
       try {
         const entry = await apiGetTrack(t.id);
-        loadLayoutIntoEditor(entry.layout, entry.decorations);
+        loadLayoutIntoEditor(entry.layout, entry.decorations, entry.pitLane);
         trackNameInput.value = entry.name;
-        setActiveTrack(entry.name, entry.layout, entry.decorations);
+        setActiveTrack(entry.name, entry.layout, entry.decorations, entry.pitLane);
         render();
         updateStatus();
         renderSavedTracksList();
@@ -1092,10 +1463,11 @@ saveAsBtn.addEventListener('click', async () => {
     return;
   }
   const relDecorations = decorationsForSave();
+  const relPitLane = pitLaneForSave();
   saveAsBtn.disabled = true;
   try {
-    await apiSaveTrack({ name, layout, decorations: relDecorations });
-    setActiveTrack(name, layout, relDecorations);
+    await apiSaveTrack({ name, layout, decorations: relDecorations, pitLane: relPitLane });
+    setActiveTrack(name, layout, relDecorations, relPitLane);
     renderSavedTracksList();
     statusEl.textContent = `✅ "${name}" elmentve globálisan (minden gépről elérhető).`;
     statusEl.classList.add('closed');
@@ -1109,7 +1481,7 @@ saveAsBtn.addEventListener('click', async () => {
 
 // Induláskor: az utoljára aktív pálya betöltése szerkesztésre (ne kelljen mindig
 // előről kezdeni), és a globális katalógus lekérése a szerverről.
-loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations());
+loadLayoutIntoEditor(loadCustomLayout(), loadCustomDecorations(), loadPitLane());
 const activeNameOnLoad = getActiveTrackName();
 if (activeNameOnLoad) trackNameInput.value = activeNameOnLoad;
 renderSavedTracksList();
@@ -1122,11 +1494,14 @@ if (import.meta.env.DEV) {
   window.__EDITOR = {
     points,
     decorations,
+    pitLanePoints,
     footprints,
     get closed() { return closed; },
     get mode() { return mode; },
+    pitBoxPoints,
     validate: () => validateSplineTrack(points),
     computeSnap,
     setActiveDecorType: (t) => { activeDecorType = t; },
+    setMode,
   };
 }

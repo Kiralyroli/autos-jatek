@@ -440,6 +440,28 @@
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
         white-space: nowrap;
       }
+      /* Kötelező kerékcsere jelzés — amíg a versenyző nem állt meg a boxutca-
+         zónában, ez emlékezteti (lásd sim/race.js pitStopRequired/pitStopDone).
+         Szándékosan ARANY, nem piros (var(--danger)): ez nem hiba, csak teendő. */
+      #pitStopHud {
+        position: fixed;
+        top: 220px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #241a05;
+        background: var(--gold, #d4a94e);
+        padding: 8px 16px;
+        border-radius: 10px;
+        pointer-events: none;
+        user-select: none;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        white-space: nowrap;
+      }
       /* Szektor-delta: a legutóbb átszelt checkponton mérve, a legjobb kör
          UGYANOTT mért idejéhez képest — jelvény-szerű kijelző, nyíl-ikonnal,
          be- és kicsengő animációval. Az opacity/transform ÉRTÉKÉT a hud.js
@@ -1121,6 +1143,42 @@
         background: rgba(0, 0, 0, 0.28);
         padding: 9px 11px;
         font-size: 13px;
+      }
+      .menuFieldCheck { margin-top: 2px; }
+      .menuFieldCheck label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        text-transform: none;
+        letter-spacing: normal;
+        color: var(--text-dim);
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 0;
+      }
+      .menuFieldCheck input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--gold);
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .mpCheckLabel {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text);
+        cursor: pointer;
+        margin: 4px 0;
+      }
+      .mpCheckLabel input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--gold, #e0b13d);
+        cursor: pointer;
+        flex-shrink: 0;
       }
       /* A fő indító-gomb ARANY (a Korona-koncepció fő hívó eleme), nem a
          korábbi zöld/kék — azok kilógtak a palettából. A másodlagos gombok
@@ -1865,6 +1923,7 @@
       <span>ROSSZ IRÁNY!</span>
     </div>
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
+    <div id="pitStopHud">🔧 Kötelező kiállás a boxutcában!</div>
     <div id="sectordelta"></div>
     <button id="restart">🔄 Új verseny</button>
     <button id="hotlapReset">↺ Reset</button>
@@ -1939,6 +1998,12 @@
                   <option value="light">Könnyített (arcade)</option>
                 </select>
               </div>
+            </div>
+            <div class="menuField menuFieldCheck" id="fieldPitStop">
+              <label for="pitStopRequired">
+                <input id="pitStopRequired" type="checkbox" />
+                🔧 Kötelező kerékcsere (ha a pályán van boxutca-zóna)
+              </label>
             </div>
             <p id="modeHint" class="modeHint"></p>
             <button id="btnStartMode" class="primary">🏁 Verseny indítása</button>
@@ -2041,6 +2106,10 @@
             <option value="realistic">Realisztikus</option>
             <option value="light">Könnyített (arcade)</option>
           </select>
+          <label class="mpCheckLabel" for="mpPitStopRequired">
+            <input id="mpPitStopRequired" type="checkbox" />
+            🔧 Kötelező kerékcsere (ha a pályán van boxutca-zóna)
+          </label>
           <button id="btnMpApplySettings" class="primary">Alkalmaz</button>
         </div>
         <div id="mpSettingsStatus" class="status"></div>

@@ -101,7 +101,19 @@ export function separateBodyFromPoints(body, points, sep) {
 //           (nem a nyers gombállapotot), hogy a távoli megfigyelők a
 //           tényleges (üzemanyag-korlátos) állapotot lássák/szimulálják.
 export function createDriveState() {
-  return { throttleMul: 1, wasOnGrass: false, steer: 0, boostRemaining: BOOST.maxPerLap, boosting: false };
+  return {
+    throttleMul: 1,
+    wasOnGrass: false,
+    steer: 0,
+    boostRemaining: BOOST.maxPerLap,
+    boosting: false,
+    // Tolatás-zár (lásd applyDrive): amíg a fék/tolatás gomb FOLYAMATOSAN nyomva
+    // marad egy fékezésből, tolatás nem indulhat — csak ha a gombot elengedtük,
+    // majd ÚJRA megnyomtuk, miután az autó már majdnem áll. `prevDown` az előző
+    // fizika-lépés gombállapota (az él-észleléshez), `reverseArmed` a döntés maga.
+    prevDown: false,
+    reverseArmed: false,
+  };
 }
 
 // A boost-üzemanyag mai állapotának frissítése — a world.step() ELŐTT hívandó
@@ -235,9 +247,22 @@ function applyDrive(body, input, drive, car) {
     // Csak a GÁZT csökkenti a fű-büntetés — fék és tolatás mindig teljes erővel.
     force = engineForce * drive.throttleMul;
   } else if (input.down) {
-    // Ha még előre gurul → fék. Ha áll vagy hátrafelé megy → tolatás.
-    force = speed > 0.5 ? -car.brakeForce : -car.reverseForce;
+    if (speed > 0.5) {
+      // Még előre gurul → fék. Nem tolatás-kész: a gombot előbb el kell engedni.
+      force = -car.brakeForce;
+    } else {
+      // Megállt (vagy majdnem) — a tolatás csak ÚJ gombnyomásra indul (a gomb az
+      // ELŐZŐ fizika-lépésen még nem volt nyomva). Élő hibajelentés: enélkül egy
+      // FOLYAMATOSAN tartott fékezés magától átcsúszott tolatásba, amint a
+      // sebesség 0 alá esett — emiatt gyakorlatilag lehetetlen volt az autót
+      // pontosan megállítani (pl. a boxutca-zónában).
+      if (!drive.prevDown) drive.reverseArmed = true;
+      force = drive.reverseArmed ? -car.reverseForce : 0;
+    }
+  } else {
+    drive.reverseArmed = false; // elengedve → a KÖVETKEZŐ nyomás új ciklus
   }
+  drive.prevDown = !!input.down;
 
   // Sebességhatárok: a határ felett nem adunk több hajtóerőt az adott irányba.
   if (force > 0 && speed > maxForwardSpeed) force = 0;

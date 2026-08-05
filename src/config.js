@@ -432,6 +432,17 @@ export const DECORATION_TYPES = {
   lightGate: { model: '/assets/track/overheadLights.glb', label: 'Fénykapu (út fölé)', icon: '🚦', scale: 1, layer: 'object' },
 };
 
+// A boxutca-zóna (kötelező kerékcsere) MÁR NEM dekoráció — szabadon RAJZOLT,
+// NYITOTT útvonal (lásd editor.js "Boxutca rajzolása" mód), akárcsak a fő
+// pálya, csak nincs bezárva hurokba. Világ-koordinátás kontrollpontok
+// {x,z}[]-ként tárolódnak (trackStorage.js loadPitLane/saveCustomTrack), és a
+// pálya SAJÁT, procedurális burkolat-generátorával (render3d/trackRibbon.js)
+// épül fel — UGYANOLYAN aszfalt-textúrával, mint a többi pályarész (élő
+// hibajelentés: egy külön Kenney-modell rosszul állt a valódi pályához
+// képest). Fizikailag is burkolatnak számít (sim/race.js withPitLaneOffRoad):
+// a legközelebbi ÚTVONAL-SZAKASZTÓL mért távolság dönti el, nem egy rögzített
+// téglalap — ez teszi lehetővé, hogy ívelt/hosszú boxutcát is rajzolhass.
+
 // Multiplayer hálózat (3. fázis). A kliens ehhez a Colyseus szerverhez csatlakozik.
 // Lokális teszt: `npm run server` (localhost:2567) + két böngészőablak.
 // Élesben a szerver (server/index.js) UGYANARRÓL az originről szolgálja ki a
@@ -538,4 +549,45 @@ export const RACE = {
     maxStep: 0.3, // m — a lépésenkénti maximális eltolás
   },
   // A checkpointok a pályából generálódnak (sim/track.js), a checkpointCount alapján.
+
+  // Kötelező kerékcsere (boxkiállás) — futam-beállításban kapcsolható be (lásd
+  // index.html #fieldPitStop). Ha be van kapcsolva ÉS a pályán van szabadon
+  // rajzolt boxutca-útvonal (lásd editor.js "Boxutca rajzolása" mód,
+  // trackStorage.js loadPitLane), a versenyzőnek a futam alatt legalább egyszer
+  // be kell hajtania és meg kell állnia a SAJÁT, KIJELÖLT boxhelyén (nem elég
+  // bárhol a boxutcában, ÉS multiplayerben nem osztozik másokkal — lásd
+  // editor.js "Boxhely" mód, sim/race.js splitPitLane/pitBoxForSlot) — amíg ez
+  // nem történt meg, az UTOLSÓ kör célvonal-átszelése nem zárja le a versenyt
+  // (lásd sim/race.js raceStep + updatePitStop). Nincs gomb: a megállás
+  // automatikusan teljesíti a kötelezettséget.
+  pitStop: {
+    laneWidth: 10, // m — a boxutca-útvonal szélessége (a rajzolt középvonal két oldalán fél-fél)
+    boxRadius: 4, // m — ekkora körön belül kell állni a kijelölt boxhelyhez képest
+    // Ennyi KÜLÖNBÖZŐ boxhely rakható le egy pályán — 1 minden lehetséges
+    // játékosnak (lásd NET.maxPlayers), hogy multiplayerben senkinek ne
+    // kelljen osztoznia egy helyen.
+    maxBoxes: 4,
+    // A boxhely VIZUÁLIS "rács" mérete (a valódi versenypályák festett box-
+    // jelöléséhez hasonlóan) — a boxRadius-tól FÜGGETLEN, csak megjelenítés,
+    // a lane helyi irányához igazítva (lásd render3d/pitMarker.js).
+    // boxWidth < laneWidth/2, hogy a boxhely TELJES egészében a lane jobb
+    // felében férjen el (lásd editor.js offsetToRightSide) — ne lógjon át a
+    // középvonalon, és ne csússzon ki a lane szélén sem.
+    boxWidth: 4, // m — a boxhely szélessége (a haladási irányra merőlegesen)
+    boxDepth: 10, // m — a boxhely hossza (a haladási irány mentén)
+    maxSpeed: 1.5, // m/s — ez alatt számít "megállva" a boxhelyen (~5.4 km/h)
+    requiredSeconds: 2.5, // s — ennyi ideig kell megállva állni a boxhelyen
+    // A boxutcában (valós versenyekhez hasonlóan) a haladási sebesség felső
+    // korlátja — FÜGGETLENÜL attól, hogy a "Kötelező kerékcsere" be van-e
+    // kapcsolva: ha van boxutca a pályán, ott mindig ez a limit érvényes
+    // (lásd sim/car.js updateCar hívása main.js-ben). A boost SEM léphet túl
+    // rajta a boxutcában (lásd a hívó oldali `boostMaxSpeedMultiplier: 1`
+    // felülírást).
+    maxLaneSpeed: 100 / 3.6, // ~27.78 m/s (100 km/h)
+    // Kliens-oldali (UX) felső korlát a rajzolt útvonal hosszára — a SZERVER
+    // saját, szigorúbb korlátja (server/trackStore.js MAX_PIT_LANE_LENGTH) a
+    // tényleges védelem (lásd CLAUDE.md "minden kliens-adat, amiből a szerver
+    // geometriát épít, méret-korlátot igényel"); ez csak korai visszajelzés.
+    maxDrawLength: 400, // m
+  },
 };

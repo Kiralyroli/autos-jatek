@@ -60,6 +60,7 @@ export function createHud(onRestart, onHotlapReset) {
   const boostMeterEl = document.getElementById('boostMeter');
   const boostFillEl = document.getElementById('boostBarFill');
   const boostValueEl = document.getElementById('boostValue');
+  const pitStopEl = document.getElementById('pitStopHud');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
   if (onHotlapReset) hotlapResetEl.addEventListener('click', onHotlapReset);
@@ -75,6 +76,22 @@ export function createHud(onRestart, onHotlapReset) {
     if (boostMeterEl) boostMeterEl.style.display = 'flex';
     wrongWayEl.style.display =
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
+    // Kötelező kerékcsere: amíg nincs meg, végig látszik a versenyen (lásd
+    // sim/race.js pitStopRequired/pitStopDone) — nem villanás, mert a
+    // versenyzőnek EGÉSZ végig kell tudnia, hogy még be kell hajtania.
+    if (pitStopEl) {
+      const showPitStop = race.phase === 'racing' && race.pitStopRequired && !race.pitStopDone;
+      pitStopEl.style.display = showPitStop ? 'flex' : 'none';
+      if (showPitStop) {
+        // Amíg a zónában, ~állva méri az idő (lásd sim/race.js updatePitStop —
+        // pitStopTimer > 0 csak akkor, ha ÉPP ott áll) — VISSZASZÁMLÁLÁST mutatunk,
+        // különben a statikus "menj be" emlékeztetőt.
+        pitStopEl.textContent =
+          race.pitStopTimer > 0
+            ? `🔧 Állj meg még ${Math.max(0, RACE.pitStop.requiredSeconds - race.pitStopTimer).toFixed(1)} mp-ig!`
+            : '🔧 Kötelező kiállás a boxutcában!';
+      }
+    }
     // A cél utáni "Új verseny" gombot MP-ben a végeredmény-panel váltja ki (main.js).
     restartEl.style.display =
       race.phase === 'finished' && !race.hideRestart ? 'block' : 'none';

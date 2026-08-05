@@ -25,7 +25,7 @@
 //  ez néhány század másodperc. Cserébe az idő NEM hamisítható.
 // =============================================================================
 import { CAR, RACE, TRACK, PHYSICS_PRESETS } from '../src/config.js';
-import { createRaceState, raceStep } from '../src/sim/race.js';
+import { createRaceState, raceStep, updatePitStop, withPitLaneOffRoad, widenCheckpointsForPitLane, pitLaneReady, pitBoxForSlot } from '../src/sim/race.js';
 import { minLapFromLength } from './lapValidation.js';
 
 // Az időlépést SZÁNDÉKOSAN NEM vágjuk felső korláttal (ellentétben a kliens
@@ -131,15 +131,26 @@ function hitsCone(x, y, angle, cones, hitRadius) {
 }
 
 // Szobaszintű kontextus (egyszer épül fel pályánként/versenyenként).
-export function createTrackerContext({ trackState, decorations, physics, laps }) {
+export function createTrackerContext({ trackState, decorations, pitLane, physics, laps, pitStopRequired }) {
   const baseMaxSpeed = PHYSICS_PRESETS[physics]?.maxForwardSpeed || CAR.maxForwardSpeed;
   // A BOOST (src/sim/car.js applyDrive) ideiglenesen megemeli a csúcssebesség-
   // határt — a csalás-szűrőnek ezt a MEGEMELT, szabályosan elérhető sebességet
   // kell felső korlátnak tekintenie, különben egy legitim boostoló játékost
   // "tartósan a fizikai korlát felett" jelzéssel kirúgna (lásd update() lent).
   const maxSpeed = baseMaxSpeed * (CAR.boostMaxSpeedMultiplier || 1);
+  const pitLanePoints = Array.isArray(pitLane) ? pitLane : [];
   return {
     trackState,
+    // Boxutca-útvonal: burkolatnak számít, büntetlenül behajtható (lásd
+    // sim/race.js withPitLaneOffRoad) — ezt kell használni az offRoad-ellenőrzésnél
+    // a NYERS trackState.offRoadExcess helyett (lásd update() lent).
+    offRoadExcess: withPitLaneOffRoad(trackState.offRoadExcess, pitLanePoints),
+    // A boxutcával érintkező checkpointokat (jellemzően a célvonal)
+    // kiszélesíti (lásd sim/race.js widenCheckpointsForPitLane) — ezt kell
+    // használni a NYERS trackState.checkpoints helyett (lásd update() lent),
+    // különben a boxutcán áthaladva a fix szélességű célvonal-checkpoint nem
+    // biztos, hogy átszelhető marad.
+    checkpoints: widenCheckpointsForPitLane(trackState.checkpoints, pitLanePoints),
     laps,
     // A leggyorsabb elérhető csúcssebesség ehhez a szobához (BOOST-tal együtt) —
     // a sebesség-ellenőrzés felső korlátja. A szoba fizikája adja; ismeretlennél
@@ -154,12 +165,23 @@ export function createTrackerContext({ trackState, decorations, physics, laps })
     cones: (Array.isArray(decorations) ? decorations : [])
       .filter((d) => d && d.type === 'pylon')
       .map((d) => ({ x: (Number(d.dgx) || 0) * TRACK.tile, y: (Number(d.dgy) || 0) * TRACK.tile })),
+    // Boxutca-útvonal (kötelező kerékcsere) — csak akkor "igazán" kötelező, ha
+    // a pályán VAN is legalább 2 pontos útvonal, különben a cél sosem zárulna
+    // le (lásd createPlayerTracker, ami ezt a két mezőt AND-olja
+    // createRaceState-hez).
+    pitLane: pitLanePoints,
+    pitStopRequired: !!pitStopRequired,
   };
 }
 
 // Egy JÁTÉKOS verseny-követője. A `spawn` a rajtpozíció (innen indul a pozíció-előzmény).
-export function createPlayerTracker(ctx, spawn) {
-  const race = createRaceState(ctx.laps);
+// `slotIndex`: a rajtrács-pozíció (lásd RaceRoom.js p.slotIndex) — ebből dől
+// el, MELYIK boxhely ennek a JÁTÉKOSNAK a sajátja (lásd sim/race.js
+// pitBoxForSlot), ha több van kijelölve. Multiplayerben így senkinek sem kell
+// osztoznia egy boxon.
+export function createPlayerTracker(ctx, spawn, slotIndex) {
+  const race = createRaceState(ctx.laps, ctx.pitStopRequired && pitLaneReady(ctx.pitLane));
+  const myPitBox = pitBoxForSlot(ctx.pitLane, slotIndex || 0);
   const prev = { x: spawn.x, y: spawn.y };
   const curr = { x: spawn.x, y: spawn.y };
   let lastAt = null; // ms — az előző beszámított frissítés beérkezési ideje
@@ -242,15 +264,21 @@ export function createPlayerTracker(ctx, spawn) {
     curr.y = y;
 
     const offTrack =
-      fullyOffRoad(x, y, angle, ctx.trackState.offRoadExcess) ||
+      fullyOffRoad(x, y, angle, ctx.offRoadExcess) ||
       hitsCone(x, y, angle, ctx.cones, RACE.coneHitRadius);
+
+    // Kötelező kerékcsere haladása — a raceStep MELLETT, ugyanabból a bejelentett
+    // pozícióból (lásd sim/race.js updatePitStop). A `moved/elapsed` itt a
+    // ténylegesen megtett út / ténylegesen eltelt idő, tehát ugyanaz a "sebesség",
+    // amit a csalás-szűrő is használ — nem kell külön sebesség-mezőt bíznunk a kliensre.
+    updatePitStop(race, x, y, moved / elapsed, myPitBox, elapsed);
 
     const events = raceStep(
       race,
       prev,
       curr,
       elapsed,
-      ctx.trackState.checkpoints,
+      ctx.checkpoints,
       offTrack,
       ctx.trackState.trackHeadingAt
     );

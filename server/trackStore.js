@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { hashLayout } from '../src/sim/trackKey.js';
+import { RACE } from '../src/config.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const FILE = join(DATA_DIR, 'tracks.json');
@@ -44,6 +45,12 @@ const MAX_TRACK_LENGTH = 20000;
 // Ugyanez a csempe-alapú formátumra: a szegmensek `n`/`size` mezői közvetlenül
 // szorozzák a generált csempeszámot, ezért a SZUMMÁJUKAT is korlátozni kell.
 const MAX_TOTAL_TILES = 2000;
+// Boxutca-útvonal (lásd sanitizePitLane) — UGYANAZ a védelmi elv, mint a
+// layout-nál: a szerver minden fizika-lépésben végigfut a pontokon
+// (server/raceTracker.js distanceToPitLane), tehát a pontszám és a teljes
+// hossz is korlátos kell legyen, nem csak a koordináták.
+const MAX_PIT_LANE_POINTS = 200;
+const MAX_PIT_LANE_LENGTH = 2000; // m — bőven elég egy boxutcához (a fő pálya limitje 20000)
 
 let cache = null; // { tracks: [...] } — memóriában, lemezre íráskor szinkronban
 
@@ -136,8 +143,41 @@ export function sanitizeLayout(layout) {
   return totalTiles <= MAX_TOTAL_TILES ? clean : null;
 }
 
+// A boxutca-útvonal megtisztítása/validálása — OPCIONÁLIS adat, tehát hibás/
+// hiányzó/túl nagy bemenetre üres tömböt ad (nem null-t — a hívó ilyenkor
+// egyszerűen "nincs boxutca ezen a pályán"-ként kezeli), SOSEM utasítja el a
+// teljes pálya-mentést emiatt. EXPORTÁLT, mert — ugyanúgy, mint sanitizeLayout
+// — nem csak a REST-mentés útján érkezhet: a multiplayer szoba is a
+// KLIENSTŐL kapja (createRoom options.pitLane / hostSettings), és a szerver
+// minden fizika-lépésben végigfut rajta (server/raceTracker.js
+// distanceToPitLane) — validálatlanul ez is a szerverfolyamatot foghatná meg.
+// A tömb TETSZŐLEGES SZÁMÚ (legfeljebb RACE.pitStop.maxBoxes) plusz, KÜLÖN
+// "boxhely" pontot is tartalmazhat ({x,z,isBox:true}) — ezek NEM az útvonal
+// RÉSZEI (lásd src/sim/race.js splitPitLane), ezért a hossz-korlátot csak a
+// valódi útvonal-pontokra mérjük, a boxhelyeket külön kezeljük (a
+// maxBoxes fölötti többletet eldobjuk).
+export function sanitizePitLane(points) {
+  if (!Array.isArray(points) || points.length === 0 || points.length > MAX_PIT_LANE_POINTS) return [];
+  const clean = points
+    .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z))
+    .map((p) =>
+      p.isBox
+        ? { x: clampCoord(p.x), z: clampCoord(p.z), isBox: true }
+        : { x: clampCoord(p.x), z: clampCoord(p.z) }
+    );
+  const boxes = clean.filter((p) => p.isBox).slice(0, RACE.pitStop.maxBoxes);
+  const path = clean.filter((p) => !p.isBox);
+  if (path.length < 2) return [];
+  let len = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    len += Math.hypot(path[i + 1].x - path[i].x, path[i + 1].z - path[i].z);
+  }
+  if (len > MAX_PIT_LANE_LENGTH) return [];
+  return [...path, ...boxes];
+}
+
 // A bejövő pálya-adat megtisztítása/validálása. Hibás adatra null-t ad.
-function sanitize({ name, layout, decorations, editorPath, editorDecorations }) {
+function sanitize({ name, layout, decorations, pitLane, editorPath, editorDecorations }) {
   if (typeof name !== 'string') return null;
   const cleanName = name.trim().slice(0, MAX_NAME);
   if (!cleanName) return null;
@@ -156,7 +196,7 @@ function sanitize({ name, layout, decorations, editorPath, editorDecorations }) 
       rot: Number(d.rot) || 0,
     }));
 
-  const clean = { name: cleanName, layout: cleanLayout, decorations: cleanDecor };
+  const clean = { name: cleanName, layout: cleanLayout, decorations: cleanDecor, pitLane: sanitizePitLane(pitLane) };
 
   // Opcionális "editor-nézet" — a szerkesztőben pontosan úgy jelenjen meg
   // (tájolás + pozíció), ahogy rajzolták (WYSIWYG). A JÁTÉK ezt figyelmen kívül
@@ -227,6 +267,7 @@ export function saveTrack(input, nowMs) {
   if (existing) {
     existing.layout = clean.layout;
     existing.decorations = clean.decorations;
+    existing.pitLane = clean.pitLane;
     existing.editorPath = clean.editorPath;
     existing.editorDecorations = clean.editorDecorations;
     existing.updatedAt = ts;
@@ -241,6 +282,7 @@ export function saveTrack(input, nowMs) {
     name: clean.name,
     layout: clean.layout,
     decorations: clean.decorations,
+    pitLane: clean.pitLane,
     editorPath: clean.editorPath,
     editorDecorations: clean.editorDecorations,
     createdAt: ts,

@@ -25,7 +25,7 @@ import {
   separateBodyFromPoints,
   refillBoost,
 } from './sim/car.js';
-import { createRaceState, raceStep, segmentsCross } from './sim/race.js';
+import { createRaceState, raceStep, segmentsCross, updatePitStop, isInPitLane, pitLaneReady, pitBoxForSlot } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT, encodeInput } from './input.js';
 import { isTouchDevice, createTouchControls, requestFullscreen } from './touchControls.js';
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
@@ -36,6 +36,7 @@ import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3
 import { setupWheels } from './render3d/wheels.js';
 import { createCarEffects } from './render3d/carEffects.js';
 import { createNameplate, nameplateOpacityForDistance } from './render3d/nameplate.js';
+import { createPitMarker, updatePitMarker, setMyBoxIndex } from './render3d/pitMarker.js';
 import { createChaseCamera } from './render3d/camera.js';
 import { applyStoredCamera, createCameraSettings } from './cameraSettings.js';
 import { createHud, fmt as fmtTime } from './hud.js';
@@ -56,6 +57,7 @@ function withBase(url) {
 import {
   loadCustomLayout,
   loadCustomDecorations,
+  loadPitLane,
   saveCustomTrack,
   setActiveTrack,
   clearCustomLayout,
@@ -70,7 +72,7 @@ import {
   apiGetGhost,
 } from './net/leaderboardApi.js';
 import { hashLayout } from './sim/trackKey.js';
-import { TRACK, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
+import { TRACK, CAR, CARS, DEFAULT_LAYOUT, applyPhysicsPreset, DEFAULT_PHYSICS, PHYSICS_PRESETS } from './config.js';
 import { isDevMode } from './devmode.js';
 import { loadCarTuning, resetCarToDefaults, createTuningPanel } from './tuning.js';
 
@@ -147,7 +149,7 @@ async function setPlayerCar(idx) {
 // buildSplineTrack) — ilyenkor a procedurális szalag-hálót rakjuk le a diszkrét
 // Kenney-csempék helyett; a régi (rács-alapú) pályáknál minden a régiben marad.
 if (trackState.track.tiles.length === 0) {
-  loadTrackRibbon(scene, trackState.track, trackState.roadHalf);
+  loadTrackRibbon(scene, trackState.track, trackState.roadHalf, loadPitLane());
 } else {
   loadTrackTiles(scene);
 }
@@ -297,6 +299,7 @@ const lobbyStatus = document.getElementById('lobbyStatus');
 
 const lapsInput = document.getElementById('lapsInput');
 const physicsSelect = document.getElementById('physicsSelect');
+const pitStopInput = document.getElementById('pitStopRequired');
 const leaderboardListEl = document.getElementById('leaderboardList');
 const btnClearLeaderboard = document.getElementById('btnClearLeaderboard');
 // Hot Lap: mindig látható ranglista-panel oldalt (lásd startSingleplayer) —
@@ -339,6 +342,7 @@ const mpSettingsEl = document.getElementById('mpSettings');
 const mpHostSettingsEl = document.getElementById('mpHostSettings');
 const mpLapsInput = document.getElementById('mpLapsInput');
 const mpPhysicsSelect = document.getElementById('mpPhysicsSelect');
+const mpPitStopInput = document.getElementById('mpPitStopRequired');
 const btnMpApplySettings = document.getElementById('btnMpApplySettings');
 const mpSettingsStatus = document.getElementById('mpSettingsStatus');
 const btnMpSettingsClose = document.getElementById('btnMpSettingsClose');
@@ -417,6 +421,17 @@ updateCarPickButtons();
 let trackCatalog = null; // [{id,name,trackKey,...}] — egyszer lekérve, újrahasznosítva
 let selectedTrackId = ''; // '' = beépített Alap pálya (főmenü)
 let selectedTrackName = 'Alap pálya';
+// A `selectedTrackId === ''` ÖNMAGÁBAN kétértelmű: vagy a felhasználó TÉNYLEG
+// az "Alap pálya" kártyát választotta a rács-választóban, VAGY egyszerűen
+// nincs katalógus-egyezés az aktív (localStorage) egyedi pályára — pl. mert a
+// szerkesztőben NÉV NÉLKÜL mentett ("Mentés és játék"), tehát sosem került
+// fel a szerverre (lásd initTrackSelection). Élő hibajelentés: ez utóbbi
+// esetben a régi kód playWithSelectedTrack-ban TÖRÖLTE a friss, még be sem
+// mutatott egyedi pályát (layout+dekoráció+boxutca), mert a törés-ágat
+// (`clearCustomLayout()`) az `id` puszta hiánya váltotta ki. Ez a flag csak
+// akkor igaz, ha a felhasználó VALÓBAN a rács "Alap pálya" kártyájára
+// kattintott — csak EKKOR szabad ténylegesen törölni.
+let explicitBaseTrackChosen = false;
 let mpSelectedTrackId = ''; // ua., de a multiplayer beállítások panelen
 let mpSelectedTrackName = 'Alap pálya';
 
@@ -543,6 +558,7 @@ async function renderTrackPickerGrid(target) {
       } else {
         selectedTrackId = t.id;
         selectedTrackName = t.name;
+        explicitBaseTrackChosen = t.id === ''; // lásd a deklaráció megjegyzését
         clearGhostSelection(); // más pálya = más koordináták, a régi ghost értelmetlen lenne
         updateTrackPickButton();
         renderLeaderboard();
@@ -625,6 +641,7 @@ if (isDevMode()) {
 
 nameInput.value = localStorage.getItem('autos-jatek:playerName') || '';
 lapsInput.value = localStorage.getItem('autos-jatek:laps') || '3';
+if (pitStopInput) pitStopInput.checked = localStorage.getItem('autos-jatek:pitStopRequired') === '1';
 physicsSelect.value = Object.prototype.hasOwnProperty.call(
   PHYSICS_PRESETS,
   localStorage.getItem('autos-jatek:physics')
@@ -654,6 +671,17 @@ function chosenLaps() {
 // nevet a szoba az 'init' üzenetben adja vissza — azt alkalmazzuk (lásd startMultiplayer),
 // mert a szerver egy Node-folyamatban több szobát szolgál ki, a globális CAR-t csak
 // egy-egy kliens (SP/saját predikció) mutálja biztonságosan, a szerver nem.
+// Kötelező kerékcsere kapcsoló (a menü checkboxából) — perzisztálva, mint laps/
+// physics. Csak akkor jelent bármit, ha a választott pályán VAN is legalább
+// 2 pontos boxutca-útvonal (lásd trackStorage.js loadPitLane) — enélkül a cél
+// sosem zárulna le, ezért a hívók (startSingleplayer/doCreate) mindig ÉS-elik
+// az útvonal meglétével.
+function chosenPitStopRequired() {
+  const on = !!(pitStopInput && pitStopInput.checked);
+  localStorage.setItem('autos-jatek:pitStopRequired', on ? '1' : '0');
+  return on;
+}
+
 function chosenPhysics() {
   const name = Object.prototype.hasOwnProperty.call(PHYSICS_PRESETS, physicsSelect.value)
     ? physicsSelect.value
@@ -855,10 +883,14 @@ async function playWithSelectedTrack(action) {
       const editorView = t.editorPath
         ? { path: t.editorPath, decorations: t.editorDecorations || [] }
         : null;
-      setActiveTrack(t.name, t.layout, t.decorations, editorView);
-    } else {
-      clearCustomLayout(); // "Alap pálya" — a beépített layout
+      setActiveTrack(t.name, t.layout, t.decorations, t.pitLane, editorView);
+    } else if (explicitBaseTrackChosen) {
+      clearCustomLayout(); // a felhasználó TÉNYLEG az "Alap pálya" kártyát választotta
     }
+    // Ha `id` üres, de a felhasználó NEM választotta explicit az "Alap
+    // pályát" (pl. a szerkesztőben most mentett egy név nélküli egyedi
+    // pályát, ami emiatt nincs a katalógusban) — a jelenleg AKTÍV
+    // localStorage-pálya marad érintetlen, lásd a flag megjegyzését.
   } catch (e) {
     menuStatus.textContent = `Nem sikerült a pálya betöltése: ${e.message || 'ismeretlen hiba'}`;
     return;
@@ -927,6 +959,17 @@ function idleFrame(now) {
   requestAnimationFrame(idleFrame);
 }
 
+// A boxutcában (ha van a pályán) valós versenyekhez hasonló sebességkorlát
+// érvényes — FÜGGETLENÜL attól, hogy a "Kötelező kerékcsere" be van-e
+// kapcsolva (lásd config.js RACE.pitStop.maxLaneSpeed). A boost SEM léphet
+// túl rajta (boostMaxSpeedMultiplier: 1) — a boxutcában a korlát abszolút.
+// `undefined`-et ad vissza a lane-en KÍVÜL, hogy a hívó (sim/car.js updateCar)
+// a saját alapértelmezett (CAR) paramétereire essen vissza.
+function carParamsFor(x, y, pitLanePoints) {
+  if (!pitLanePoints || pitLanePoints.length < 2 || !isInPitLane(x, y, pitLanePoints)) return undefined;
+  return { ...CAR, maxForwardSpeed: RACE.pitStop.maxLaneSpeed, boostMaxSpeedMultiplier: 1 };
+}
+
 // =============================================================================
 //  EGYJÁTÉKOS MÓD — a korábbi (1-2. fázis) lokális játék, változatlan logikával.
 //  `hotLap`: gyakorló mód — nincs körszám-limit, a rajt/cél vonaltól hátrébb,
@@ -981,6 +1024,22 @@ function startSingleplayer(hotLap = false) {
     .filter((d) => d.type === 'pylon')
     .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
 
+  // Kötelező kerékcsere: csak akkor "él", ha a pályán TÉNYLEG van boxutca-
+  // útvonal ÉS kijelölt boxhely (lásd sim/race.js pitLaneReady/updatePitStop)
+  // — Hot Lapben nincs értelme (a menü fieldPitStop ott is rejtve van, lásd
+  // MENU_MODES).
+  const pitLanePoints = loadPitLane();
+  const pitStopRequired = !hotLap && chosenPitStopRequired() && pitLaneReady(pitLanePoints);
+  // Egyjátékosban mindig a 0. (első kijelölt) boxhely a sajátunk — nincs
+  // "más játékos", akivel osztozni kellene rajta.
+  const myPitBox = pitBoxForSlot(pitLanePoints, 0);
+  // Vizuális jelölés a boxutca-útvonalon (minden boxhely rácsa + a SAJÁT
+  // helyünk fölött lebegő "BOX" felirat) — csak akkor jön létre, ha TÉNYLEG
+  // kötelező, és amíg nem teljesült, a frame() ciklus animálja/mutatja (lásd
+  // lejjebb); utána elrejtjük.
+  const pitMarker = pitStopRequired ? createPitMarker(pitLanePoints, 0) : null;
+  if (pitMarker) scene.add(pitMarker.group);
+
   // Hot Lap: a rajtvonaltól hátrébb (guruló rajt) — lásd sim/trackFactory.js
   // pointBeforeStart. Normál módban ez egyszerűen a rajtvonal (spawn).
   const startPoint = hotLap ? trackState.pointBeforeStart(RACE.hotlapRunupMeters) : spawn;
@@ -989,7 +1048,7 @@ function startSingleplayer(hotLap = false) {
   const carBody = createCarBody(world, startPoint.x, startPoint.y, startPoint.angle);
   const stepper = createStepper();
   const laps = chosenLaps();
-  const race = createRaceState(hotLap ? Infinity : laps);
+  const race = createRaceState(hotLap ? Infinity : laps, pitStopRequired);
   race.isHotLap = hotLap; // csak megjelenítéshez (hud.js) — a raceStep nem használja
   const drive = createDriveState();
   // Guruló rajtnál a TÉNYLEGES rajtvonal első átszeléséig a köridő nem indul —
@@ -1047,6 +1106,10 @@ function startSingleplayer(hotLap = false) {
     // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
     const offTrack =
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
+    // Kötelező kerékcsere haladása — a raceStep MELLETT, ugyanabból a friss
+    // pozícióból/sebességből (lásd sim/race.js updatePitStop).
+    const carVel = carBody.getLinearVelocity();
+    updatePitStop(race, curr.x, curr.y, Math.hypot(carVel.x, carVel.y), myPitBox, SIM.fixedDt);
     const raceEvents = raceStep(race, prev, curr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
     // Amíg a guruló rajt tart (a countdown már lezajlott, phase='racing', de a
     // rajtvonalat MÉG nem értük el), a raceStep MAGÁTÓL is méri az időt (a
@@ -1156,7 +1219,7 @@ function startSingleplayer(hotLap = false) {
 
   onRestartClick = () => {
     resetCar(carBody, spawn.x, spawn.y, spawn.angle);
-    Object.assign(race, createRaceState(laps));
+    Object.assign(race, createRaceState(laps, pitStopRequired));
     Object.assign(drive, createDriveState());
     prev.x = curr.x = spawn.x;
     prev.y = curr.y = spawn.y;
@@ -1217,7 +1280,10 @@ function startSingleplayer(hotLap = false) {
       dt,
       (fixedDt) => {
         if (race.phase === 'finished') coastToStop(carBody);
-        else updateCar(carBody, input, fixedDt, drive, offRoadExcess);
+        else {
+          const pos = carBody.getPosition();
+          updateCar(carBody, input, fixedDt, drive, offRoadExcess, carParamsFor(pos.x, pos.y, pitLanePoints));
+        }
       },
       recordState
     );
@@ -1265,6 +1331,11 @@ function startSingleplayer(hotLap = false) {
       dt,
       offRoadExcess
     );
+
+    if (pitMarker) {
+      pitMarker.group.visible = !race.pitStopDone;
+      if (!race.pitStopDone) updatePitMarker(pitMarker, race.time);
+    }
 
     if (window.__TOP) {
       camera.position.set(x, window.__TOP, z + 0.001);
@@ -1338,7 +1409,7 @@ function ensureTrackMatches(init, room) {
   const localLayout = JSON.stringify(TRACK.layout);
   const serverLayout = JSON.stringify(init.layout);
   if (localLayout === serverLayout) return true;
-  saveCustomTrack(init.layout, init.decorations);
+  saveCustomTrack(init.layout, init.decorations, init.pitLane);
   sessionStorage.setItem(
     'autos-jatek:mp-rejoin',
     JSON.stringify({ code: room.roomId, reconnectionToken: room.reconnectionToken, name: playerName() })
@@ -1403,7 +1474,20 @@ async function startMultiplayer(room) {
   // ugyanolyan sima, és jelen-időben látszanak (nem a múltban).
   const remoteCars = createRemoteCars(mpWorld, offRoadExcess);
   let mpLastAuthT = null; // a legutóbb FELDOLGOZOTT snapshot időbélyege
-  const mpRace = createRaceState(mpTotalLaps);
+  let mpPitStopRequired = false; // a szoba-beállításból (init/roomSettings/raceStart)
+  // Boxutca-útvonal VILÁG-koordinátái — ugyanaz a forrás, mint mpConePoints,
+  // lásd trackStorage.js loadPitLane (ua. a kliens/szerver-geometria).
+  const mpPitLanePoints = loadPitLane();
+  // A SAJÁT boxhelyünk — a szoba a 'raceStart' üzenetben küldi a slotIndexet
+  // (lásd server/RaceRoom.js), addig 0 az alapérték (lásd mySlotIndex).
+  let mySlotIndex = 0;
+  let myPitBox = pitBoxForSlot(mpPitLanePoints, mySlotIndex);
+  // Vizuális jelölés — MINDEN kijelölt boxhely rácsa + a SAJÁT helyünk fölött
+  // lebegő "BOX" felirat (lásd render3d/pitMarker.js) — a láthatóságot
+  // mpRace.pitStopDone vezérli a frame() ciklusban.
+  const mpPitMarker = pitLaneReady(mpPitLanePoints) ? createPitMarker(mpPitLanePoints, mySlotIndex) : null;
+  if (mpPitMarker) scene.add(mpPitMarker.group);
+  const mpRace = createRaceState(mpTotalLaps, mpPitStopRequired && pitLaneReady(mpPitLanePoints));
   const mpPrev = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
   const mpCurr = { x: mySpawn.x, y: mySpawn.y, angle: mySpawn.angle };
   // Ghost car FELVÉTEL multiplayerben — ugyanaz az elv, mint egyjátékosban
@@ -1434,7 +1518,7 @@ async function startMultiplayer(room) {
   }
 
   function mpResetForRace() {
-    Object.assign(mpRace, createRaceState(mpTotalLaps));
+    Object.assign(mpRace, createRaceState(mpTotalLaps, mpPitStopRequired && pitLaneReady(mpPitLanePoints)));
     Object.assign(mpDrive, createDriveState());
     mpStartedRacing = false;
     mpSentFinish = false;
@@ -1602,6 +1686,7 @@ async function startMultiplayer(room) {
       updateMpTrackPickButton();
       mpLapsInput.value = String(mpTotalLaps);
       mpPhysicsSelect.value = mpPhysicsName;
+      if (mpPitStopInput) mpPitStopInput.checked = mpPitStopRequired;
     }
     mpSettingsEl.style.display = 'flex';
   }
@@ -1620,24 +1705,29 @@ async function startMultiplayer(room) {
       const id = mpSelectedTrackId;
       let layout;
       let decorations;
+      let pitLane;
       let trackName;
       if (id) {
         const t = await apiGetTrack(id);
         layout = t.layout;
         decorations = t.decorations;
+        pitLane = t.pitLane;
         trackName = t.name;
       } else {
         layout = DEFAULT_LAYOUT;
         decorations = [];
+        pitLane = [];
         trackName = 'Alap pálya';
       }
       const n = parseInt(mpLapsInput.value, 10);
       room.send('hostSettings', {
         layout,
         decorations,
+        pitLane,
         trackName,
         laps: Number.isFinite(n) && n >= 1 && n <= 50 ? n : mpTotalLaps,
         physics: mpPhysicsSelect.value,
+        pitStopRequired: !!(mpPitStopInput && mpPitStopInput.checked),
       });
     } catch (e) {
       mpSettingsStatus.textContent = `Nem sikerült a pálya betöltése: ${e.message || 'ismeretlen hiba'}`;
@@ -1651,6 +1741,7 @@ async function startMultiplayer(room) {
   // ment+újratölt+visszalép mintát követjük, mint csatlakozáskor
   // (ensureTrackMatches) — a kör/fizika-váltás nem igényel reloadot.
   room.onMessage('roomSettings', (m) => {
+    if (typeof m.pitStopRequired === 'boolean') mpPitStopRequired = m.pitStopRequired;
     mpTrackName = m.trackName || mpTrackName;
     if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
     if (m.physics) {
@@ -1695,6 +1786,14 @@ async function startMultiplayer(room) {
   // nulláról indítjuk a helyi verseny-állapotot (a countdownt a szerver vezérli).
   room.onMessage('raceStart', (m) => {
     if (m.slots && m.slots[myId]) mySpawn = m.slots[myId];
+    // A SAJÁT boxhelyünk a szoba által adott slotIndexből (lásd
+    // server/RaceRoom.js) — ez versenyenként változhat (belépési sorrend
+    // szerint osztódik újra), ezért itt, minden raceStart-nál frissítjük.
+    if (m.slots && m.slots[myId] && Number.isFinite(m.slots[myId].slotIndex)) {
+      mySlotIndex = m.slots[myId].slotIndex;
+      myPitBox = pitBoxForSlot(mpPitLanePoints, mySlotIndex);
+      if (mpPitMarker) setMyBoxIndex(mpPitMarker, mySlotIndex);
+    }
     if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
     if (Number.isFinite(m.raceGen)) mpRaceGen = m.raceGen;
     // A TÖBBI játékos mesh-ét eldobjuk (a sajátunkat nem) — ha valaki két
@@ -1724,6 +1823,7 @@ async function startMultiplayer(room) {
   // szoba pályája eltér a lokálistól, ensureTrackMatches ment + újratölt (rejoin).
   room.onMessage('init', (init) => {
     if (Number.isFinite(init.laps)) mpTotalLaps = init.laps;
+    if (typeof init.pitStopRequired === 'boolean') mpPitStopRequired = init.pitStopRequired;
     mpTrackName = init.trackName || mpTrackName;
     if (init.slot) {
       mySpawn = init.slot;
@@ -1848,7 +1948,10 @@ async function startMultiplayer(room) {
           dt,
           (fixedDt) => {
             if (myFinished) coastToStop(mpCar);
-            else updateCar(mpCar, input, fixedDt, mpDrive, offRoadExcess);
+            else {
+              const pos = mpCar.getPosition();
+              updateCar(mpCar, input, fixedDt, mpDrive, offRoadExcess, carParamsFor(pos.x, pos.y, mpPitLanePoints));
+            }
             // Puha szétnyomás a többi kocsitól (a kapott pozíciók alapján).
             separateBodyFromPoints(mpCar, mpPeerPoints, RACE.carSeparation);
             // A TÁVOLI autók ugyanebben a lépésben, a VALÓDI fizikán, az általuk
@@ -1868,6 +1971,12 @@ async function startMultiplayer(room) {
               const offTrack =
                 isFullyOffRoad(mpCar, offRoadExcess) ||
                 hitsCone(mpCar, mpConePoints, RACE.coneHitRadius);
+              // Kötelező kerékcsere haladása — a raceStep MELLETT, mint egyjátékosban
+              // (lásd startSingleplayer recordState). Ez csak a HELYI HUD-ot vezérli;
+              // a hivatalos döntést a szerver hozza meg ugyanezzel a logikával
+              // (server/raceTracker.js), a bejelentett pozíciókból.
+              const mpVel = mpCar.getLinearVelocity();
+              updatePitStop(mpRace, mpCurr.x, mpCurr.y, Math.hypot(mpVel.x, mpVel.y), myPitBox, SIM.fixedDt);
               const mpRaceEvents = raceStep(mpRace, mpPrev, mpCurr, SIM.fixedDt, checkpoints, offTrack, trackHeadingAt);
               if (mpRaceEvents.some((e) => e.type === 'lap' || e.type === 'finish')) refillBoost(mpDrive);
 
@@ -2026,8 +2135,17 @@ async function startMultiplayer(room) {
         place: me ? me.place || null : null, // hányadikként értünk célba (szervertől)
         hideRestart: true, // MP-ben az újraindítás a végeredmény-panelen van
         boostRemaining: mpDrive.boostRemaining, // csak megjelenítéshez (hud.js)
+        // Kötelező kerékcsere: a HELYI (kliens-oldali) mérésből — a szerver nem
+        // küldi vissza HUD-célra, csak a célzár-döntésnél veszi figyelembe.
+        pitStopRequired: mpRace.pitStopRequired,
+        pitStopDone: mpRace.pitStopDone,
+        pitStopTimer: mpRace.pitStopTimer,
       };
       updateHud(hudRace);
+      if (mpPitMarker) {
+        mpPitMarker.group.visible = !mpRace.pitStopDone;
+        if (!mpRace.pitStopDone) updatePitMarker(mpPitMarker, mpRace.time);
+      }
       minimap.draw(
         Object.entries(sampled.players).map(([id, p]) => {
           // MINDENKI a ténylegesen RENDERELT pozíciójáról — a sajátunk a helyi
@@ -2187,10 +2305,12 @@ async function doCreate() {
       name: playerName(),
       layout: loadCustomLayout(),
       decorations: loadCustomDecorations(),
+      pitLane: loadPitLane(),
       laps: chosenLaps(),
       carIdx: selectedCar,
       physics: chosenPhysics(),
       trackName: getActiveTrackName() || 'Alap pálya',
+      pitStopRequired: chosenPitStopRequired(),
     });
     startMultiplayer(room);
   } catch (e) {
@@ -2280,6 +2400,7 @@ const modeSwitchEl = document.getElementById('modeSwitch');
 const modeHintEl = document.getElementById('modeHint');
 const btnStartModeEl = document.getElementById('btnStartMode');
 const fieldLapsEl = document.getElementById('fieldLaps');
+const fieldPitStopEl = document.getElementById('fieldPitStop');
 const mpJoinBlockEl = document.getElementById('mpJoinBlock');
 
 let selectedMode = localStorage.getItem('autos-jatek:mode');
@@ -2299,6 +2420,8 @@ function setMode(mode) {
   modeHintEl.textContent = cfg.hint;
   fieldLapsEl.classList.toggle('is-disabled', !cfg.laps);
   lapsInput.disabled = !cfg.laps;
+  if (fieldPitStopEl) fieldPitStopEl.classList.toggle('is-disabled', !cfg.laps);
+  if (pitStopInput) pitStopInput.disabled = !cfg.laps;
   mpJoinBlockEl.classList.toggle('is-open', cfg.join);
 }
 

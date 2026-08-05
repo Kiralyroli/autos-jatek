@@ -36,7 +36,7 @@ import { TRACK, RACE, NET, DEFAULT_LAYOUT, resolvePhysicsPreset } from '../src/c
 import { createTrackState, spawnSlot } from '../src/sim/trackFactory.js';
 import { hashLayout } from '../src/sim/trackKey.js';
 import { recordLap, MAX_GHOST_SAMPLES } from './leaderboardStore.js';
-import { sanitizeLayout } from './trackStore.js';
+import { sanitizeLayout, sanitizePitLane } from './trackStore.js';
 import { registerJoinCode, unregisterJoinCode } from './roomCodes.js';
 import { createTrackerContext, createPlayerTracker } from './raceTracker.js';
 
@@ -88,12 +88,21 @@ export class RaceRoom extends Room {
     const layout = sanitizeLayout(options?.layout) || DEFAULT_LAYOUT;
     this.layout = layout;
     this.decorations = safeDecor(options?.decorations);
+    // Boxutca-útvonal — UGYANAZON a szűrőn (sanitizePitLane) megy át, mint a
+    // REST-en mentett pályáknál, ugyanazért az okért, mint a layout: a szerver
+    // minden fizika-lépésben végigfut rajta (raceTracker.js), validálatlanul
+    // ez is a szerverfolyamatot foghatná meg.
+    this.pitLane = sanitizePitLane(options?.pitLane);
     // A szoba körszáma — a létrehozó (host) választja; korlátozva 1..50-re.
     this.laps = Number.isFinite(options?.laps)
       ? Math.max(1, Math.min(50, Math.round(options.laps)))
       : RACE.laps;
     // A szoba autó-fizikája (a kliens ezt alkalmazza a helyi simjében).
     this.physics = resolvePhysicsPreset(options?.physics);
+    // Kötelező kerékcsere (boxkiállás) — a host kapcsolja be/ki (lásd hostSettings
+    // lentebb). Csak akkor "él", ha a pályán VAN is boxutca-útvonal — ezt a
+    // rebuildTrackerContext/createTrackerContext dönti el (lásd raceTracker.js).
+    this.pitStopRequired = !!options?.pitStopRequired;
 
     // Örök ranglista: a trackKey a layout GEOMETRIÁJÁHOZ kötött, névtől független.
     this.trackKey = hashLayout(layout);
@@ -249,6 +258,7 @@ export class RaceRoom extends Room {
       if (nextLayout) {
         this.layout = nextLayout;
         this.decorations = safeDecor(msg?.decorations);
+        this.pitLane = sanitizePitLane(msg?.pitLane);
         this.trackName = cleanName(msg?.trackName, 'Egyedi pálya', 40);
         this.trackKey = hashLayout(this.layout);
         this.trackState = createTrackState(this.layout, {
@@ -263,6 +273,7 @@ export class RaceRoom extends Room {
         this.laps = Math.max(1, Math.min(50, Math.round(msg.laps)));
       }
       if (msg?.physics) this.physics = resolvePhysicsPreset(msg.physics);
+      if (typeof msg?.pitStopRequired === 'boolean') this.pitStopRequired = msg.pitStopRequired;
       // A verseny-mérés kontextusa a pályából/körszámból/fizikából épül — bármelyik
       // változott, újra kell építeni (különben a következő futam a RÉGI pálya
       // checkpointjaival és a régi csúcssebesség-korláttal mérne).
@@ -275,8 +286,10 @@ export class RaceRoom extends Room {
         trackName: this.trackName,
         layout: this.layout,
         decorations: this.decorations,
+        pitLane: this.pitLane,
         laps: this.laps,
         physics: this.physics,
+        pitStopRequired: this.pitStopRequired,
       });
       this.broadcastLobby();
     });
@@ -292,10 +305,12 @@ export class RaceRoom extends Room {
       client.send('init', {
         layout: this.layout,
         decorations: this.decorations,
+        pitLane: this.pitLane,
         laps: this.laps,
         physics: this.physics,
         trackName: this.trackName,
         code: this.joinCode,
+        pitStopRequired: this.pitStopRequired,
         slot: p ? p.spawn : null, // a SAJÁT rajtpozíció (x,y,angle) a helyi simhez
       });
       this.broadcastLobby();
@@ -344,7 +359,7 @@ export class RaceRoom extends Room {
       // Szerver-oldali verseny-követő (lásd raceTracker.js). A startRace() minden
       // futam elején újat készít; ez itt csak azért kell, hogy egy lobbyban
       // beérkező 'state' üzenet se találjon üres helyet.
-      tracker: createPlayerTracker(this.trackerCtx, slot),
+      tracker: createPlayerTracker(this.trackerCtx, slot, slotIndex),
     });
 
     this.broadcastLobby();
@@ -383,8 +398,10 @@ export class RaceRoom extends Room {
     this.trackerCtx = createTrackerContext({
       trackState: this.trackState,
       decorations: this.decorations,
+      pitLane: this.pitLane,
       physics: this.physics,
       laps: this.laps,
+      pitStopRequired: this.pitStopRequired,
     });
   }
 
@@ -470,8 +487,10 @@ export class RaceRoom extends Room {
       p.pendingGhost = null; // előző futamból itt ragadt ghost sose keveredjen az újba
       // FRISS verseny-követő minden futamhoz (új kör-számláló, nullázott idő, a
       // pozíció-előzmény a rajtrácsról indul).
-      p.tracker = createPlayerTracker(this.trackerCtx, slot);
-      slots[id] = p.spawn; // a kliens a saját id-jéhez tartozó pozícióra pozicionál
+      p.tracker = createPlayerTracker(this.trackerCtx, slot, p.slotIndex);
+      // A slotIndex is átmegy — a kliens ebből tudja, melyik boxhely a SAJÁTJA
+      // (lásd sim/race.js pitBoxForSlot, main.js raceStart-kezelő).
+      slots[id] = { ...p.spawn, slotIndex: p.slotIndex };
     }
     this.phase = 'countdown';
     this.countdownLeft = RACE.countdownSeconds;
