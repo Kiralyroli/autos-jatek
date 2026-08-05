@@ -197,8 +197,19 @@ app.use(
 );
 
 const httpServer = createServer(app);
+// A @colyseus/ws-transport ALAPÉRTELMEZETT maxPayload-ja mindössze 4 KB — élő
+// hibajelentés szerint EZ okozta a "célvonal után, véletlenszerű játékosnál,
+// üzenet nélkül" kirúgást: a 'lapGhost' üzenet egy teljes kör (x,y,szög)
+// mintasorát küldi (lásd RaceRoom.js), 20 Hz-es felvételnél már egy 8-9
+// másodperces kör is túllépi a 4 KB-ot — a `ws` könyvtár ilyenkor egy
+// KEZELETLEN kivételt dob a fogadás közben (RangeError: Max payload size
+// exceeded), ami a kapcsolatot az alkalmazás saját 'kicked' üzenete NÉLKÜL
+// szakítja meg (a hiba a szállítási rétegben történik, a RaceRoom.js
+// onMessage-e sosem fut le). 256 KB — ugyanaz a határ, mint a REST
+// pálya-mentésnél (lásd express.json limit lent) — bőven fedi a
+// MAX_GHOST_SAMPLES=1800-as felső korlátot is.
 const gameServer = new Server({
-  transport: new WebSocketTransport({ server: httpServer }),
+  transport: new WebSocketTransport({ server: httpServer, maxPayload: 256 * 1024 }),
 });
 
 gameServer.define('race', RaceRoom);
