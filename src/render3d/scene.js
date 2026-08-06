@@ -24,6 +24,16 @@ export function createScene3D(container) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Tónuslekötés — enélkül a fényes/sötét részek "laposan" (nyers, lineáris
+  // fényerővel) jelentek meg, ami a klasszikus "videojáték-szerű" hatást
+  // adja. Az ACESFilmic egy filmes válaszgörbét alkalmaz (a fényes
+  // felületek finoman "kiégnek", a sötét részek nem törnek fekete tömbbé) —
+  // ugyanaz a technika, amit a legtöbb modern (nem stilizált) 3D játék
+  // használ. Az exposure enyhe csökkentése (1 → 1.1 a "sun" fényerejéhez,
+  // lásd addLights) kompenzálja, hogy az ACES görbe alapból sötétebbnek
+  // hat, mint a korábbi tónuslekötés nélküli kép.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
