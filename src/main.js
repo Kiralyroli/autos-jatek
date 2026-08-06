@@ -742,8 +742,43 @@ async function initTrackSelection() {
 // A katalógus-egyezés (findCatalogEntry) csak a MEGJELENÍTETT névhez marad
 // releváns, ahhoz viszont továbbra is jó a selectedTrackName.
 function currentTrackInfo() {
+  // ÉLŐ HIBAJELENTÉS: a `hashLayout(TRACK.layout)`-ra való átállás (lásd fent
+  // a régebbi "mindig az Alap pálya ranglistáját menti" hiba javítását)
+  // helyesen ORVOSOLTA a mentés-oldali problémát, DE a TRACK.layout csak
+  // OLDALBETÖLTÉSKOR frissül (config.js) — a menüben egy MÁSIK pálya
+  // kiválasztása (trackPickerGridEl onclick) újratöltés NÉLKÜL csak a
+  // `selectedTrackId`-t állítja, ezért a főmenü ranglistája ettől kezdve
+  // helytelenül a RÉGI (még betöltött) pálya adatát mutatta, amíg a
+  // játékos ténylegesen el nem indított egy versenyt (ami újratölt).
+  // Javítás: ha a kiválasztott pálya MEGVAN a (már letöltött) katalógusban,
+  // a katalógus-bejegyzés SAJÁT trackKey-jét használjuk (ID szerinti
+  // keresés — nem NÉV szerinti, mint a régi, hibás kód, tehát nem eshet
+  // ugyanabba a csapdába) — ez AZONNAL, újratöltés nélkül frissül a
+  // kiválasztással együtt.
+  //
+  // `selectedTrackId === ''` KÉTFÉLE ESETBEN fordul elő (lásd a deklarációk
+  // megjegyzését explicitBaseTrackChosen-nél), és a KETTŐT MEG KELL
+  // KÜLÖNBÖZTETNI — ez volt a HARMADIK kör ezen a hibán:
+  //   (a) a felhasználó TÉNYLEGESEN az "Alap pálya" kártyára kattintott
+  //       (explicitBaseTrackChosen === true) → a helyes válasz DEFAULT_LAYOUT
+  //       hash-e, FÜGGETLENÜL attól, mi van még ténylegesen betöltve
+  //       (TRACK.layout), hiszen a felhasználó MOST váltott, újratöltés
+  //       nélkül (2. hibajelentés: ha ilyenkor TRACK.layout-ra esne vissza,
+  //       a RÉGI egyedi pálya ranglistája maradt volna látszódva).
+  //   (b) EGYSZERŰEN MÉG NEM DŐLT EL (oldalbetöltéskor, amíg az async
+  //       initTrackSelection a katalógust NÉV szerint egyezteti — lásd ott
+  //       — még nem futott le/nem talált egyezést) — ILYENKOR a helyes
+  //       válasz a TÉNYLEGESEN BETÖLTÖTT pálya (TRACK.layout) hash-e, NEM a
+  //       DEFAULT_LAYOUT (3. hibajelentés: egy egyedi pályával induló
+  //       oldalbetöltésnél az Alap pálya ranglistája jelent meg, mert ez a
+  //       függvény akkor MINDIG DEFAULT_LAYOUT-ot adott üres id-nél).
+  if (!selectedTrackId) {
+    const key = explicitBaseTrackChosen ? hashLayout(DEFAULT_LAYOUT) : hashLayout(TRACK.layout);
+    return { trackKey: key, trackName: selectedTrackName };
+  }
+  const entry = (trackCatalog || []).find((t) => t.id === selectedTrackId);
   return {
-    trackKey: hashLayout(TRACK.layout),
+    trackKey: entry?.trackKey || hashLayout(TRACK.layout),
     trackName: selectedTrackName,
   };
 }
