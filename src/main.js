@@ -966,9 +966,14 @@ function idleFrame(now) {
 // `undefined`-et ad vissza a lane-en KÍVÜL, hogy a hívó (sim/car.js updateCar)
 // a saját alapértelmezett (CAR) paramétereire essen vissza.
 function carParamsFor(x, y, pitLanePoints) {
-  // offRoadExcess átadva: a bekötési pontoknál (a boxutca kezdete/vége) a
-  // lane-tűrés NE terjedjen át a rendes pálya aszfaltjára (lásd isInPitLane).
-  if (!pitLanePoints || pitLanePoints.length < 2 || !isInPitLane(x, y, pitLanePoints, offRoadExcess)) return undefined;
+  // FONTOS: a NYERS trackState.offRoadExcess kell itt, NEM a modul-szintű
+  // (already boxutca-tudatos) `offRoadExcess` — az UTÓBBI a sim/track.js-ben
+  // MÁR át van fonva withPitLaneOffRoad-dal, tehát a boxutca TELJES területén
+  // 0-t ad (hiszen épp attól "burkolat"). Ha ezt adnánk át az isInPitLane
+  // saját "már úgyis a pályán van" ellenőrzésének, az a kör bezárulna: a
+  // boxutca MINDEN pontja "már pályának" tűnne, és a sebességkorlát SOHA nem
+  // lépne életbe — élő hibajelentés, pontosan ez történt.
+  if (!pitLanePoints || pitLanePoints.length < 2 || !isInPitLane(x, y, pitLanePoints, trackState.offRoadExcess)) return undefined;
   return { ...CAR, maxForwardSpeed: RACE.pitStop.maxLaneSpeed, boostMaxSpeedMultiplier: 1 };
 }
 

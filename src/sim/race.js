@@ -97,40 +97,78 @@ export function pitBoxForSlot(pitLanePoints, slotIndex) {
 // Üres/hiányzó/1-pontos útvonalra Infinity (nincs mit mérni). A boxhely-
 // jelölőt (isBox) NEM veszi figyelembe (lásd splitPitLane) — az nem az
 // útvonal alakjának része.
-function distanceToPitLane(x, y, pitLanePoints) {
+// A rajzolt útvonal ABSZOLÚT első/utolsó pontján túl (a "bekötési
+// pontoknál") legfeljebb ekkora sugarú, kis "csatlakozó" tűrést engedünk —
+// NEM a teljes laneWidth/2-t — és ez a tűrés is csak a BURKOLAT-mentességnél
+// (withPitLaneOffRoad) él, a sebességkorlátnál (isInPitLane) egyáltalán nem
+// (lásd distanceToPitLane `includeEndCap` paramétere). Élő hibajelentés: a
+// teljes laneWidth/2 (5 m) a vetítés-levágás miatt egy TELJES KÖRRÉ hajlik a
+// végpont körül, ami átlóghatott a rendes pálya aszfaltjára a bekötésnél —
+// ott tévesen érvénybe léptette a boxutcai sebességkorlátot a rendes
+// vonalon haladva is. A burkolat-mentességnél ez a kis tűrés ártalmatlan
+// (sőt: kell is a sima fizikai átmenethez), a sebességkorlátnál viszont NEM
+// az — ott a végpontokon túl semmilyen ráhagyás nem jár, csak a ténylegesen
+// megrajzolt szakaszokon belül (lásd isInPitLane).
+const END_CAP_RADIUS = 3; // m
+
+function distanceToPitLane(x, y, pitLanePoints, includeEndCap = true) {
   const { path: points } = splitPitLane(pitLanePoints);
   if (points.length < 2) return Infinity;
   let minDist = Infinity;
-  for (let i = 0; i < points.length - 1; i++) {
+  const n = points.length;
+  for (let i = 0; i < n - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
     const dx = b.x - a.x;
     const dy = b.z - a.z;
     const lenSq = dx * dx + dy * dy;
-    const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.z) * dy) / lenSq));
+    const rawT = lenSq < 1e-9 ? 0 : ((x - a.x) * dx + (y - a.z) * dy) / lenSq;
+    const beyondStart = i === 0 && rawT < 0;
+    const beyondEnd = i === n - 2 && rawT > 1;
+    const t = Math.max(0, Math.min(1, rawT));
     const cx = a.x + t * dx;
     const cy = a.z + t * dy;
     const d = Math.hypot(x - cx, y - cy);
-    if (d < minDist) minDist = d;
+    if (beyondStart || beyondEnd) {
+      if (includeEndCap && d <= END_CAP_RADIUS && d < minDist) minDist = d;
+    } else if (d < minDist) {
+      minDist = d;
+    }
   }
   return minDist;
 }
 
-// (x,y) a boxutca-útvonal MENTÉN van-e (laneWidth/2-n belül) — a hívó (main.js)
-// ezzel dönti el, érvényes-e a boxutcai sebességkorlát (lásd
-// RACE.pitStop.maxLaneSpeed / sim/car.js updateCar hívása).
-// `offRoadExcess` (opcionális, a FŐ pályáé): a boxutca a rendes pályára
-// BEKÖTÉSI pontjainál (a rajzolt útvonal kezdete/vége) a laneWidth/2 sugarú
-// tűrés — mivel a legközelebbi-szakasz vetítés a végpontokon egy TELJES
-// félkör-sapkává hajlik — átlóghat a rendes pálya aszfaltjára is, ahol a
-// versenyző a szabályos vonalon halad. Élő hibajelentés: a rendes pályán,
-// a bekötésnél, a boxutcai sebességkorlát (100 km/h) tévesen érvénybe
-// lépett. Ha a hívó megadja a fő pálya offRoadExcess-ét, és a pont MÁR ÚGYIS
-// a rendes pályán van (offRoadExcess<=0), a boxutca-tűrés NEM számít — a
-// boxutca soha nem "lóghat rá" a rendes pályára.
+// A boxhely félátlója + kis ráhagyás — lásd withPitLaneOffRoad megjegyzését.
+// Megosztva innen, hogy az isInPitLane (sebességkorlát) UGYANEZT a
+// boxhely-tűrést használja, mint a burkolat-mentesség — különben a boxhely
+// (ami gyakran az útvonal VÉGE közelében van, tehát az END_CAP_RADIUS-on
+// kívül eshet) kimaradhatna a boxutcai sebességkorlát alól.
+function nearAnyPitBox(x, y, boxes) {
+  if (boxes.length === 0) return false;
+  const boxRadius = Math.hypot(RACE.pitStop.boxWidth, RACE.pitStop.boxDepth) / 2 + 2;
+  for (const b of boxes) {
+    if (Math.hypot(x - b.x, y - b.z) <= boxRadius) return true;
+  }
+  return false;
+}
+
+// (x,y) a boxutca-útvonal MENTÉN (laneWidth/2-n belül) VAGY egy boxhely
+// közelében van-e — a hívó (main.js) ezzel dönti el, érvényes-e a boxutcai
+// sebességkorlát (lásd RACE.pitStop.maxLaneSpeed / sim/car.js updateCar hívása).
+// `offRoadExcess` (opcionális, a FŐ pályáé): a "strict" (végpont-túlnyúlás
+// nélküli) útvonal-tűrés ÖNMAGÁBAN nem elég — élő hibajelentés (az "1"
+// pályán MÉRVE) mutatta meg, hogy a boxutca rajzolt VÉGPONTJAI (nem a
+// végponton TÚLI rész, hanem maga a lerakott pont) simán ESHETNEK a rendes
+// pálya aszfaltjára (offRoadExcess pontosan 0 ott, minden más útvonal-/
+// boxhely-pont viszont messze — a MÉRÉS szerint 9-13 m — a pályától). Ha a
+// hívó megadja a fő pálya offRoadExcess-ét, és a pont MÁR ÚGYIS a rendes
+// pályán van, a boxutcai korlát nem lép életbe — MÉRVE: ez a valós
+// geometrián kizárólag a két bekötési pontot érinti, a lane belsejét nem
+// (lásd sim/race.js-hez tartozó szórvány-tesztek).
 export function isInPitLane(x, y, pitLanePoints, offRoadExcess) {
   if (offRoadExcess && offRoadExcess(x, y) <= 0) return false;
-  return distanceToPitLane(x, y, pitLanePoints) <= RACE.pitStop.laneWidth / 2;
+  if (distanceToPitLane(x, y, pitLanePoints, false) <= RACE.pitStop.laneWidth / 2) return true;
+  return nearAnyPitBox(x, y, splitPitLane(pitLanePoints).boxes);
 }
 
 // A boxutca-útvonal BURKOLATKÉNT (nem csak megállásra kijelölt területként) is
@@ -144,22 +182,17 @@ export function isInPitLane(x, y, pitLanePoints, offRoadExcess) {
 export function withPitLaneOffRoad(offRoadExcess, pitLanePoints) {
   const { path, boxes } = splitPitLane(pitLanePoints);
   if (path.length < 2) return offRoadExcess;
-  // A boxhely köré is jár ez a "burkolat" tűrés, NEM CSAK az útvonal
-  // középvonala köré — élő hibajelentés: szűk hely esetén (a boxutca és a
-  // fő pálya közt kevés a tér) a boxhely SZÉLE a középvonaltól mérve épp
-  // kieshet a laneWidth/2 sugarú tűrésből (a boxhely a lane jobb szélére
-  // van eltolva, lásd editor.js offsetToRightSide), miközben a versenyző
-  // vizuálisan egyértelműen "a boxban/a boxutcán" van, nem a fűben. A
-  // boxhely félátlója (+ kis ráhagyás) garantálja, hogy a TELJES rács-
-  // terület, ne csak a középpontja, burkolatnak számítson.
-  const boxRadius = Math.hypot(RACE.pitStop.boxWidth, RACE.pitStop.boxDepth) / 2 + 2;
   return (x, y) => {
     const base = offRoadExcess(x, y);
     if (base <= 0) return base; // már úgyis a pályán van
     if (distanceToPitLane(x, y, pitLanePoints) <= RACE.pitStop.laneWidth / 2) return 0;
-    for (const b of boxes) {
-      if (Math.hypot(x - b.x, y - b.z) <= boxRadius) return 0;
-    }
+    // A boxhely köré is jár ez a "burkolat" tűrés, NEM CSAK az útvonal
+    // középvonala köré — élő hibajelentés: szűk hely esetén (a boxutca és a
+    // fő pálya közt kevés a tér, VAGY a boxhely az útvonal VÉGE közelében
+    // van, az END_CAP_RADIUS-on túl) a boxhely SZÉLE kieshetne a lane
+    // tűréséből, miközben a versenyző vizuálisan egyértelműen "a boxban/a
+    // boxutcán" van, nem a fűben (lásd nearAnyPitBox).
+    if (nearAnyPitBox(x, y, boxes)) return 0;
     return base;
   };
 }
