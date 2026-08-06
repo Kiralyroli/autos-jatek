@@ -101,7 +101,11 @@ function createHighlightMesh(pos, dir) {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.y = -dir;
-  mesh.position.set(pos.x, 0.07, pos.z);
+  // A trackRibbon.js rétegmagasság-összefoglalója szerinti szint FÖLÖTT (a
+  // boxhely-keret 0.09-en van) — átlátszó + depthWrite:false + renderOrder
+  // miatt ez amúgy sem versenyezne a mélység-pufferért, de a konzisztencia
+  // kedvéért ez is a rétegrend fölött ül.
+  mesh.position.set(pos.x, 0.1, pos.z);
   mesh.renderOrder = 1;
   return mesh;
 }
@@ -139,7 +143,7 @@ export function setMyBoxIndex(marker, index) {
   marker.label.position.set(b.x, LABEL_HEIGHT, b.z);
   if (marker.highlight) {
     marker.highlight.visible = true;
-    marker.highlight.position.set(b.x, 0.07, b.z);
+    marker.highlight.position.set(b.x, 0.1, b.z);
     marker.highlight.rotation.y = -b.dir;
   }
 }

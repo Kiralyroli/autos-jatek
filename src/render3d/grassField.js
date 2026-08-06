@@ -37,8 +37,15 @@ export async function addGrassField(scene) {
 
   // A hatalmas háttér-sík FÜGGETLENÜL a részletes grass.glb csempéktől —
   // akkor is legyen "vég nélküli" talaj, ha a modell betöltése elbukna
-  // (lásd lent a `grass` null-ellenőrzését). Kicsivel a csempék (-0.02)
-  // ALATT, hogy ne z-fighteljen velük ott, ahol átfednek.
+  // (lásd lent a `grass` null-ellenőrzését). A csempék (-0.02) ALATT, de
+  // NEM csak 3 cm-rel — élő hibajelentés: a főmenü forgó kamerájánál a fű
+  // textúrája "villódzott", mert a két réteg (eltérő textúra-ismétléssel:
+  // BIG_GROUND_REPEAT itt, ASSETS.textures.grassRepeat a csempéknél) olyan
+  // közel volt egymáshoz, hogy a mélység-puffer pontatlansága (a kamera
+  // near/far aránya, lásd scene.js PerspectiveCamera 0.1–700) egyes
+  // pixeleknél hol az egyiket, hol a másikat "nyerte" (klasszikus
+  // z-fighting) — távolabbi/ferdébb kameraszögnél ez különösen kiütközik.
+  // 1 méteres eltéréssel ez a bizonytalanság gyakorlatilag megszűnik.
   const bigTex = await loadTexture(ASSETS.textures.grass, BIG_GROUND_REPEAT);
   const bigGeo = new THREE.PlaneGeometry(BIG_GROUND_SIZE, BIG_GROUND_SIZE);
   const bigMat = new THREE.MeshLambertMaterial({
@@ -47,7 +54,7 @@ export async function addGrassField(scene) {
   });
   const bigMesh = new THREE.Mesh(bigGeo, bigMat);
   bigMesh.rotation.x = -Math.PI / 2;
-  bigMesh.position.set(centerX, -0.05, centerZ);
+  bigMesh.position.set(centerX, -1, centerZ);
   scene.add(bigMesh);
 
   const grass = await loadModel('/assets/track/grass.glb');

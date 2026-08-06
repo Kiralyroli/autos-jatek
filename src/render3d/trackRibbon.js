@@ -26,6 +26,61 @@ function cumulativeArcLength(center) {
   return cum;
 }
 
+// Két szakasz (p1→p2 és q1→q2) VALÓDI metszése — ugyanaz az orientáció-
+// alapú teszt, mint sim/race.js segmentsCross-a (itt külön példányban, hogy
+// a trackRibbon.js megmaradjon "tiszta"/sim-mentes modulnak, lásd a fájl
+// fejléc-megjegyzését). ELŐZŐ KÍSÉRLET (élő hibajelentés — screenshot: lyukak
+// a pályán, kilátszó fűvel): egy "az él visszafordul-e a haladási irányhoz
+// képest" heurisztika hamis pozitívokat adott — a valós "1" pálya adatával
+// MÉRVE 0 tényleges (rail-metsző) önmetszés volt, miközben a heurisztika
+// 7 szegmensnél is jelzett, és a fölöslegesen bekapcsolt "fan" ott valódi
+// útfelületet dobott el. A TÉNYLEGES metszés-teszt ezt nem adja hamisan.
+function orient(ax, az, bx, bz, cx, cz) {
+  return Math.sign((bx - ax) * (cz - az) - (bz - az) * (cx - ax));
+}
+function segmentsCross(p1x, p1z, p2x, p2z, q1x, q1z, q2x, q2z) {
+  return (
+    orient(p1x, p1z, p2x, p2z, q1x, q1z) !== orient(p1x, p1z, p2x, p2z, q2x, q2z) &&
+    orient(q1x, q1z, q2x, q2z, p1x, p1z) !== orient(q1x, q1z, q2x, q2z, p2x, p2z)
+  );
+}
+// A bal (side=+1) és jobb (side=-1) szélek KÖZÖTTI két "sín" (a→b, mindkét
+// oldalon) ténylegesen keresztezi-e egymást — ez a bowtie egyetlen valódi
+// jele (nem az, hogy egy oldal éle "visszafordul", ami önmagában ártatlan
+// lehet enyhe kanyarban). `extra`: lásd buildCurbVertexData.
+function railsCross(a, b, extra = 0) {
+  const halfA = (Number.isFinite(a.width) ? a.width : 0) / 2 + extra;
+  const halfB = (Number.isFinite(b.width) ? b.width : 0) / 2 + extra;
+  const L1x = a.x + a.nx * halfA, L1z = a.z + a.nz * halfA;
+  const L2x = b.x + b.nx * halfB, L2z = b.z + b.nz * halfB;
+  const R1x = a.x - a.nx * halfA, R1z = a.z - a.nz * halfA;
+  const R2x = b.x - b.nx * halfB, R2z = b.z - b.nz * halfB;
+  return segmentsCross(L1x, L1z, L2x, L2z, R1x, R1z, R2x, R2z);
+}
+
+// Előjeles terület (Z-komponense (b-a)×(c-a)-nak, x/z síkban) — a szokásos
+// (nem-fan) szalag-háromszögek MINDIG negatív értéket adnak ezzel a
+// képlettel (ez a projekt "CCW felülnézetből" konvenciója, lásd lent). Ezt
+// használjuk referenciaként a fan-háromszögek helyes körüljárásához.
+function signedArea2D(ax, az, bx, bz, cx, cz) {
+  return (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+}
+
+// Egy fan-háromszög (a,b,c) a HELYES (a rendes szalag-háromszögekkel EGYEZŐ)
+// körüljárással. FONTOS: a fan csuklópontja körül a helyes sorrend a KANYAR
+// IRÁNYÁTÓL függ — mérve (a valós "1" pálya adatával): egy FIX sorrend a
+// kanyarok kb. felénél fordított (FrontSide mellett LÁTHATATLAN, azaz LYUK a
+// pályán) háromszöget adott. Ezért itt mindig KISZÁMOLJUK a tényleges
+// előjeles területet, és ha az "rossz" (>= 0), felcseréljük az utolsó két
+// csúcsot — ez megfordítja a körüljárást, a háromszög alakját nem.
+function pushOrientedTriangle(indices, positions, a, b, c) {
+  const ax = positions[a * 3], az = positions[a * 3 + 2];
+  const bx = positions[b * 3], bz = positions[b * 3 + 2];
+  const cx = positions[c * 3], cz = positions[c * 3 + 2];
+  if (signedArea2D(ax, az, bx, bz, cx, cz) < 0) indices.push(a, b, c);
+  else indices.push(a, c, b);
+}
+
 // Az aszfalt-szalag nyers geometriája: 2 vertex/pont (bal/jobb él), 2 háromszög/
 // szegmens. Visszatérés: { positions, normals, uvs, indices } (sima számtömbök —
 // a hívó alakítja Float32Array/Uint32Array-ré, ha THREE-nek adja át).
@@ -58,21 +113,22 @@ export function buildRibbonVertexData(center, fallbackRoadHalf) {
     const next = (i + 1) % n;
     const L = 2 * i, R = 2 * i + 1, Ln = 2 * next, Rn = 2 * next + 1;
     // ÉLES SAROK (lásd sim/trackSpline.js — a törésponton két/három bejegyzés
-    // kerül UGYANARRA a pozícióra, eltérő haladási iránnyal). A SZOKÁSOS
-    // szalag-quad (L,R,Rn,Ln) ilyenkor ÖNMAGÁT METSZŐ ("bowtie") alakot adna —
-    // mivel L/R a középponthoz képest átellenes pontok, elforgatva összekötve
-    // MATEMATIKAILAG mindig keresztezik egymást, függetlenül a forgás
-    // mértékétől (élő hibajelentés — screenshoton látszó, fűbe "beharapó" rés
-    // a szegélyen). Helyette a KÖZÖS KÖZÉPPONTBÓL fanolunk — külön háromszög a
-    // bal és külön a jobb oldalra —, ami garantáltan nem metszi önmagát.
-    const sameCenter = Math.hypot(center[next].x - center[i].x, center[next].z - center[i].z) < 1e-6;
-    if (sameCenter) {
+    // kerül UGYANARRA a pozícióra, eltérő haladási iránnyal) VAGY egy olyan
+    // szegmens, ahol a bal/jobb "sín" ténylegesen keresztezi egymást (lásd
+    // railsCross fent). A SZOKÁSOS szalag-quad (L,R,Rn,Ln) mindkét esetben
+    // ÖNMAGÁT METSZŐ ("bowtie") alakot adna. Helyette a KÖZÖS KÖZÉPPONTBÓL
+    // fanolunk — külön háromszög a bal és külön a jobb oldalra —, ami
+    // garantáltan nem metszi önmagát.
+    const needsFan =
+      Math.hypot(center[next].x - center[i].x, center[next].z - center[i].z) < 1e-6 ||
+      railsCross(center[i], center[next]);
+    if (needsFan) {
       const c = positions.length / 3;
       positions.push(center[i].x, 0, center[i].z);
       normals.push(0, 1, 0);
       uvs.push(0.5, cum[i] / vRepeat);
-      indices.push(L, c, Ln);
-      indices.push(c, R, Rn);
+      pushOrientedTriangle(indices, positions, L, c, Ln);
+      pushOrientedTriangle(indices, positions, c, R, Rn);
       continue;
     }
     // Két háromszög/szegmens, CCW winding felülnézetből (kamera mindig +Y fölött
@@ -85,7 +141,17 @@ export function buildRibbonVertexData(center, fallbackRoadHalf) {
     // és a fény (Hemisphere ground-szín + nulla directional) szinte feketén
     // jelenne meg (élő hibajelentés — pontosan ez történt, míg a sorrend javítva
     // nem lett). Emiatt a hívó FrontSide-ot állít, NEM DoubleSide-ot.
-    indices.push(L, Rn, R, L, Ln, Rn);
+    //
+    // pushOrientedTriangle (nem fix indices.push) KELL itt is: egy nem-
+    // konvex, de nem önmetsző négyszögnél (enyhén szűkülő/táguló kanyar) a
+    // FIX átló-választás az egyik háromszöget "hátra nézővé" teheti, ami
+    // FrontSide mellett LÁTHATATLAN — élő hibajelentés (screenshot: lyukak a
+    // pályán) mutatta meg, hogy ez a normál (nem-fan) esetben IS előfordul,
+    // nem csak a kifejezetten önmetsző (railsCross) szegmenseknél. Mérve (a
+    // valós "1" pálya adatával): 7 ilyen háromszög volt, 2.7-96.6 m² közti
+    // (tehát NEM elhanyagolható, numerikus zaj miatti) területtel.
+    pushOrientedTriangle(indices, positions, L, Rn, R);
+    pushOrientedTriangle(indices, positions, L, Ln, Rn);
   }
 
   return { positions, normals, uvs, indices };
@@ -124,23 +190,33 @@ export function buildCurbVertexData(center, fallbackRoadHalf, curbWidth) {
     const LO = 4 * i, LI = 4 * i + 1, RI = 4 * i + 2, RO = 4 * i + 3;
     const LOn = 4 * next, LIn = 4 * next + 1, RIn = 4 * next + 2, ROn = 4 * next + 3;
     // ÉLES SAROK — lásd buildRibbonVertexData megjegyzése: a szokásos szalag-
-    // quad ilyenkor önmagát metsző alakot adna. Egyetlen HÁROMSZÖG sosem lehet
-    // önmetsző, ezért a belső (LI/RI, az útszélen lévő) pontot használjuk
-    // fanolási csuklópontnak — nincs szükség új vertexre, mint a ribbonnál
-    // (ott a csukló a valódi középvonal-pont volt).
-    const sameCenter = Math.hypot(center[next].x - center[i].x, center[next].z - center[i].z) < 1e-6;
-    if (sameCenter) {
-      indices.push(LI, LO, LOn);
-      indices.push(LI, LOn, LIn);
-      indices.push(RI, ROn, RO);
-      indices.push(RI, RIn, ROn);
+    // quad ilyenkor önmagát metsző alakot adna (a KÜLSŐ, curbWidth-del is
+    // megtoldott szegély-sín legalább annyira "hajlamos" keresztezni, mint a
+    // nála beljebb lévő úté, lásd railsCross `extra` paramétere). Egyetlen
+    // HÁROMSZÖG sosem lehet önmetsző, ezért a belső (LI/RI, az útszélen
+    // lévő) pontot használjuk fanolási csuklópontnak — nincs szükség új
+    // vertexre, mint a ribbonnál (ott a csukló a valódi középvonal-pont volt).
+    const needsFan =
+      Math.hypot(center[next].x - center[i].x, center[next].z - center[i].z) < 1e-6 ||
+      railsCross(center[i], center[next], curbWidth);
+    if (needsFan) {
+      // ÉLŐ VISSZAJELZÉS: a fan-"sapka" (a domború oldalon egy szélesség-
+      // arányos, éles fehér ék, ami az aszfaltra belóg) zavarónak bizonyult
+      // vizuálisan — inkább KIHAGYJUK a szegélyt ezen a rövid szakaszon,
+      // minthogy egy éles fehér csík nyúljon be a pályára. Ez egy apró,
+      // gyakorlatilag észrevehetetlen rést hagy a fehér szegély-vonalban
+      // pont a sarok csúcsánál — sokkal kevésbé feltűnő, mint a korábbi ék.
+      continue;
       continue;
     }
     // Bal szegély-sáv (LOuter..LInner) + jobb szegély-sáv (RInner..ROuter) — CCW
     // winding felülnézetből, lásd buildRibbonVertexData megjegyzése (ugyanaz a
-    // winding-irányítási hiba/javítás vonatkozik ide is).
-    indices.push(LO, LIn, LI, LO, LOn, LIn);
-    indices.push(RI, ROn, RO, RI, RIn, ROn);
+    // winding-irányítási hiba/javítás — pushOrientedTriangle a fix push
+    // helyett — vonatkozik ide is).
+    pushOrientedTriangle(indices, positions, LO, LIn, LI);
+    pushOrientedTriangle(indices, positions, LO, LOn, LIn);
+    pushOrientedTriangle(indices, positions, RI, ROn, RO);
+    pushOrientedTriangle(indices, positions, RI, RIn, ROn);
   }
 
   return { positions, normals, uvs, indices };
@@ -235,7 +311,11 @@ function addStartStripe(scene, p0, roadHalf, texture) {
     side: THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 0.062; // az aszfalt (0.06) fölé, hogy ne z-fighteljen
+  // Rétegmagasságok (lásd loadTrackRibbon végén az összefoglaló megjegyzést)
+  // — élő hibajelentés: a korábbi 2 mm-es rés (0.06 -> 0.062) a mélység-
+  // puffer pontatlansága miatt villódzást (z-fighting) okozott a kanyarban/
+  // boxutcánál. 2 cm-es rés ezt megszünteti.
+  mesh.position.y = 0.08;
   mesh.receiveShadow = true;
   scene.add(mesh);
 }
@@ -326,7 +406,12 @@ function buildPitLaneRibbon(pitLanePoints, roadMat) {
     const yawGroup = new THREE.Group();
     yawGroup.rotation.y = -dir; // a szakasz iránya a világ X-tengelyhez képest
     yawGroup.add(mesh);
-    yawGroup.position.set((a.x + b.x) / 2, 0.06, (a.z + b.z) / 2); // ua. magasság, mint a fő aszfalt-szalag
+    // A fő aszfalt-szalag ALATT (nem UGYANAZON a magasságon!) — élő
+    // hibajelentés: a korábbi azonos magasság a bekötési pontoknál (ahol a
+    // két szalag ténylegesen fedi egymást) villódzást okozott. Alatta
+    // lévén a fő pálya "nyer" az átfedésnél, nincs verseny a mélység-
+    // pufferért — lásd loadTrackRibbon végén az összefoglaló megjegyzést.
+    yawGroup.position.set((a.x + b.x) / 2, 0.05, (a.z + b.z) / 2);
     mesh.receiveShadow = true;
     group.add(yawGroup);
   }
@@ -383,7 +468,7 @@ function buildPitBoxMarkers(pitLanePoints) {
     const edges = new THREE.EdgesGeometry(plane);
     const line = new THREE.LineSegments(edges, mat);
     line.rotation.y = -dir;
-    line.position.set(b.x, 0.065, b.z); // a fő aszfalt (0.06) fölé, ne z-fighteljen
+    line.position.set(b.x, 0.09, b.z); // lásd loadTrackRibbon rétegmagasság-összefoglalóját
     group.add(line);
   }
   return group;
@@ -397,6 +482,18 @@ function buildPitBoxMarkers(pitLanePoints) {
 // paraméter — lásd VISUAL_CURB_WIDTH lent. `pitLanePoints` (opcionális):
 // trackStorage.js loadPitLane() eredménye — ha van (≥2 pont), a boxutca-
 // útvonal felülete is lerakódik, UGYANAZZAL az aszfalt-textúrával.
+// RÉTEGMAGASSÁGOK (Y, méterben) — élő hibajelentés: korábban több réteg
+// pár MM-re (vagy pontosan UGYANARRA) a magasságra került, ami a mélység-
+// puffer véges pontossága miatt villódzást (z-fighting) okozott ott, ahol
+// két réteg ténylegesen fedte egymást (pl. a boxutca bekötésénél, éles
+// kanyarban) — a kamera szögétől/távolságától függően hol az egyik, hol a
+// másik réteg "nyert". Legalább 1 cm-es réssel ez megszűnik:
+//   0.04  szegély (curbMesh)                        — a fő pálya ALATT (finomabb átmenet)
+//   0.05  boxutca-szalag (buildPitLaneRibbon)      — a fő pálya ALATT
+//   0.06  fő aszfalt-szalag (roadMesh)              — alapszint
+//   0.08  rajt/cél kockás csík (addStartStripe)
+//   0.09  boxhely-jelölés kerete (buildPitBoxMarkers)
+//   0.10  pitMarker.js SAJÁT boxhely-kiemelés
 export async function loadTrackRibbon(scene, track, roadHalf, pitLanePoints) {
   const { center } = track;
 
@@ -452,7 +549,11 @@ export async function loadTrackRibbon(scene, track, roadHalf, pitLanePoints) {
     side: THREE.FrontSide,
   });
   const curbMesh = new THREE.Mesh(curbGeo, curbMat);
-  curbMesh.position.y = 0.06;
+  // A fő aszfalt ALATT (nem fölötte) — élő visszajelzés alapján a korábbi
+  // "fölé emelt" szegély kicsit lebegőnek/lépcsősnek hatott; alulra téve az
+  // aszfalt pereme finoman ráfed, simább az átmenet. Lásd a fenti
+  // rétegmagasság-összefoglalót.
+  curbMesh.position.y = 0.04;
   curbMesh.receiveShadow = true;
   scene.add(curbMesh);
 
