@@ -32,6 +32,7 @@ import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './rend
 import { loadTrackRibbon } from './render3d/trackRibbon.js';
 import { loadDecorations } from './render3d/decorations.js';
 import { addGrassField } from './render3d/grassField.js';
+import { addMountains } from './render3d/mountains.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
 import { setupWheels } from './render3d/wheels.js';
 import { createCarEffects } from './render3d/carEffects.js';
@@ -154,6 +155,7 @@ if (trackState.track.tiles.length === 0) {
   loadTrackTiles(scene);
 }
 addGrassField(scene);
+addMountains(scene);
 loadDecorations(scene);
 // A mentett kamera-beállítás (távolság/magasság/szög) betöltése MÉG a chase
 // kamera létrehozása/az első render előtt, hogy rögtön a választott nézettel induljon.
