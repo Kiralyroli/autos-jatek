@@ -156,7 +156,12 @@ export function createTrackerContext({ trackState, decorations, pitLane, physics
     // használni a NYERS trackState.checkpoints helyett (lásd update() lent),
     // különben a boxutcán áthaladva a fix szélességű célvonal-checkpoint nem
     // biztos, hogy átszelhető marad.
-    checkpoints: widenCheckpointsForPitLane(trackState.checkpoints, pitLanePoints),
+    checkpoints: widenCheckpointsForPitLane(
+      trackState.checkpoints,
+      pitLanePoints,
+      trackState.trackProgress,
+      trackState.trackLength
+    ),
     laps,
     // A leggyorsabb elérhető csúcssebesség ehhez a szobához (BOOST-tal együtt) —
     // a sebesség-ellenőrzés felső korlátja. A szoba fizikája adja; ismeretlennél

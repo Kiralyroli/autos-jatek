@@ -28,7 +28,12 @@ export const spawn = trackState.spawn;
 // lásd sim/race.js widenCheckpointsForPitLane — hogy a boxutcán áthaladva is
 // biztosan érzékelje az átszelést, függetlenül a boxutca pontos távolságától/
 // irányától a főúthoz képest.
-export const checkpoints = widenCheckpointsForPitLane(trackState.checkpoints, pitLanePoints);
+export const checkpoints = widenCheckpointsForPitLane(
+  trackState.checkpoints,
+  pitLanePoints,
+  trackState.trackProgress,
+  trackState.trackLength
+);
 // A boxutca-útvonal (ha van a pályán) BURKOLATKÉNT viselkedik — büntetlenül
 // behajtható (lásd sim/race.js withPitLaneOffRoad). A trackFactory maga nem
 // ismeri ezt az útvonalat, ezért itt, a klienshez tartozó egyszeri

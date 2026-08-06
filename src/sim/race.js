@@ -209,7 +209,14 @@ export function withPitLaneOffRoad(offRoadExcess, pitLanePoints) {
 // milyen messze/milyen szögben fut a boxutca. A hívó (sim/track.js kliensen,
 // server/raceTracker.js szerveren) ezt hívja meg EGYSZER, pálya-építéskor —
 // nem a trackFactory.js-ben él, mert az szándékosan nem ismeri a boxutcát.
-export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
+// `trackProgress` (x,y)=>0..1 és `trackLength` (m): a pálya SAJÁT hurok-menti
+// pozíció-mérése (trackFactory.js trackProgress, ugyanaz, amit az élő állás
+// sorrendje is használ) — ezzel dönthető el, hogy egy Euklideszi-távolban
+// "közeli" boxutca-pont VALÓBAN ehhez a checkponthoz tartozik-e, vagy csak a
+// pálya egy TÁVOLI (a hurok más szakaszán lévő) pontja esik történetesen
+// fizikailag közel (kanyargó pálya, élő hibajelentés). Opcionális — ha a
+// hívó nem adja meg, a régi (csak légvonalbeli) szűrésre esik vissza.
+export function widenCheckpointsForPitLane(checkpoints, pitLanePoints, trackProgress, trackLength) {
   const { path: points } = splitPitLane(pitLanePoints);
   if (points.length < 2) return checkpoints;
   // "Közeli" = a checkpont KÖZÉPPONTJÁTÓL mért VALÓDI (mindkét irányú)
@@ -227,8 +234,21 @@ export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
   // továbbra is csak a keresztirányú komponens — így a widen soha nem lehet
   // nagyobb, mint NEARBY_M + MARGIN_M, FÜGGETLENÜL attól, milyen irányban áll
   // a boxutca-pont a checkponthoz képest.
+  //
+  // EZ MÉG MINDIG NEM ELÉG kanyargó pályán: élő hibajelentés (ugyanazon
+  // pályán, a rajtegyenesen, tisztán a pályán haladva) mutatta meg, hogy a
+  // pálya EGY TÁVOLI (más körszakaszon lévő) checkpointja is "közelinek"
+  // számíthat pusztán légvonalban, ha a kanyargó pálya visszahajlik a
+  // boxutca közelébe — a NEARBY_M ilyenkor akár 60-70 m-es keresztirányú
+  // szélesítést is engedett egy, a hurok EGY EGÉSZEN MÁS pontján lévő
+  // checkpointnak, ami így átmetszette a versenyző valódi útját egy teljesen
+  // más helyen. Ezért — ha a hívó megadja — a relevancia-szűrés MOST a pálya
+  // SAJÁT (hurok-menti) távolságát is megköveteli, nem csak a légvonalbelit:
+  // egy pont csak akkor számít "közelinek" egy checkponthoz, ha MINDKÉT
+  // mérték szerint közeli — a légvonalbeli ÉS a pálya mentén mért is.
   const NEARBY_M = 80;
   const MARGIN_M = 5;
+  const haveProgress = typeof trackProgress === 'function' && Number.isFinite(trackLength) && trackLength > 0;
   return checkpoints.map((cp) => {
     const mx = (cp.a.x + cp.b.x) / 2;
     const my = (cp.a.y + cp.b.y) / 2;
@@ -238,12 +258,19 @@ export function widenCheckpointsForPitLane(checkpoints, pitLanePoints) {
     if (len < 1e-6) return cp;
     const ux = dirX / len; // a checkpoint SAJÁT tengelye (keresztirányban, ebbe szélesítünk)
     const uy = dirY / len;
+    const cpProgress = haveProgress ? trackProgress(mx, my) * trackLength : null;
     let maxReach = 0;
     let found = false;
     for (const p of points) {
       const dx = p.x - mx;
       const dy = p.z - my;
-      if (Math.hypot(dx, dy) > NEARBY_M) continue; // valódi távolság a checkpont középpontjától
+      if (Math.hypot(dx, dy) > NEARBY_M) continue; // légvonalbeli előszűrés
+      if (haveProgress) {
+        const pProgress = trackProgress(p.x, p.z) * trackLength;
+        const raw = Math.abs(pProgress - cpProgress);
+        const alongTrackDist = Math.min(raw, trackLength - raw); // körkörös (a hurok zár)
+        if (alongTrackDist > NEARBY_M) continue; // a hurok EGY MÁSIK szakaszán van, nem ide tartozik
+      }
       found = true;
       const across = Math.abs(dx * ux + dy * uy); // csak a keresztirányú komponens hízlalja a widen-t
       if (across > maxReach) maxReach = across;
