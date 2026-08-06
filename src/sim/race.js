@@ -119,7 +119,17 @@ function distanceToPitLane(x, y, pitLanePoints) {
 // (x,y) a boxutca-útvonal MENTÉN van-e (laneWidth/2-n belül) — a hívó (main.js)
 // ezzel dönti el, érvényes-e a boxutcai sebességkorlát (lásd
 // RACE.pitStop.maxLaneSpeed / sim/car.js updateCar hívása).
-export function isInPitLane(x, y, pitLanePoints) {
+// `offRoadExcess` (opcionális, a FŐ pályáé): a boxutca a rendes pályára
+// BEKÖTÉSI pontjainál (a rajzolt útvonal kezdete/vége) a laneWidth/2 sugarú
+// tűrés — mivel a legközelebbi-szakasz vetítés a végpontokon egy TELJES
+// félkör-sapkává hajlik — átlóghat a rendes pálya aszfaltjára is, ahol a
+// versenyző a szabályos vonalon halad. Élő hibajelentés: a rendes pályán,
+// a bekötésnél, a boxutcai sebességkorlát (100 km/h) tévesen érvénybe
+// lépett. Ha a hívó megadja a fő pálya offRoadExcess-ét, és a pont MÁR ÚGYIS
+// a rendes pályán van (offRoadExcess<=0), a boxutca-tűrés NEM számít — a
+// boxutca soha nem "lóghat rá" a rendes pályára.
+export function isInPitLane(x, y, pitLanePoints, offRoadExcess) {
+  if (offRoadExcess && offRoadExcess(x, y) <= 0) return false;
   return distanceToPitLane(x, y, pitLanePoints) <= RACE.pitStop.laneWidth / 2;
 }
 

@@ -966,7 +966,9 @@ function idleFrame(now) {
 // `undefined`-et ad vissza a lane-en KÍVÜL, hogy a hívó (sim/car.js updateCar)
 // a saját alapértelmezett (CAR) paramétereire essen vissza.
 function carParamsFor(x, y, pitLanePoints) {
-  if (!pitLanePoints || pitLanePoints.length < 2 || !isInPitLane(x, y, pitLanePoints)) return undefined;
+  // offRoadExcess átadva: a bekötési pontoknál (a boxutca kezdete/vége) a
+  // lane-tűrés NE terjedjen át a rendes pálya aszfaltjára (lásd isInPitLane).
+  if (!pitLanePoints || pitLanePoints.length < 2 || !isInPitLane(x, y, pitLanePoints, offRoadExcess)) return undefined;
   return { ...CAR, maxForwardSpeed: RACE.pitStop.maxLaneSpeed, boostMaxSpeedMultiplier: 1 };
 }
 
