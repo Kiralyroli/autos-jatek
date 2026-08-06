@@ -182,6 +182,7 @@ function readInput() {
 }
 const audio = createAudio();
 const speedNumEl = document.getElementById('speedNum');
+const spectateBadgeEl = document.getElementById('spectateBadge');
 
 // Szöveg biztonságos beszúrása HTML-sablonba (XSS-védelem).
 //
@@ -1514,6 +1515,30 @@ async function startMultiplayer(room) {
   // (lásd server/RaceRoom.js), addig 0 az alapérték (lásd mySlotIndex).
   let mySlotIndex = 0;
   let myPitBox = pitBoxForSlot(mpPitLanePoints, mySlotIndex);
+  // Kamera-nézés (spectate) célba éréskor: minden játékos slotIndexe (a
+  // 'raceStart' üzenet ÖSSZES játékosra elküldi, lásd raceStart-kezelő) —
+  // ebből deríthető ki, ki a "következő" rajtrács-sorrendben. `spectateId`:
+  // a JELENLEG követett (nem-saját) versenyző id-je, amíg mi már célba
+  // értünk, ő viszont még nem — lásd a frame() ciklus kamera-részét.
+  let slotIndexById = {};
+  let spectateId = null;
+  // A "következő" versenyző kiválasztása `afterId` UTÁN, rajtrács-sorrendben
+  // (körkörösen) — kihagyja a magunkét (myId) és a MÁR célba érteket. `null`,
+  // ha senki nem versenyez már rajtunk kívül (mindenki célba ért/DNF-elt).
+  function pickNextSpectateTarget(afterId, players) {
+    const order = Object.keys(players)
+      .filter((id) => id !== myId)
+      .sort((a, b) => (slotIndexById[a] ?? 999) - (slotIndexById[b] ?? 999));
+    if (order.length === 0) return null;
+    let startAt = order.indexOf(afterId);
+    if (startAt === -1) startAt = -1; // ismeretlen -> a lista elejétől nézzük
+    for (let i = 1; i <= order.length; i++) {
+      const id = order[(startAt + i + order.length) % order.length];
+      const p = players[id];
+      if (p && !p.finished) return id;
+    }
+    return null;
+  }
   // Vizuális jelölés — MINDEN kijelölt boxhely rácsa + a SAJÁT helyünk fölött
   // lebegő "BOX" felirat (lásd render3d/pitMarker.js) — a láthatóságot
   // mpRace.pitStopDone vezérli a frame() ciklusban.
@@ -1666,16 +1691,30 @@ async function startMultiplayer(room) {
       // DNF-ek egymás közt: aki messzebb jutott (kör + folytonos pálya-progressz), előrébb.
       return (b.lap + (b.progress || 0)) - (a.lap + (a.progress || 0));
     });
+    // A TELJES idő magában nem sokat mond (lásd élő visszajelzés) — helyette
+    // mindenki a KÖZVETLENÜL ELŐTTE végzett játékoshoz képesti rést mutatja
+    // ("intervallum", nem az élhez mért összesített hátrány) — ez az, amit a
+    // legtöbb versenyzésben megszoktunk. Az élen álló idejéhez nincs mihez
+    // hasonlítani, ő "Győztes" jelzést kap.
+    let prevTime = null;
     resultsListEl.innerHTML = list
-      .map((p, i) => {
+      .map((p) => {
         const pos = p.finished ? `${p.place}.` : '–';
         const medal = p.place === 1 ? '🥇' : p.place === 2 ? '🥈' : p.place === 3 ? '🥉' : '';
-        const time = p.finished
-          ? `<span class="rtime">${p.totalTime.toFixed(2)} s</span>`
-          : `<span class="dnf">DNF</span>`;
+        let gap;
+        if (p.finished) {
+          gap =
+            prevTime === null
+              ? `<span class="rgap leader">Győztes</span>`
+              : `<span class="rgap">+${fmtTime(p.totalTime - prevTime)}</span>`;
+          prevTime = p.totalTime;
+        } else {
+          gap = `<span class="dnf">DNF</span>`;
+        }
+        const best = p.bestLap != null ? `<span class="rbest">legjobb: ${fmtTime(p.bestLap)}</span>` : '';
         const meCls = p.name === playerName() ? ' me' : '';
         const dot = `<span style="color:${carColor(p.colorIdx)}">●</span>`;
-        return `<div class="res${meCls}"><span class="pos">${medal || pos}</span>${dot}<span class="rname">${escapeHtml(p.name)}</span>${time}</div>`;
+        return `<div class="res${meCls}"><span class="pos">${medal || pos}</span>${dot}<span class="rname">${escapeHtml(p.name)}</span><span class="rstats">${gap}${best}</span></div>`;
       })
       .join('');
     btnResultsAgain.style.display = isHost ? 'block' : 'none';
@@ -1828,6 +1867,15 @@ async function startMultiplayer(room) {
     }
     if (Number.isFinite(m.laps)) mpTotalLaps = m.laps;
     if (Number.isFinite(m.raceGen)) mpRaceGen = m.raceGen;
+    // Minden játékos slotIndexe (lásd fent, spectateId megjegyzése) — új
+    // versenynél nullázva, a spectate-célválasztás is friss listát kap.
+    slotIndexById = {};
+    if (m.slots) {
+      for (const [id, slot] of Object.entries(m.slots)) {
+        if (Number.isFinite(slot.slotIndex)) slotIndexById[id] = slot.slotIndex;
+      }
+    }
+    spectateId = null;
     // A TÖBBI játékos mesh-ét eldobjuk (a sajátunkat nem) — ha valaki két
     // verseny közt (lobby/finished állapotban) autót váltott, az `ensureMesh`
     // különben megtartaná a RÉGI modellt (csak ÚJ id-re tölt be, lásd ott),
@@ -2124,10 +2172,43 @@ async function startMultiplayer(room) {
       }
       carEffects.update(mpEffectsCars, dt, offRoadExcess);
 
-      // Kamera a saját autón.
+      // Spectate: ha MI már célba értünk, de a VERSENY még tart (van, aki
+      // még nem ért célba/nem DNF-elt), a kamera a következő még versenyző
+      // társra vált (lásd pickNextSpectateTarget) — amint ő is célba ér,
+      // automatikusan a soron következőre. Ha mindenki befejezte
+      // (sampled.phase==='finished'), visszaáll a saját (megállt) autóra,
+      // hogy a végeredmény-panel mellett is az látszódjon.
+      let spectateTarget = null;
+      if (myFinished && sampled.phase !== 'finished') {
+        const current = spectateId ? sampled.players[spectateId] : null;
+        if (!spectateId || !current || current.finished) {
+          spectateId = pickNextSpectateTarget(spectateId || myId, sampled.players);
+        }
+        if (spectateId) {
+          const rs = remoteCars.renderState(spectateId, alpha);
+          if (rs) spectateTarget = { x: rs.x, y: rs.y, angle: rs.angle };
+        }
+      } else {
+        spectateId = null;
+      }
+      if (spectateBadgeEl) {
+        const p = spectateId ? sampled.players[spectateId] : null;
+        if (p) {
+          spectateBadgeEl.textContent = `👁️ ${p.name} nézete`;
+          spectateBadgeEl.style.display = 'flex';
+        } else {
+          spectateBadgeEl.style.display = 'none';
+        }
+      }
+
+      // Kamera a saját autón — vagy célba érés után a spectate-célon.
       if (window.__TOP) {
-        camera.position.set(ownX, window.__TOP, ownY + 0.001);
-        camera.lookAt(ownX, 0, ownY);
+        const tx = spectateTarget ? spectateTarget.x : ownX;
+        const ty = spectateTarget ? spectateTarget.y : ownY;
+        camera.position.set(tx, window.__TOP, ty + 0.001);
+        camera.lookAt(tx, 0, ty);
+      } else if (spectateTarget) {
+        updateCamera(spectateTarget.x, spectateTarget.y, spectateTarget.angle, dt, false);
       } else {
         updateCamera(ownX, ownY, ownA, dt, mpDrive.boosting);
       }

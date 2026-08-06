@@ -376,8 +376,28 @@
         text-align: center;
       }
       #resultsList .res .rname { flex: 1; font-weight: 600; }
-      #resultsList .res .rtime { color: var(--text-dim); font-variant-numeric: tabular-nums; }
       #resultsList .res .dnf { color: var(--danger); }
+      /* Jobb oldali stat-oszlop: felül az intervallum (a KÖZVETLENÜL előtte
+         végzetthez képesti rés — nem az élhez mért összesített hátrány),
+         alul a versenyző legjobb köre — lásd main.js showResults. */
+      #resultsList .res .rstats {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+      }
+      #resultsList .res .rgap {
+        color: var(--text-dim);
+        font-variant-numeric: tabular-nums;
+        font-size: 15px;
+      }
+      #resultsList .res .rgap.leader { color: var(--gold); font-weight: 700; }
+      #resultsList .res .rbest {
+        color: var(--text-dim);
+        font-size: 12px;
+        opacity: 0.75;
+        font-variant-numeric: tabular-nums;
+      }
       #countdown {
         position: fixed;
         inset: 0;
@@ -455,6 +475,32 @@
         font-weight: 700;
         color: #241a05;
         background: var(--gold, #d4a94e);
+        padding: 8px 16px;
+        border-radius: 10px;
+        pointer-events: none;
+        user-select: none;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        white-space: nowrap;
+      }
+      /* Spectate-jelzés: célba érés UTÁN, amíg a verseny (a többiek) még
+         tart, a kamera egy még versenyző társra vált (lásd main.js
+         pickNextSpectateTarget) — ez a jelvény mutatja, kit követünk épp.
+         Ugyanabban a "top" oszlopban, mint #pitStopHud, de a kettő sosem
+         látszik egyszerre (a boxkiállás-jelzés csak versenyzés közben, a
+         spectate csak MI-célba-érés UTÁN aktív), ezért nyugodtan ugyanazt a
+         helyet foglalja. Semleges kékes szín (nem hiba/teendő, csak infó). */
+      #spectateBadge {
+        position: fixed;
+        top: 220px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #fff;
+        background: rgba(58, 128, 255, 0.85);
         padding: 8px 16px;
         border-radius: 10px;
         pointer-events: none;
@@ -1924,6 +1970,7 @@
     </div>
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
     <div id="pitStopHud">🔧 Kötelező kiállás a boxutcában!</div>
+    <div id="spectateBadge"></div>
     <div id="sectordelta"></div>
     <button id="restart">🔄 Új verseny</button>
     <button id="hotlapReset">↺ Reset</button>
