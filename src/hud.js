@@ -185,7 +185,7 @@ export function createHud(onRestart, onHotlapReset) {
       cdEl.style.display = 'flex';
       cdEl.style.fontSize = '110px';
       cdEl.textContent = String(Math.ceil(race.countdownLeft));
-    } else if (race.phase === 'racing' && race.time < 1) {
+    } else if (race.phase === 'racing' && race.time < 1 && (!race.isHotLap || race.hotLapArmed)) {
       cdEl.style.display = 'flex';
       cdEl.style.fontSize = '110px';
       cdEl.textContent = 'GO!';

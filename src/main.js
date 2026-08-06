@@ -1057,6 +1057,14 @@ function startSingleplayer(hotLap = false) {
   const laps = chosenLaps();
   const race = createRaceState(hotLap ? Infinity : laps, pitStopRequired);
   race.isHotLap = hotLap; // csak megjelenítéshez (hud.js) — a raceStep nem használja
+  // Hot Lapben nincs visszaszámlálás/GO! — a guruló rajt (pointBeforeStart)
+  // miatt a valódi mért kör úgyis csak a rajtvonal átszelésekor indul (lásd
+  // hotLapArmed lent), a bevezető visszaszámlálás csak felesleges várakozás
+  // lenne edzés közben. Egyenesen 'racing' fázisban indulunk.
+  if (hotLap) {
+    race.phase = 'racing';
+    race.countdownLeft = 0;
+  }
   const drive = createDriveState();
   // Guruló rajtnál a TÉNYLEGES rajtvonal első átszeléséig a köridő nem indul —
   // a raceStep ezt a crossingot magától is figyelmen kívül hagyja (nextCheckpoint=1,
@@ -1110,6 +1118,14 @@ function startSingleplayer(hotLap = false) {
       race.currentSplits = [];
       refillBoost(drive);
     }
+    // A HUD-nak (hud.js) kell tudnia, hogy még tart-e a guruló-rajt szakasz —
+    // a "GO!" felirat Hot Lapben CSAK az indulásnál/reset után villanhat fel,
+    // a rajtvonal TÉNYLEGES átszelésekor (ami a race.time-ot fent ÚJRA 0-ra
+    // állítja) már NEM jelenhet meg — ezért ez a tükrözés a fenti átszelés-
+    // ellenőrzés UTÁN fut, hogy MÁR a friss (false) értéket vigye át, ne az
+    // átszelés-előttit (élő hibajelentés: egy képkockányi felvillanás volt,
+    // amikor ez korábban az ellenőrzés ELŐTT futott).
+    race.hotLapArmed = hotLapArmed;
     // A TELJES autó elhagyta a pályát, VAGY terelőkúpnak ütközött → a kör érvénytelen.
     const offTrack =
       isFullyOffRoad(carBody, offRoadExcess) || hitsCone(carBody, conePoints, RACE.coneHitRadius);
@@ -1252,6 +1268,8 @@ function startSingleplayer(hotLap = false) {
       resetCar(carBody, startPoint.x, startPoint.y, startPoint.angle);
       const fresh = createRaceState(Infinity);
       fresh.isHotLap = true;
+      fresh.phase = 'racing'; // lásd a fenti "nincs visszaszámlálás Hot Lapben" megjegyzést
+      fresh.countdownLeft = 0;
       fresh.bestLapTime = race.bestLapTime;
       fresh.bestLapSplits = race.bestLapSplits;
       fresh.lapTimes = race.lapTimes;
@@ -1261,6 +1279,7 @@ function startSingleplayer(hotLap = false) {
       prev.y = curr.y = startPoint.y;
       prev.angle = curr.angle = startPoint.angle;
       hotLapArmed = true;
+      race.hotLapArmed = true; // lásd recordState() megjegyzését — a "GO!" ehhez van kötve
       // A folyamatban lévő (be nem fejezett) kör felvétele eldobandó — a
       // pendingGhostSamples (a legutóbbi KÉSZ rekord-kör) viszont megmarad,
       // ugyanúgy, ahogy a bestLapTime is megmarad Hot Lap reset után.
