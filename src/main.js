@@ -450,19 +450,15 @@ trackCenterCache.set(
   }).track.center
 );
 
-// ÉLŐ HIBAJELENTÉS: "néha a ranglista/köridő-mentés az Alap pályára esik
-// vissza, pedig egyedi pályán vagyok". A gyökér-ok EZ a függvény volt: sikertelen
-// lekérésnél korábban `trackCatalog = []`-t állított — az `[]` viszont IGAZ
-// értékű, ezért a fenti `if (trackCatalog) return trackCatalog;` a KÖVETKEZŐ
-// hívásnál rögtön visszaadta ezt az üres tömböt, ÚJRAPRÓBÁLKOZÁS NÉLKÜL, a
-// session hátralévő részére. Egyetlen átmeneti hálózati hiba (pl. "kihűlt"
-// Railway-szerver — lásd a köridő-beküldés retry-backoff megjegyzését lentebb)
-// tehát VÉGLEGESEN üresre zárta a katalógust: a `findCatalogEntry(selectedTrackId)`
-// utána sosem találta meg az egyedi pályát, és a `currentTrackInfo()` a
-// `hashLayout(DEFAULT_LAYOUT)`-ra esett vissza — MIND a ranglista-lekérésnél,
-// MIND a köridő-beküldésnél. A 3D pálya maga eközben helyesen futott (az a
-// config.js induláskori, localStorage-alapú betöltéséből jön, FÜGGETLEN ettől
-// a katalógustól) — ezért tűnt úgy, mintha "minden jó, csak a mentés rossz".
+// ÉLŐ HIBAJELENTÉS: korábban egy sikertelen lekérésnél `trackCatalog = []`-t
+// állított — az `[]` viszont IGAZ értékű, ezért a fenti
+// `if (trackCatalog) return trackCatalog;` a KÖVETKEZŐ hívásnál rögtön
+// visszaadta ezt az üres tömböt, ÚJRAPRÓBÁLKOZÁS NÉLKÜL, a session
+// hátralévő részére — egyetlen átmeneti hálózati hiba (pl. "kihűlt"
+// Railway-szerver) tehát VÉGLEGESEN üresre zárta a katalógust (a pálya-
+// választó kártyáin ez a névvel/rajzzal kapcsolatos adatokat érintette,
+// lásd findCatalogEntry helyét kiváltó currentTrackInfo megjegyzését — a
+// trackKey mára ettől a katalógustól FÜGGETLENÜL, közvetlenül számolódik).
 // Most: siker esetén cache-elünk (mint eddig), hiba esetén NEM — a következő
 // hívás (pl. a következő menü-megnyitás) újra megpróbálja.
 async function loadTrackCatalog() {
@@ -473,9 +469,6 @@ async function loadTrackCatalog() {
   } catch {
     return []; // csak ERRE a hívásra — a katalógus MARAD null, legközelebb újra próbálkozunk
   }
-}
-function findCatalogEntry(id) {
-  return (trackCatalog || []).find((t) => t.id === id) || null;
 }
 async function getTrackCenter(id) {
   if (trackCenterCache.has(id)) return trackCenterCache.get(id);
@@ -731,12 +724,23 @@ async function initTrackSelection() {
   renderLeaderboard();
 }
 
-// A kiválasztott pálya ranglista-azonosítója + neve (lásd selectedTrackId/
-// selectedTrackName fent, illetve findCatalogEntry a trackKey-hez).
+// A kiválasztott pálya ranglista-azonosítója + neve.
+// ÉLŐ HIBAJELENTÉS: "gyakran az Alap pálya köridejét/ranglistáját tölti be,
+// pedig egyedi pályán vagyok" — a korábbi kód a trackKey-t a KATALÓGUS-
+// EGYEZÉSBŐL (findCatalogEntry(selectedTrackId), ami NÉV szerint illeszt,
+// lásd initTrackSelection) vette, és sikertelen egyezésnél a DEFAULT_LAYOUT
+// hash-ére esett vissza — miközben a ténylegesen BETÖLTÖTT, futó pálya
+// (TRACK.layout, lásd config.js) egészen más lehetett. A CLAUDE.md szerint
+// is a trackKey a pálya GEOMETRIÁJÁHOZ kötött, NÉVTŐL FÜGGETLEN azonosító
+// (lásd server/RaceRoom.js hashLayout(layout)) — tehát a helyes, mindig
+// megbízható forrás egyenesen a TÉNYLEGESEN AKTÍV layout hash-e, nem a
+// katalógus-egyezés (ami törékeny: névütközés, még be nem mutatott/
+// átnevezett pálya, vagy egy átmenetileg üres katalógus mind elbuktathatja).
+// A katalógus-egyezés (findCatalogEntry) csak a MEGJELENÍTETT névhez marad
+// releváns, ahhoz viszont továbbra is jó a selectedTrackName.
 function currentTrackInfo() {
-  const entry = findCatalogEntry(selectedTrackId);
   return {
-    trackKey: entry?.trackKey || hashLayout(DEFAULT_LAYOUT),
+    trackKey: hashLayout(TRACK.layout),
     trackName: selectedTrackName,
   };
 }
