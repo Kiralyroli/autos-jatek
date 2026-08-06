@@ -473,10 +473,18 @@ export class RaceRoom extends Room {
   // --- Verseny-vezérlés ---
 
   startRace() {
-    // Slotok újraosztása (a jelenlegi belépési sorrendben) + állapotok nullázása.
+    // Slotok újraosztása — VÉLETLENSZERŰ sorrendben (ne mindig a csatlakozás
+    // sorrendje döntsön, különben a host/első csatlakozó mindig ugyanazt a
+    // rajthelyet kapná minden futamnál). Fisher–Yates keverés a Map
+    // bejegyzésein, majd a megkevert sorrendben osztjuk ki a slotIndex-eket.
     let i = 0;
     const slots = {};
-    for (const [id, p] of this.players.entries()) {
+    const entries = [...this.players.entries()];
+    for (let k = entries.length - 1; k > 0; k--) {
+      const j = Math.floor(Math.random() * (k + 1));
+      [entries[k], entries[j]] = [entries[j], entries[k]];
+    }
+    for (const [id, p] of entries) {
       p.slotIndex = i++;
       const slot = spawnSlot(this.trackState, p.slotIndex);
       p.spawn = { x: slot.x, y: slot.y, angle: slot.angle };
