@@ -24,6 +24,7 @@ import {
   hitsCone,
   separateBodyFromPoints,
   refillBoost,
+  resolveDecorationCollisions,
 } from './sim/car.js';
 import { createRaceState, raceStep, segmentsCross, updatePitStop, isInPitLane, pitLaneReady, pitBoxForSlot } from './sim/race.js';
 import { createKeyboard, NEUTRAL_INPUT, encodeInput } from './input.js';
@@ -31,6 +32,7 @@ import { isTouchDevice, createTouchControls, requestFullscreen } from './touchCo
 import { createScene3D, setCarModel, applyTexture, loadTrackTiles } from './render3d/scene.js';
 import { loadTrackRibbon } from './render3d/trackRibbon.js';
 import { loadDecorations } from './render3d/decorations.js';
+import { buildDecorationColliders } from './render3d/decorFootprint.js';
 import { addGrassField } from './render3d/grassField.js';
 import { addMountains } from './render3d/mountains.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
@@ -1094,6 +1096,16 @@ function startSingleplayer(hotLap = false) {
     .filter((d) => d.type === 'pylon')
     .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
 
+  // Dekoráció-ütközés (fal, kerítés, fa, lelátó stb. — minden dekoráció,
+  // kivéve a terelőkúpot és a fénykaput, lásd decorFootprint.js
+  // buildDecorationColliders) — a GLB-méret aszinkron töltődik, ezért
+  // FIRE-AND-FORGET (mint a loadDecorations(scene) maga): a colliderek egy
+  // pillanattal a pálya betöltése után "élesednek".
+  let decorationColliders = [];
+  buildDecorationColliders(loadCustomDecorations()).then((list) => {
+    decorationColliders = list;
+  });
+
   // Kötelező kerékcsere: csak akkor "él", ha a pályán TÉNYLEG van boxutca-
   // útvonal ÉS kijelölt boxhely (lásd sim/race.js pitLaneReady/updatePitStop)
   // — Hot Lapben nincs értelme (a menü fieldPitStop ott is rejtve van, lásd
@@ -1375,7 +1387,14 @@ function startSingleplayer(hotLap = false) {
           updateCar(carBody, input, fixedDt, drive, offRoadExcess, carParamsFor(pos.x, pos.y, pitLanePoints));
         }
       },
-      recordState
+      () => {
+        // A world.step() UTÁN — a frissen integrált pozíciót azonnal
+        // korrigálja, ha belelógna egy dekoráció-dobozba (lásd sim/car.js
+        // resolveDecorationCollisions megjegyzését).
+        const pos = carBody.getPosition();
+        resolveDecorationCollisions(carBody, decorationColliders, carParamsFor(pos.x, pos.y, pitLanePoints));
+        recordState();
+      }
     );
 
     const x = lerp(prev.x, curr.x, alpha);
@@ -1474,6 +1493,7 @@ function startSingleplayer(hotLap = false) {
       get ghostGroup() { return ghostGroup; },
       get activeGhostSamples() { return activeGhostSamples; },
       get pendingGhostSamples() { return pendingGhostSamples; },
+      get decorationColliders() { return decorationColliders; },
     };
   }
 }
@@ -1619,6 +1639,11 @@ async function startMultiplayer(room) {
   const mpConePoints = loadCustomDecorations()
     .filter((d) => d.type === 'pylon')
     .map((d) => ({ x: d.dgx * TRACK.tile, y: d.dgy * TRACK.tile }));
+  // Dekoráció-ütközés — lásd az egyjátékos beállítás ugyanilyen megjegyzését.
+  let mpDecorationColliders = [];
+  buildDecorationColliders(loadCustomDecorations()).then((list) => {
+    mpDecorationColliders = list;
+  });
   let mpPeerPoints = []; // a többi kocsi középpontjai (puha szétnyomáshoz)
   let mpStartedRacing = false; // a szerver countdown→racing váltás egyszeri kezelése
   let mpSentFinish = false; // a cél-jelzést egyszer küldjük
@@ -2098,6 +2123,10 @@ async function startMultiplayer(room) {
             remoteCars.step(fixedDt);
           },
           () => {
+            // A world.step() UTÁN — lásd az egyjátékos beállítás ugyanilyen
+            // megjegyzését (sim/car.js resolveDecorationCollisions).
+            const preColPos = mpCar.getPosition();
+            resolveDecorationCollisions(mpCar, mpDecorationColliders, carParamsFor(preColPos.x, preColPos.y, mpPitLanePoints));
             mpPrev.x = mpCurr.x;
             mpPrev.y = mpCurr.y;
             mpPrev.angle = mpCurr.angle;

@@ -317,7 +317,11 @@ export function createDecorGhost(scene) {
     update(type, x, z, rotRad, scale = 1) {
       if (type !== currentType) setType(type); // aszinkron, "fire and forget"
       group.position.set(x, 0.05, z);
-      group.rotation.y = rotRad || 0;
+      // NEGÁLVA — lásd decorations.js ugyanilyen megjegyzését: `rotRad` az
+      // editor.js 2D-konvenciójában van, a Three.js rotation.y ELLENKEZŐ
+      // előjelű; a szellem-előnézetnek a TÉNYLEGESEN lerakott elemmel kell
+      // egyeznie, nem a nem-negált (hibás) forgással.
+      group.rotation.y = -(rotRad || 0);
       group.scale.setScalar(scale || 1);
       group.visible = true;
     },

@@ -75,7 +75,17 @@ export async function loadDecorations(scene, decorations = loadCustomDecorations
 
     const holder = new THREE.Group();
     holder.add(scaler);
-    holder.rotation.y = normalizeRotToRadians(d.rot);
+    // NEGÁLVA: a `d.rot` az editor.js 2D-vásznának SAJÁT konvenciójában van
+    // (localToWorld: x'=lx·cosθ−lz·sinθ), ami MATEMATIKAILAG az ELLENKEZŐ
+    // előjelű a Three.js rotation.y valódi konvenciójához képest
+    // (x'=lx·cosθ+lz·sinθ — élő teszttel, Object3D.localToWorld()-tel
+    // ellenőrizve). Enélkül a 3D-ben renderelt forgás a 2D-előnézet/illesztés/
+    // ütközés-doboz (sim/car.js resolveDecorationCollisions — UGYANEZT az
+    // editor-konvenciót használja) TÜKÖRKÉPE volt — negyedfordulatoknál
+    // (a régi, csak 90°-os rendszernél) ez egy szimmetrikus téglalapnál
+    // észrevehetetlen, de a szabad (tetszőleges szögű) forgatásnál már valódi,
+    // látható eltérés (élő hibajelentés: "az ütközőzónája nem forog vele").
+    holder.rotation.y = -normalizeRotToRadians(d.rot);
     // world = dgx/dgy * TRACK.tile (lásd trackStorage.js megjegyzése).
     holder.position.set(d.dgx * TRACK.tile, 0.05, d.dgy * TRACK.tile);
     scene.add(holder);

@@ -362,6 +362,108 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
   return true;
 }
 
+// STATIKUS DEKORÁCIÓ-ÜTKÖZÉS (fal, kerítés, fa, lelátó, garázs stb. — MINDEN
+// dekoráció, KIVÉVE a terelőkúpot és a fénykaput, lásd render3d/decorFootprint.js
+// buildDecorationColliders). Szándékosan NEM Planck-fixture (lásd
+// separateBodyFromPoints megjegyzését — a merev Box2D-solver hálózaton "kései
+// szerver-lökést" okozott, és egy category/mask-rendszert kellene bevezetni a
+// semmiből, potenciálisan száz+ statikus testhez) — ehelyett ugyanaz a kézzel
+// írt, pozíció/sebesség-korrekciós stílus, mint a fenti autó-autó szétnyomás.
+//
+// Az autót egy KÖRREL közelítjük (sugár = a doboz körülírt köre — kicsit
+// nagyvonalú a sarkoknál, de robusztus, és illeszkedik a projekt már meglévő
+// kör/pont-alapú egyszerűsítéseihez), a dekorációt egy VILÁG-térben
+// elforgatott téglalapként (`colliders[i] = {x,y,rot,halfW,halfD}`, SIM-
+// koordinátában — lásd CLAUDE.md 2.5D leképezés, sim.y = render.z).
+//
+// A `body.getPosition()`-t ELŐBB a dekoráció LOKÁLIS keretébe forgatjuk
+// (ugyanaz a technika, mint hitsCone/isFullyOffRoad), a lokális pontot a
+// téglalap fél-méreteire vágjuk (clamp) — ez a téglalap LEGKÖZELEBBI pontja
+// —, és a távolság ebből dönti el az ütközést. Ha a kör-középpont MÉLYEN a
+// dobozon belül van (nagy sebességnél egy lépés alatt "belealudt" — ritka
+// védőháló), a legkisebb behatolású tengely mentén tolunk ki.
+//
+// Ütközésnél KÉT korrekció: (1) POZÍCIÓ, hogy a kör pontosan a doboz szélén
+// üljön (nincs átfedés), (2) a doboz felé mutató SEBESSÉG-komponens
+// nullázása — ez adja a "nekiütközik és megáll" érzetet, tisztán pozíció/
+// sebesség-állítással, impulzus/erő nélkül. Több egyidejűleg átfedő
+// dekorációnál a korrekciók EGYMÁS UTÁN, halmozva alkalmazódnak (helyi
+// px,py,vx,vy-ban gyűjtve, egyetlen setPosition/setLinearVelocity hívással a
+// végén — mint separateBodyFromPoints).
+//
+// A world.step() UTÁN hívandó (nem az updateCar része, ami ELŐTTE fut) — így
+// a frissen integrált pozíciót azonnal korrigálja, nem egy lépés csúszással.
+export function resolveDecorationCollisions(body, colliders, car = CAR) {
+  if (!colliders || colliders.length === 0) return;
+  const carRadius = Math.hypot(car.length, car.width) / 2;
+  const pos = body.getPosition();
+  let px = pos.x;
+  let py = pos.y;
+  const vel = body.getLinearVelocity();
+  let vx = vel.x;
+  let vy = vel.y;
+  let moved = false;
+
+  for (const c of colliders) {
+    const cos = Math.cos(c.rot);
+    const sin = Math.sin(c.rot);
+    const dx = px - c.x;
+    const dy = py - c.y;
+    const lx = dx * cos + dy * sin; // világ → dekoráció helyi kerete (inverz forgatás)
+    const ly = -dx * sin + dy * cos;
+
+    const cx = Math.max(-c.halfW, Math.min(c.halfW, lx));
+    const cy = Math.max(-c.halfD, Math.min(c.halfD, ly));
+    const ex = lx - cx;
+    const ey = ly - cy;
+    const distSq = ex * ex + ey * ey;
+    if (distSq >= carRadius * carRadius) continue; // nincs átfedés
+
+    let nx;
+    let ny;
+    let dist;
+    if (distSq > 1e-8) {
+      dist = Math.sqrt(distSq);
+      nx = ex / dist;
+      ny = ey / dist;
+    } else {
+      // A kör-középpont a dobozon BELÜL van — a legkisebb behatolású
+      // tengely mentén toljuk ki (dist negatív = "mélyebben" van, mint a
+      // sugár, tehát az overlap = carRadius - dist ettől is nagyobb lesz).
+      const penX = c.halfW - Math.abs(lx);
+      const penY = c.halfD - Math.abs(ly);
+      if (penX < penY) {
+        nx = lx < 0 ? -1 : 1;
+        ny = 0;
+        dist = -penX;
+      } else {
+        nx = 0;
+        ny = ly < 0 ? -1 : 1;
+        dist = -penY;
+      }
+    }
+
+    const overlap = carRadius - dist;
+    const wnx = nx * cos - ny * sin; // dekoráció helyi normális → világ
+    const wny = nx * sin + ny * cos;
+
+    px += wnx * overlap;
+    py += wny * overlap;
+
+    const vn = vx * wnx + vy * wny; // a sebesség befelé (a dobozba) mutató komponense
+    if (vn < 0) {
+      vx -= wnx * vn;
+      vy -= wny * vn;
+    }
+    moved = true;
+  }
+
+  if (moved) {
+    body.setPosition(Vec2(px, py));
+    body.setLinearVelocity(Vec2(vx, vy));
+  }
+}
+
 // Hozzáért-e az autó valamelyik terelőkúphoz? A `points` a kúpok VILÁG-koordinátái
 // ({x,y}[], a hívó számolja a dekorációkból — lásd main.js/RaceRoom.js). A kúpot
 // pontnak vesszük, az autó dobozát `hitRadius`-szal megnöveljük, majd a pontot az
