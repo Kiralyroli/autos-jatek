@@ -32,7 +32,7 @@ import {
   getActiveTrackName,
 } from './trackStorage.js';
 import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
-import { DECORATION_TYPES, TRACK, RACE } from './config.js';
+import { DECORATION_TYPES, DECORATION_CATEGORIES, TRACK, RACE } from './config.js';
 import { isDevMode } from './devmode.js';
 import { isSplineLayout } from './sim/trackFactory.js';
 import { sampleSpline } from './sim/trackSpline.js';
@@ -107,6 +107,7 @@ const instructionsEl = document.getElementById('instructions');
 const trackLegendEl = document.getElementById('trackLegend');
 const decorControlsEl = document.getElementById('decorControls');
 const decorPaletteEl = document.getElementById('decorPalette');
+const decorSearchInput = document.getElementById('decorSearchInput');
 const rotateBtn = document.getElementById('rotateBtn');
 const trackNameInput = document.getElementById('trackNameInput');
 const saveAsBtn = document.getElementById('saveAsBtn');
@@ -884,48 +885,86 @@ modeDecorBtn.addEventListener('click', () => setMode('decor'));
 if (modePitLaneBtn) modePitLaneBtn.addEventListener('click', () => setMode('pitlane'));
 if (modePitBoxBtn) modePitBoxBtn.addEventListener('click', () => setMode('pitbox'));
 
-// Dekoráció-paletta felépítése a config.js DECORATION_TYPES alapján, réteg
-// szerint csoportosítva (a réteg-fogalom csak vizuális csoportosítás — a
-// tényleges elhelyezés minden típusnál azonos, szabad).
-const layerLabels = { ground: 'Talaj (a cella alapja)', object: 'Objektum (a talajra kerül)' };
+// Dekoráció-paletta felépítése a config.js DECORATION_TYPES alapján,
+// DECORATION_CATEGORIES szerint csoportosítva (kártya-elrendezés: nagy ikon +
+// név + méret), plusz kereső-szűrő — a Kenney "City Kit Commercial" készlet
+// hozzáadásával a paletta ~40 elemesre nőtt, egy sima gombsor itt már
+// átláthatatlan lenne.
 const paletteButtons = {}; // type → <button> — a betöltött méret utólag frissíti a feliratot
+const paletteCategoryEls = {}; // category key → { header, group } — a kereséshez kell elrejteni/mutatni
 
 function paletteLabelText(key) {
   const def = DECORATION_TYPES[key];
   const fp = footprints[key];
   const size = fp ? ` (${fp.width.toFixed(1)}×${fp.depth.toFixed(1)}m)` : '';
-  return `${def.icon} ${def.label}${size}`;
+  return `${def.label}${size}`;
 }
 
-for (const layer of ['ground', 'object']) {
-  const keys = decorTypeKeys.filter((k) => DECORATION_TYPES[k].layer === layer);
+function selectDecorType(key, btn) {
+  activeDecorType = key;
+  for (const b of decorPaletteEl.querySelectorAll('button')) b.classList.remove('active');
+  btn.classList.add('active');
+  if (view === '3d' && decorGhost && lastGhostWorld) {
+    const preview = decorPlacementPreview(lastGhostWorld);
+    decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
+  }
+}
+
+for (const { key: categoryKey, label: categoryLabel } of DECORATION_CATEGORIES) {
+  const keys = decorTypeKeys.filter((k) => DECORATION_TYPES[k].category === categoryKey);
   if (keys.length === 0) continue;
 
   const header = document.createElement('div');
   header.className = 'decorLayerHeader';
-  header.textContent = layerLabels[layer];
+  header.textContent = categoryLabel;
   decorPaletteEl.appendChild(header);
 
   const group = document.createElement('div');
   group.className = 'decorLayerGroup';
   for (const key of keys) {
+    const def = DECORATION_TYPES[key];
     const btn = document.createElement('button');
-    btn.textContent = paletteLabelText(key);
+    btn.className = 'decorCard';
     btn.dataset.type = key;
+    const iconEl = document.createElement('span');
+    iconEl.className = 'decorCardIcon';
+    iconEl.textContent = def.icon;
+    const labelEl = document.createElement('span');
+    labelEl.className = 'decorCardLabel';
+    labelEl.textContent = paletteLabelText(key);
+    btn.appendChild(iconEl);
+    btn.appendChild(labelEl);
     if (key === activeDecorType) btn.classList.add('active');
-    btn.addEventListener('click', () => {
-      activeDecorType = key;
-      for (const b of decorPaletteEl.querySelectorAll('button')) b.classList.remove('active');
-      btn.classList.add('active');
-      if (view === '3d' && decorGhost && lastGhostWorld) {
-        const preview = decorPlacementPreview(lastGhostWorld);
-        decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
-      }
-    });
+    btn.addEventListener('click', () => selectDecorType(key, btn));
     paletteButtons[key] = btn;
     group.appendChild(btn);
   }
   decorPaletteEl.appendChild(group);
+  paletteCategoryEls[categoryKey] = { header, group };
+}
+
+// Kereső-szűrő — a NÉV alapján (nem a típuskulcs) szűr, kis/nagybetű-
+// érzéketlenül, ékezet-érzékenyen (a magyar feliratok ékezetesek — a
+// felhasználó valószínűleg ugyanúgy gépeli be, ahogy látja). Egy kategória
+// teljes fejléc+kártyacsoportja elrejtődik, ha egyetlen kártyája sem
+// egyezik — üres kategória-fejléc sose maradjon látva.
+if (decorSearchInput) {
+  decorSearchInput.addEventListener('input', () => {
+    const q = decorSearchInput.value.trim().toLowerCase();
+    for (const { key: categoryKey } of DECORATION_CATEGORIES) {
+      const els = paletteCategoryEls[categoryKey];
+      if (!els) continue;
+      let anyVisible = false;
+      for (const key of decorTypeKeys.filter((k) => DECORATION_TYPES[k].category === categoryKey)) {
+        const btn = paletteButtons[key];
+        const match = !q || DECORATION_TYPES[key].label.toLowerCase().includes(q);
+        btn.style.display = match ? '' : 'none';
+        if (match) anyVisible = true;
+      }
+      els.header.style.display = anyVisible ? '' : 'none';
+      els.group.style.display = anyVisible ? '' : 'none';
+    }
+  });
 }
 
 // A modellek valós mérete aszinkron töltődik be (glTF-parszolás) — amint egy
@@ -935,7 +974,8 @@ for (const key of decorTypeKeys) {
   getFootprint(key).then((fp) => {
     if (!fp) return;
     footprints[key] = fp;
-    if (paletteButtons[key]) paletteButtons[key].textContent = paletteLabelText(key);
+    const labelEl = paletteButtons[key]?.querySelector('.decorCardLabel');
+    if (labelEl) labelEl.textContent = paletteLabelText(key);
     render();
   });
 }

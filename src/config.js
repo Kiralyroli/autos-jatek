@@ -409,28 +409,76 @@ export const TRACK = {
 // folytonos vonalban, épület (garázs/iroda/lelátó) pedig rés/átfedés nélkül,
 // egymás mellé rakható. A `footprint` (valós méret, m) a modell tényleges
 // Box3-ából számolódik (lásd render3d/decorFootprint.js) — nem hardkódolt.
+// `category` — a szerkesztő-paletta (editor.js) CSOPORTOSÍTÁSÁHOZ (nem
+// játékmenet-releváns), lásd CATEGORY_LABELS lent.
 export const DECORATION_TYPES = {
-  rumble: { model: '/assets/track/barrierRed.glb', label: 'Rázókő', icon: '🟥', scale: 1, layer: 'object' },
-  wall: { model: '/assets/track/barrierWall.glb', label: 'Fal', icon: '🧱', scale: 1, layer: 'object', snap: true },
-  fence: { model: '/assets/track/fenceStraight.glb', label: 'Kerítés', icon: '🚧', scale: 1, layer: 'object', snap: true },
-  treeSmall: { model: '/assets/track/treeSmall.glb', label: 'Kis fa', icon: '🌳', scale: 0.6, layer: 'object' },
-  treeLarge: { model: '/assets/track/treeLarge.glb', label: 'Nagy fa', icon: '🌲', scale: 0.8, layer: 'object' },
-  pitGarage: { model: '/assets/track/pitsGarage.glb', label: 'Garázs', icon: '🏚️', scale: 1, layer: 'object', snap: true },
-  pitOffice: { model: '/assets/track/pitsOffice.glb', label: 'Iroda', icon: '🏢', scale: 1, layer: 'object', snap: true },
-  grandstand: { model: '/assets/track/grandStand.glb', label: 'Lelátó', icon: '🎪', scale: 1, layer: 'object', snap: true },
-  tent: { model: '/assets/track/tent.glb', label: 'Sátor', icon: '⛺', scale: 1, layer: 'object' },
-  flag: { model: '/assets/track/flagCheckers.glb', label: 'Zászló', icon: '🏁', scale: 1, layer: 'object' },
-  lightPost: { model: '/assets/track/lightPostModern.glb', label: 'Lámpa', icon: '💡', scale: 0.7, layer: 'object' },
-  rail: { model: '/assets/track/rail.glb', label: 'Terelőkorlát', icon: '🛡️', scale: 1, layer: 'object', snap: true },
+  rumble: { model: '/assets/track/barrierRed.glb', label: 'Rázókő', icon: '🟥', scale: 1, layer: 'object', category: 'track' },
+  wall: { model: '/assets/track/barrierWall.glb', label: 'Fal', icon: '🧱', scale: 1, layer: 'object', snap: true, category: 'track' },
+  fence: { model: '/assets/track/fenceStraight.glb', label: 'Kerítés', icon: '🚧', scale: 1, layer: 'object', snap: true, category: 'track' },
+  rail: { model: '/assets/track/rail.glb', label: 'Terelőkorlát', icon: '🛡️', scale: 1, layer: 'object', snap: true, category: 'track' },
   // `free: true` — nincs rács-igazítás; a szerkesztőben a kattintás PONTOS
   // helyére kerül (nem a legközelebbi cella közepére), így egy cellán belül is
   // tetszőleges pozícióba rakható (lásd editor.js pixelToPoint / free ág).
-  pylon: { model: '/assets/track/pylon.glb', label: 'Terelőkúp', icon: '🔺', scale: 1, layer: 'object', free: true },
+  pylon: { model: '/assets/track/pylon.glb', label: 'Terelőkúp', icon: '🔺', scale: 1, layer: 'object', free: true, category: 'track' },
   // Út FÖLÉ helyezhető fénykapu — ugyanúgy szabadon lerakható bármelyik cellába,
   // mint bármely más objektum-dekoráció; az útra helyezve (és a rotate gombbal az
   // útiránnyal egybeforgatva) a keret pontosan átíveli a burkolatot.
-  lightGate: { model: '/assets/track/overheadLights.glb', label: 'Fénykapu (út fölé)', icon: '🚦', scale: 1, layer: 'object' },
+  lightGate: { model: '/assets/track/overheadLights.glb', label: 'Fénykapu (út fölé)', icon: '🚦', scale: 1, layer: 'object', category: 'track' },
+  lightPost: { model: '/assets/track/lightPostModern.glb', label: 'Lámpa', icon: '💡', scale: 0.7, layer: 'object', category: 'track' },
+
+  treeSmall: { model: '/assets/track/treeSmall.glb', label: 'Kis fa', icon: '🌳', scale: 0.6, layer: 'object', category: 'nature' },
+  treeLarge: { model: '/assets/track/treeLarge.glb', label: 'Nagy fa', icon: '🌲', scale: 0.8, layer: 'object', category: 'nature' },
+
+  pitGarage: { model: '/assets/track/pitsGarage.glb', label: 'Garázs', icon: '🏚️', scale: 1, layer: 'object', snap: true, category: 'pit' },
+  pitOffice: { model: '/assets/track/pitsOffice.glb', label: 'Iroda', icon: '🏢', scale: 1, layer: 'object', snap: true, category: 'pit' },
+
+  grandstand: { model: '/assets/track/grandStand.glb', label: 'Lelátó', icon: '🎪', scale: 1, layer: 'object', snap: true, category: 'crowd' },
+  tent: { model: '/assets/track/tent.glb', label: 'Sátor', icon: '⛺', scale: 1, layer: 'object', category: 'crowd' },
+  flag: { model: '/assets/track/flagCheckers.glb', label: 'Zászló', icon: '🏁', scale: 1, layer: 'object', category: 'crowd' },
+
+  // Kenney "City Kit Commercial" (CC0, kenney.nl) — a szerkesztőben háttér-
+  // beépítésként (nem a pályára magára) elhelyezhető üzlet-/irodaházak és
+  // kiegészítők. A textúra ("citykit-atlas.png") SZÁNDÉKOSAN külön fájl, NEM a
+  // megosztott "colormap.png" néven (lásd render3d/assets.js URL-modifier) —
+  // az a Racing/Car Kit közös színatlaszára irányítana át MINDEN "colormap.png"
+  // hivatkozást, ami ennél a (más UV-elrendezésű) készletnél rossz textúrát adna.
+  buildingA: { model: '/assets/track/citykit-building-a.glb', label: 'Üzletépület A', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingB: { model: '/assets/track/citykit-building-b.glb', label: 'Üzletépület B', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingC: { model: '/assets/track/citykit-building-c.glb', label: 'Üzletépület C', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingD: { model: '/assets/track/citykit-building-d.glb', label: 'Üzletépület D', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingE: { model: '/assets/track/citykit-building-e.glb', label: 'Üzletépület E', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingF: { model: '/assets/track/citykit-building-f.glb', label: 'Üzletépület F', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingG: { model: '/assets/track/citykit-building-g.glb', label: 'Üzletépület G', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingH: { model: '/assets/track/citykit-building-h.glb', label: 'Üzletépület H', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingI: { model: '/assets/track/citykit-building-i.glb', label: 'Üzletépület I', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingJ: { model: '/assets/track/citykit-building-j.glb', label: 'Üzletépület J', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingK: { model: '/assets/track/citykit-building-k.glb', label: 'Üzletépület K', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingL: { model: '/assets/track/citykit-building-l.glb', label: 'Üzletépület L', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingM: { model: '/assets/track/citykit-building-m.glb', label: 'Üzletépület M', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  buildingN: { model: '/assets/track/citykit-building-n.glb', label: 'Üzletépület N', icon: '🏬', scale: 1, layer: 'object', category: 'buildings' },
+  skyscraperA: { model: '/assets/track/citykit-building-skyscraper-a.glb', label: 'Felhőkarcoló A', icon: '🏙️', scale: 1, layer: 'object', category: 'buildings' },
+  skyscraperB: { model: '/assets/track/citykit-building-skyscraper-b.glb', label: 'Felhőkarcoló B', icon: '🏙️', scale: 1, layer: 'object', category: 'buildings' },
+  skyscraperC: { model: '/assets/track/citykit-building-skyscraper-c.glb', label: 'Felhőkarcoló C', icon: '🏙️', scale: 1, layer: 'object', category: 'buildings' },
+  skyscraperD: { model: '/assets/track/citykit-building-skyscraper-d.glb', label: 'Felhőkarcoló D', icon: '🏙️', scale: 1, layer: 'object', category: 'buildings' },
+  skyscraperE: { model: '/assets/track/citykit-building-skyscraper-e.glb', label: 'Felhőkarcoló E', icon: '🏙️', scale: 1, layer: 'object', category: 'buildings' },
+  awning: { model: '/assets/track/citykit-detail-awning.glb', label: 'Napellenző', icon: '⛱️', scale: 0.6, layer: 'object', category: 'buildings' },
+  awningWide: { model: '/assets/track/citykit-detail-awning-wide.glb', label: 'Napellenző (széles)', icon: '⛱️', scale: 0.6, layer: 'object', category: 'buildings' },
+  overhang: { model: '/assets/track/citykit-detail-overhang.glb', label: 'Előtető', icon: '🏪', scale: 0.6, layer: 'object', category: 'buildings' },
+  overhangWide: { model: '/assets/track/citykit-detail-overhang-wide.glb', label: 'Előtető (széles)', icon: '🏪', scale: 0.6, layer: 'object', category: 'buildings' },
+  parasolA: { model: '/assets/track/citykit-detail-parasol-a.glb', label: 'Napernyő A', icon: '☂️', scale: 0.5, layer: 'object', category: 'buildings' },
+  parasolB: { model: '/assets/track/citykit-detail-parasol-b.glb', label: 'Napernyő B', icon: '☂️', scale: 0.5, layer: 'object', category: 'buildings' },
 };
+
+// A szerkesztő-paletta kategória-sorrendje + felirata (lásd editor.js palette-
+// építés) — csak megjelenítési csoportosítás, a DECORATION_TYPES `category`
+// mezőjéhez illesztve.
+export const DECORATION_CATEGORIES = [
+  { key: 'track', label: 'Pálya-elemek' },
+  { key: 'nature', label: 'Természet' },
+  { key: 'pit', label: 'Boxutca' },
+  { key: 'crowd', label: 'Lelátó / közönség' },
+  { key: 'buildings', label: 'Épületek (háttér)' },
+];
 
 // A boxutca-zóna (kötelező kerékcsere) MÁR NEM dekoráció — szabadon RAJZOLT,
 // NYITOTT útvonal (lásd editor.js "Boxutca rajzolása" mód), akárcsak a fő
