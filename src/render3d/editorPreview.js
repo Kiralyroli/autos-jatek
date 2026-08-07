@@ -4,10 +4,10 @@
 //  amit a játék is használ (render3d/scene.js, trackRibbon.js, decorations.js),
 //  hogy a dekorációk VALÓS méretben/takarásban látszódjanak, mielőtt mentenénk.
 //
-//  SCOPE (leegyeztetve): a pálya VONALÁT és a boxutcát ez a nézet csak
-//  MEGJELENÍTI — a kontrollpontok húzása/beszúrása/törlése marad a 2D
-//  nézetben. Ami interaktív itt: a DEKORÁCIÓ elhelyezése/törlése/forgatása
-//  (rácél-mutatással, raycastGround-on át), plusz egy szabad/vezetői-nézet
+//  Interaktív itt: a DEKORÁCIÓ elhelyezése/törlése/forgatása (raycastGround-
+//  on át), a pálya-vonal ÉS a boxutca kontrollpontjainak húzása (raycastelt
+//  gömb-jelölők, lásd createPointMarkers — ÚJ pont felvétele/törlése marad a
+//  2D nézetben, csak a MEGLÉVŐ pontok mozgatása 3D-s), plusz egy szabad
 //  kamera, hogy úgy lássuk a pályát, mint versenyzés közben.
 //
 //  A pálya-vonal és a dekorációk MINDIG az editor.js élő (esetleg még nem
@@ -203,6 +203,64 @@ export function createFreeCameraController(camera, domElement, target) {
       domElement.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
       domElement.removeEventListener('mousemove', onMouseMove);
+    },
+  };
+}
+
+// A pálya-vonal ÉS a boxutca kontrollpontjainak 3D-s jelölői — egy-egy kis
+// gömb pontonként, hogy raycasttel megfoghatók/húzhatók legyenek. A 2D
+// nézettel egyezően MINDIG mindkét készlet látszik (nem csak az aktuális
+// módé) — csak az ÚJ pont felvétele/törlése marad módhoz kötött (2D).
+const MARKER_RADIUS = 1.3; // m
+const MARKER_Y = 0.6; // a pálya-felület (0.06) fölé, hogy ne süllyedjen bele
+export function createPointMarkers(scene) {
+  const group = new THREE.Group();
+  scene.add(group);
+  const trackMat = new THREE.MeshBasicMaterial({ color: 0x5c8fd6, depthTest: false });
+  const startMat = new THREE.MeshBasicMaterial({ color: 0xf2c14e, depthTest: false });
+  const laneMat = new THREE.MeshBasicMaterial({ color: 0xd4a94e, depthTest: false });
+  const geo = new THREE.SphereGeometry(MARKER_RADIUS, 12, 8);
+
+  // `depthTest:false` + magas `renderOrder`: a jelölők MINDIG a pálya-háló
+  // FÖLÖTT látszódjanak, ne tűnjenek el a domború asphalt-geometria alatt
+  // olyan kameraszögből, ahonnan a gömb középpontja épp a felület mögé esne
+  // (élő teszt: enélkül lapos rálátásnál a jelölők "belesüllyedtek" az útba).
+  function makeMarker(mat, x, z, kind, index) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, MARKER_Y, z);
+    m.renderOrder = 10;
+    m.userData = { kind, index };
+    group.add(m);
+  }
+
+  return {
+    group,
+    rebuild(points, pitLanePoints) {
+      clearGroup(group);
+      points.forEach((p, i) => makeMarker(i === 0 || i === 1 ? startMat : trackMat, p.x, p.z, 'track', i));
+      pitLanePoints.forEach((p, i) => makeMarker(laneMat, p.x, p.z, 'pitlane', i));
+    },
+    // Legközelebbi (kamerához legközelebbi) találat a jelölők közül, vagy
+    // null — `{kind:'track'|'pitlane', index}`.
+    pick(camera, clientX, clientY, canvasEl) {
+      const rect = canvasEl.getBoundingClientRect();
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+      camera.updateMatrixWorld();
+      // A jelölő-gömbök matrixWorld-je (a kameráéhoz hasonlóan) csak
+      // renderer.render()-kor frissül automatikusan — közvetlenül egy
+      // rebuild() UTÁNI kattintásnál (mielőtt egyáltalán kirajzolódott volna
+      // egy kép) ez még a régi/alapértelmezett állapot lenne, aminek
+      // következtében a raycast HAMIS negatívot adna (élő hibajelentés: a
+      // kamera pontosan a jelölő fölött állt, mégsem talált találatot).
+      group.updateMatrixWorld(true);
+      _raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+      const hits = _raycaster.intersectObjects(group.children, false);
+      return hits.length ? hits[0].object.userData : null;
+    },
+    dispose() {
+      disposeObject3D(group);
+      scene.remove(group);
     },
   };
 }

@@ -45,6 +45,7 @@ import {
   raycastGround,
   createFreeCameraController,
   createDecorGhost,
+  createPointMarkers,
 } from './render3d/editorPreview.js';
 
 // A pálya-szerkesztő CSAK dev módban érhető el (?dev=1 a játék URL-jén) —
@@ -156,6 +157,57 @@ const pitBoxPoints = [];
 let mode = 'track'; // 'track' | 'decor' | 'pitlane' | 'pitbox'
 let problemPos = null; // { x, z } — az aktuális validációs hiba helye a vásznon (ha van)
 
+// --- Globális visszavonás ---
+//
+// Egyetlen, "pillanatkép-alapú" verem — a MŰVELET FAJTÁJÁTÓL függetlenül (2D
+// pont-húzás/törlés/beszúrás, 3D pont-húzás, dekoráció-lerakás/törlés bármelyik
+// nézetben) minden STRUKTURÁLIS mutáció ELŐTT lementjük a teljes állapotot
+// (pushUndo), a gomb pedig egyszerűen visszaállítja az utolsó mentést. Ez a
+// legegyszerűbb módja annak, hogy a régi (csak az AKTUÁLIS mód utolsó lépését
+// visszagörgető) undoBtn helyett MINDEN nézetben/módban egységesen működjön —
+// nem kell művelet-specifikus inverz logikát írni mindenhová.
+//
+// SZÁNDÉKOSAN NEM követi a folyamatos (görgős) finomhangolást (pálya-
+// szélesség, dekoráció "kézben" méret/forgatás) — azok minden egyes kattanása
+// külön mentés lenne, elárasztva a vermet, hogy egyetlen húzás visszavonásához
+// tucatszor kelljen nyomni a gombot. A visszavonás a STRUKTURÁLIS lépésekre
+// (pont/dekoráció hozzáadása-törlése-mozgatása, hurok zárása, törlés) szól.
+const undoStack = [];
+const MAX_UNDO = 50;
+function snapshotState() {
+  return {
+    points: points.map((p) => ({ ...p })),
+    closed,
+    decorations: decorations.map((d) => ({ ...d })),
+    pitLanePoints: pitLanePoints.map((p) => ({ ...p })),
+    pitBoxPoints: pitBoxPoints.map((p) => ({ ...p })),
+  };
+}
+function pushUndo() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+function applyUndo() {
+  if (!undoStack.length) {
+    statusEl.textContent = 'Nincs több visszavonható lépés.';
+    statusEl.classList.remove('closed');
+    return;
+  }
+  const s = undoStack.pop();
+  points.length = 0;
+  points.push(...s.points);
+  closed = s.closed;
+  decorations.length = 0;
+  decorations.push(...s.decorations);
+  pitLanePoints.length = 0;
+  pitLanePoints.push(...s.pitLanePoints);
+  pitBoxPoints.length = 0;
+  pitBoxPoints.push(...s.pitBoxPoints);
+  render();
+  updateStatus();
+  refresh3DIfVisible();
+}
+
 // --- 3D előnézet (kapcsolható nézet — lásd render3d/editorPreview.js) ---
 //
 // SCOPE: a pálya vonala/boxutca 3D-ben csak MEGJELENIK (a fenti `points`/
@@ -171,6 +223,11 @@ let editor3d = null; // { renderer, scene, camera, trackGroup, decorGroup } — 
 let editor3dReadyPromise = null;
 let cameraController = null;
 let decorGhost = null;
+let pointMarkers = null;
+let draggingPoint3D = null; // { kind:'track'|'pitlane', index } — a 3D-ben épp húzott pálya-/boxutca-pont
+let trackRebuildPending = false; // lásd scheduleTrackRebuild — pont-húzás közben a DRÁGA (textúrát is töltő)
+// pálya-szalag-újraépítést rAF-hurokra korlátozzuk, a jelölő-gömböt viszont
+// minden mousemove-nál azonnal frissítjük (olcsó, textúra nélküli)
 let lastGhostWorld = null; // a legutóbbi 3D raycast-pont — a Forgatás/palett-váltás gomb is ezt használja
 let rafId = null;
 let lastFrameTime = null;
@@ -188,6 +245,7 @@ async function ensureEditor3D() {
     editor3dReadyPromise = (async () => {
       editor3d = await createEditorScene(editor3dContainer);
       decorGhost = createDecorGhost(editor3d.scene);
+      pointMarkers = createPointMarkers(editor3d.scene);
       cameraController = createFreeCameraController(editor3d.camera, editor3d.renderer.domElement, trackCentroid());
       wire3DInteraction();
     })();
@@ -195,13 +253,14 @@ async function ensureEditor3D() {
   await editor3dReadyPromise;
 }
 
-// A pálya-szalag/boxutca/dekorációk újraépítése a szerkesztő JELENLEGI (élő,
-// esetleg még nem mentett) állapotából — minden 3D-belépéskor lefut, hogy a
-// köztes (2D-ben végzett) szerkesztések azonnal látszódjanak.
+// A pálya-szalag/boxutca/dekorációk/pont-jelölők újraépítése a szerkesztő
+// JELENLEGI (élő, esetleg még nem mentett) állapotából — minden 3D-belépéskor
+// lefut, hogy a köztes (2D-ben végzett) szerkesztések azonnal látszódjanak.
 function refresh3D() {
   if (!editor3d) return;
   rebuildEditorTrack(editor3d.trackGroup, points, closed, DEFAULT_WIDTH / 2, pitLanePoints, pitBoxPoints);
   rebuildEditorDecorations(editor3d.decorGroup, decorations);
+  pointMarkers.rebuild(points, pitLanePoints);
 }
 
 // Az undo/clear/reset/betöltés gombok a 2D-panelen mindig elérhetők (nem csak
@@ -210,6 +269,21 @@ function refresh3D() {
 // maradna elavott).
 function refresh3DIfVisible() {
   if (view === '3d') refresh3D();
+}
+
+// Pont-húzás közben a TELJES pálya-szalag újraépítése (loadTrackRibbon —
+// geometria ÉS textúra-betöltés) minden mousemove-nál érezhető akadást
+// okozna. Ehelyett a szalagot legfeljebb képkockánként egyszer (rAF-fel
+// összegyűjtve) építjük újra — a jelölő-gömb pozícióját viszont a hívó
+// AZONNAL, ettől függetlenül frissíti (lásd wire3DInteraction), hogy a
+// húzott pont maga sose akadjon.
+function scheduleTrackRebuild() {
+  if (trackRebuildPending || !editor3d) return;
+  trackRebuildPending = true;
+  requestAnimationFrame(() => {
+    trackRebuildPending = false;
+    if (editor3d) rebuildEditorTrack(editor3d.trackGroup, points, closed, DEFAULT_WIDTH / 2, pitLanePoints, pitBoxPoints);
+  });
 }
 
 // A "kézben" lévő elem előnézeti pozíciója/forgása — ha van illeszthető
@@ -223,8 +297,49 @@ function decorPlacementPreview(worldPt) {
 
 function wire3DInteraction() {
   const dom = editor3d.renderer.domElement;
+
+  // Pálya-/boxutca-pont húzása: MEGLÉVŐ pont bármikor megfogható (nem csak
+  // "track"/"pitlane" módban — a 2D nézettel ellentétben itt nem kell módot
+  // váltani a finomításhoz). `{capture:true}` KRITIKUS: a szabad kamera
+  // (createFreeCameraController) SAJÁT mousedown-listenere ugyanezen a
+  // vásznon, "bubble" fázisban indítaná a körülnézést — capture fázisban
+  // MINDIG előbb fut le a mienk, és `stopPropagation()`-nel megelőzzük, hogy
+  // a kattintás egyszerre pontot húzzon ÉS elforgassa a kamerát.
+  let suppressNextClick = false;
+  dom.addEventListener(
+    'mousedown',
+    (e) => {
+      const hit = pointMarkers.pick(editor3d.camera, e.clientX, e.clientY, dom);
+      if (!hit) return;
+      e.stopPropagation();
+      pushUndo();
+      draggingPoint3D = hit;
+      // A mousedown→mouseup PÁRT a böngésző utólag 'click'-ké is összevonja —
+      // enélkül egy pont elengedése után a (mode==='decor' esetén futó) click-
+      // kezelő tévesen lerakna/törölne egy dekorációt ugyanarra a kattintásra.
+      suppressNextClick = true;
+    },
+    { capture: true }
+  );
+  window.addEventListener('mousemove', (e) => {
+    if (!draggingPoint3D || view !== '3d' || !editor3d) return;
+    const worldPt = raycastGround(editor3d.camera, e.clientX, e.clientY, dom);
+    if (!worldPt) return;
+    const arr = draggingPoint3D.kind === 'track' ? points : pitLanePoints;
+    const p = arr[draggingPoint3D.index];
+    if (!p) return;
+    p.x = worldPt.x;
+    p.z = worldPt.z;
+    pointMarkers.rebuild(points, pitLanePoints); // olcsó — a húzott gömb azonnal kövesse a kurzort
+    scheduleTrackRebuild(); // drága (textúrázott) szalag-újraépítés — legfeljebb képkockánként egyszer
+    updateStatus();
+  });
+  window.addEventListener('mouseup', () => {
+    draggingPoint3D = null;
+  });
+
   dom.addEventListener('mousemove', (e) => {
-    if (mode !== 'decor') {
+    if (draggingPoint3D || mode !== 'decor') {
       decorGhost.hide();
       hoveredDecoration = null;
       return;
@@ -253,15 +368,21 @@ function wire3DInteraction() {
     hoveredDecoration = null;
   });
   dom.addEventListener('click', (e) => {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
     if (mode !== 'decor') return;
     const worldPt = raycastGround(editor3d.camera, e.clientX, e.clientY, dom);
     if (!worldPt) return;
     const existing = findDecorationNear(worldPt);
     if (existing) {
+      pushUndo();
       decorations.splice(decorations.indexOf(existing), 1);
       hoveredDecoration = null;
     } else {
       if (!activeDecorType) return; // "üres kéz" (ESC) — nincs mit lerakni
+      pushUndo();
       const preview = decorPlacementPreview(worldPt);
       decorations.push({ x: preview.x, z: preview.z, type: activeDecorType, rot: preview.rot, scale: activeScale });
     }
@@ -808,9 +929,11 @@ canvas.addEventListener('mousedown', (e) => {
     // pályánál) — a mozgatás a mousemove-ban folytatódik (lásd dragIndex).
     const hitIdx = findPitLanePointNear(screenPt);
     if (hitIdx !== -1) {
+      pushUndo();
       dragIndex = hitIdx;
       return;
     }
+    pushUndo();
     pitLanePoints.push(snapToTrackCenterline(worldPt));
     render();
     updateStatus();
@@ -823,6 +946,7 @@ canvas.addEventListener('mousedown', (e) => {
     // miatt.
     const hitIdx = findPitBoxNear(screenPt);
     if (hitIdx !== -1) {
+      pushUndo();
       pitBoxPoints.splice(hitIdx, 1);
       render();
       updateStatus();
@@ -842,6 +966,7 @@ canvas.addEventListener('mousedown', (e) => {
     }
     // A boxutca JOBB oldalára toljuk (mint egy valódi, falhoz simuló
     // parkolóhely) — lásd offsetToRightSide.
+    pushUndo();
     pitBoxPoints.push(offsetToRightSide(snapped, snapped.dir));
     render();
     updateStatus();
@@ -855,6 +980,7 @@ canvas.addEventListener('mousedown', (e) => {
     // A hurok zárása ELŐBB, mint az "eltaláltam egy pontot" ellenőrzés — az első
     // pont ÚGY IS "pont", de itt kattintva zárni akarunk, nem húzni.
     if (nearFirstPoint(screenPt)) {
+      pushUndo();
       closed = true;
       render();
       updateStatus();
@@ -862,12 +988,14 @@ canvas.addEventListener('mousedown', (e) => {
     }
     const hitIdx = findPointNear(screenPt);
     if (hitIdx !== -1) {
+      pushUndo();
       dragIndex = hitIdx;
       return;
     }
     // Új pont szélessége öröklődik az előzőtől (vagy alapérték az elsőnél) —
     // így egy már beállított szélesség "tovább fut" a következő pontokra.
     const width = points.length > 0 ? points[points.length - 1].width : DEFAULT_WIDTH;
+    pushUndo();
     points.push({ ...worldPt, width });
     render();
     updateStatus();
@@ -877,6 +1005,7 @@ canvas.addEventListener('mousedown', (e) => {
   // Zárt pálya: pont húzása, vagy új pont beszúrása a görbe közelébe kattintva.
   const hitIdx = findPointNear(screenPt);
   if (hitIdx !== -1) {
+    pushUndo();
     dragIndex = hitIdx;
     return;
   }
@@ -887,6 +1016,7 @@ canvas.addEventListener('mousedown', (e) => {
     const a = points[index];
     const b = points[(index + 1) % points.length];
     const width = (a.width + b.width) / 2;
+    pushUndo();
     points.splice(index + 1, 0, { ...worldPt, width });
     render();
     updateStatus();
@@ -938,6 +1068,7 @@ canvas.addEventListener('contextmenu', (e) => {
     const screenPt = pixelToScreen(e.clientX, e.clientY);
     const hitIdx = findPitLanePointNear(screenPt);
     if (hitIdx === -1) return;
+    pushUndo();
     pitLanePoints.splice(hitIdx, 1);
     render();
     updateStatus();
@@ -947,6 +1078,7 @@ canvas.addEventListener('contextmenu', (e) => {
     const screenPt = pixelToScreen(e.clientX, e.clientY);
     const hitIdx = findPitBoxNear(screenPt);
     if (hitIdx === -1) return;
+    pushUndo();
     pitBoxPoints.splice(hitIdx, 1);
     render();
     updateStatus();
@@ -961,6 +1093,7 @@ canvas.addEventListener('contextmenu', (e) => {
     statusEl.classList.remove('closed');
     return;
   }
+  pushUndo();
   points.splice(hitIdx, 1);
   render();
   updateStatus();
@@ -1045,6 +1178,7 @@ canvas.addEventListener('dblclick', (e) => {
   const screenPt = pixelToScreen(e.clientX, e.clientY);
   const hitIdx = findPointNear(screenPt);
   if (hitIdx === -1) return;
+  pushUndo();
   points[hitIdx].sharp = !points[hitIdx].sharp;
   render();
   updateStatus();
@@ -1058,9 +1192,11 @@ canvas.addEventListener('click', (e) => {
   const worldPt = screenToWorld(screenPt.x, screenPt.y);
   const existing = findDecorationNear(worldPt);
   if (existing) {
+    pushUndo();
     decorations.splice(decorations.indexOf(existing), 1);
   } else {
     if (!activeDecorType) return; // "üres kéz" (ESC) — nincs mit lerakni
+    pushUndo();
     const preview = decorPlacementPreview(worldPt);
     decorations.push({ x: preview.x, z: preview.z, type: activeDecorType, rot: preview.rot, scale: activeScale });
   }
@@ -1068,24 +1204,13 @@ canvas.addEventListener('click', (e) => {
   updateStatus();
 });
 
-undoBtn.addEventListener('click', () => {
-  if (mode === 'decor') {
-    decorations.pop();
-  } else if (mode === 'pitlane') {
-    pitLanePoints.pop();
-  } else if (mode === 'pitbox') {
-    pitBoxPoints.pop();
-  } else if (closed) {
-    closed = false;
-  } else {
-    points.pop();
-  }
-  render();
-  updateStatus();
-  refresh3DIfVisible();
-});
+// Globális visszavonás — lásd a pushUndo/applyUndo megjegyzését fent: MINDEN
+// nézetben/módban az utolsó STRUKTURÁLIS lépést vonja vissza (nem csak az
+// aktuális módét, mint a régi, pop()-alapú viselkedés).
+undoBtn.addEventListener('click', applyUndo);
 
 clearBtn.addEventListener('click', () => {
+  pushUndo();
   points.length = 0;
   closed = false;
   decorations.length = 0;
@@ -1159,6 +1284,7 @@ saveBtn.addEventListener('click', async () => {
 });
 
 resetDefaultBtn.addEventListener('click', () => {
+  pushUndo();
   clearCustomLayout();
   points.length = 0;
   closed = false;
@@ -1744,6 +1870,7 @@ async function renderSavedTracksList() {
     loadBtn.addEventListener('click', async () => {
       try {
         const entry = await apiGetTrack(t.id);
+        pushUndo();
         loadLayoutIntoEditor(entry.layout, entry.decorations, entry.pitLane);
         trackNameInput.value = entry.name;
         setActiveTrack(entry.name, entry.layout, entry.decorations, entry.pitLane);
@@ -1844,5 +1971,9 @@ if (import.meta.env.DEV) {
     setView,
     get editor3d() { return editor3d; },
     get cameraController() { return cameraController; },
+    get pointMarkers() { return pointMarkers; },
+    get undoStackLength() { return undoStack.length; },
+    applyUndo,
+    pushUndo,
   };
 }
