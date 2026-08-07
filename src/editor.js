@@ -38,6 +38,14 @@ import { isSplineLayout } from './sim/trackFactory.js';
 import { sampleSpline } from './sim/trackSpline.js';
 import { validateSplineTrack, MIN_CONTROL_POINTS, MIN_WIDTH, MAX_WIDTH } from './sim/trackValidation.js';
 import { getFootprint } from './render3d/decorFootprint.js';
+import {
+  createEditorScene,
+  rebuildEditorTrack,
+  rebuildEditorDecorations,
+  raycastGround,
+  createFreeCameraController,
+  createDecorGhost,
+} from './render3d/editorPreview.js';
 
 // A pálya-szerkesztő CSAK dev módban érhető el (?dev=1 a játék URL-jén) —
 // enélkül vissza a játékhoz. A throw megállítja a modul további futását.
@@ -60,6 +68,10 @@ const SNAP_DISTANCE_M = 3; // egy `snap` típusú elem élétől ennyin belül i
 const PIT_LANE_SNAP_M = 20;
 const WIDTH_STEP = 2; // m — egy görgő-kattanás ennyivel változtatja egy pont szélességét
 const DEFAULT_WIDTH = TRACK.tile; // m — új kontrollpont alap-szélessége
+const SCALE_STEP = 0.1; // egy görgő-kattanás ennyivel változtatja a "kézben" lévő elem méret-szorzóját
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 3;
+const ROTATE_STEP = Math.PI / 36; // 5° — egy görgő-kattanás ennyivel forgatja a "kézben" lévő elemet, R lenyomva tartva
 
 const canvas = document.getElementById('editorCanvas');
 canvas.width = CANVAS_W;
@@ -83,6 +95,9 @@ const rotateBtn = document.getElementById('rotateBtn');
 const trackNameInput = document.getElementById('trackNameInput');
 const saveAsBtn = document.getElementById('saveAsBtn');
 const savedTracksListEl = document.getElementById('savedTracksList');
+const view2dBtn = document.getElementById('view2dBtn');
+const view3dBtn = document.getElementById('view3dBtn');
+const editor3dContainer = document.getElementById('editor3d');
 
 // --- Állapot ---
 
@@ -92,15 +107,33 @@ const points = [];
 let closed = false;
 let dragIndex = null; // az éppen húzott kontrollpont indexe, vagy null
 let hover = null; // { screenPt:{x,y}, worldPt:{x,z} } — a legutóbbi egér-pozíció
+// A kurzor alatt álló MEGLÉVŐ dekoráció (decor módban, 2D ÉS 3D nézetben is
+// frissül) — csak arra kell, hogy tudjuk: a rákattintás TÖRÖL, ne rakjon le
+// újat, és hogy a "kézben lévő" szellem-előnézet ilyenkor elrejtve maradjon
+// (ne fedje egymást a két modell). A méretezés/forgatás NEM ezt módosítja —
+// lásd activeScale/activeRot lent: a felhasználó kérése szerint a
+// finomhangolás a LERAKÁS ELŐTT, a "kézben" történik, nem utólag egy már
+// elhelyezett elemen.
+let hoveredDecoration = null;
 
-// Dekorációk: {x, z, type, rot} — VILÁG-méterben. Mentéskor dgx=x/TRACK.tile,
-// dgy=z/TRACK.tile (a decorations.js render-kód EZT várja: world=dgx*tile) —
-// ugyanaz a konvenció, mint a régi "szabad" (free) elemeknél volt, csak
-// mostantól MINDEN dekoráció ezt az utat követi (nincs többé rács-igazítás).
+// Dekorációk: {x, z, type, rot, scale} — VILÁG-méterben (rot RADIÁNBAN — lásd
+// normalizeRotToRadians lent a régi, 0–3 "negyedfordulat" mentések
+// migrációjáról). Mentéskor dgx=x/TRACK.tile, dgy=z/TRACK.tile (a
+// decorations.js render-kód EZT várja: world=dgx*tile) — ugyanaz a
+// konvenció, mint a régi "szabad" (free) elemeknél volt, csak mostantól
+// MINDEN dekoráció ezt az utat követi (nincs többé rács-igazítás).
 const decorations = [];
 const decorTypeKeys = Object.keys(DECORATION_TYPES);
 let activeDecorType = decorTypeKeys[0];
+// A "kézben lévő" (LERAKÁS ELŐTTI) elem forgása (radián) és méret-szorzója —
+// a "Forgatás" gomb ±90°-ot lép rajta, R lenyomva tartva + egérgörgővel
+// SZABADON, tetszőleges fokban állítható (lásd a wheel-kezelőket), sima
+// görgővel (R nélkül) pedig a méret-szorzó (activeScale) állítható. Mindkettő
+// megmarad a KÖVETKEZŐ lerakásig — a lerakott elem MÁR NEM módosítható
+// utólag (a felhasználó kifejezett kérése: a finomhangolás a kézben történjen).
 let activeRot = 0;
+let activeScale = 1;
+let rotateKeyHeld = false; // R lenyomva tartva — ilyenkor a görgő forgat, nem méretez
 
 // Boxutca-útvonal — {x,z}[] VILÁG-méterben, SZABADON rajzolt, NYITOTT vonal
 // (nincs "zárás", mint a fő pályánál — lásd a "pitlane" módot lent). Egyenes
@@ -122,6 +155,189 @@ const pitBoxPoints = [];
 
 let mode = 'track'; // 'track' | 'decor' | 'pitlane' | 'pitbox'
 let problemPos = null; // { x, z } — az aktuális validációs hiba helye a vásznon (ha van)
+
+// --- 3D előnézet (kapcsolható nézet — lásd render3d/editorPreview.js) ---
+//
+// SCOPE: a pálya vonala/boxutca 3D-ben csak MEGJELENIK (a fenti `points`/
+// `pitLanePoints`/`pitBoxPoints` szerkesztése marad 2D-ben) — a 3D nézetben
+// EGYEDÜL a dekoráció-elhelyezés interaktív. Emiatt a meglévő 2D `canvas`
+// esemény-kezelők VÁLTOZATLANOK maradnak (2D nézetben a canvas látszik, 3D
+// nézetben `display:none` — nem kapnak egérszemet), a 3D-s dekoráció-
+// interakció pedig KÜLÖN, a 3D vászonra kötött listenerekben fut (lásd
+// wire3DInteraction lent), UGYANAZOKAT a (tiszta, világ-koordinátás)
+// findDecorationNear/computeSnap függvényeket használva, mint a 2D click.
+let view = '2d'; // '2d' | '3d'
+let editor3d = null; // { renderer, scene, camera, trackGroup, decorGroup } — lusta inicializálás
+let editor3dReadyPromise = null;
+let cameraController = null;
+let decorGhost = null;
+let lastGhostWorld = null; // a legutóbbi 3D raycast-pont — a Forgatás/palett-váltás gomb is ezt használja
+let rafId = null;
+let lastFrameTime = null;
+
+function trackCentroid() {
+  if (points.length === 0) return { x: 0, z: 0 };
+  const xs = points.map((p) => p.x);
+  const zs = points.map((p) => p.z);
+  return { x: (Math.min(...xs) + Math.max(...xs)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 };
+}
+
+async function ensureEditor3D() {
+  if (editor3d) return;
+  if (!editor3dReadyPromise) {
+    editor3dReadyPromise = (async () => {
+      editor3d = await createEditorScene(editor3dContainer);
+      decorGhost = createDecorGhost(editor3d.scene);
+      cameraController = createFreeCameraController(editor3d.camera, editor3d.renderer.domElement, trackCentroid());
+      wire3DInteraction();
+    })();
+  }
+  await editor3dReadyPromise;
+}
+
+// A pálya-szalag/boxutca/dekorációk újraépítése a szerkesztő JELENLEGI (élő,
+// esetleg még nem mentett) állapotából — minden 3D-belépéskor lefut, hogy a
+// köztes (2D-ben végzett) szerkesztések azonnal látszódjanak.
+function refresh3D() {
+  if (!editor3d) return;
+  rebuildEditorTrack(editor3d.trackGroup, points, closed, DEFAULT_WIDTH / 2, pitLanePoints, pitBoxPoints);
+  rebuildEditorDecorations(editor3d.decorGroup, decorations);
+}
+
+// Az undo/clear/reset/betöltés gombok a 2D-panelen mindig elérhetők (nem csak
+// 2D nézetben) — ha épp 3D-ben vagyunk, a rájuk adott mutáció után frissíteni
+// kell a MÁR LÁTHATÓ 3D jelenetet is (különben csak a következő nézet-váltásig
+// maradna elavott).
+function refresh3DIfVisible() {
+  if (view === '3d') refresh3D();
+}
+
+// A "kézben" lévő elem előnézeti pozíciója/forgása — ha van illeszthető
+// szomszéd (computeSnap), a PONTOS illesztett helyen/forgással mutatjuk,
+// UGYANÚGY, mint a 2D nézet hover-előnézete, hogy a 3D-ben is látszódjon,
+// hova/hogyan fog ténylegesen odaillesztődni kattintáskor.
+function decorPlacementPreview(worldPt) {
+  const snap = computeSnap(worldPt, activeDecorType, activeRot, activeScale);
+  return snap ? { x: snap.x, z: snap.z, rot: snap.rot } : { x: worldPt.x, z: worldPt.z, rot: activeRot };
+}
+
+function wire3DInteraction() {
+  const dom = editor3d.renderer.domElement;
+  dom.addEventListener('mousemove', (e) => {
+    if (mode !== 'decor') {
+      decorGhost.hide();
+      hoveredDecoration = null;
+      return;
+    }
+    const worldPt = raycastGround(editor3d.camera, e.clientX, e.clientY, dom);
+    if (!worldPt) {
+      decorGhost.hide();
+      hoveredDecoration = null;
+      return;
+    }
+    lastGhostWorld = worldPt;
+    hoveredDecoration = findDecorationNear(worldPt) || null;
+    // Miközben egy MEGLÉVŐ elem fölött állunk (törléshez célzunk rá), a
+    // szellem-előnézet zavaró lenne (két, egymást átfedő modell) — elrejtjük.
+    // "Üres kéz" (ESC — lásd lent, activeDecorType===null) esetén sincs mit
+    // előnézetezni.
+    if (hoveredDecoration || !activeDecorType) {
+      decorGhost.hide();
+    } else {
+      const preview = decorPlacementPreview(worldPt);
+      decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
+    }
+  });
+  dom.addEventListener('mouseleave', () => {
+    decorGhost.hide();
+    hoveredDecoration = null;
+  });
+  dom.addEventListener('click', (e) => {
+    if (mode !== 'decor') return;
+    const worldPt = raycastGround(editor3d.camera, e.clientX, e.clientY, dom);
+    if (!worldPt) return;
+    const existing = findDecorationNear(worldPt);
+    if (existing) {
+      decorations.splice(decorations.indexOf(existing), 1);
+      hoveredDecoration = null;
+    } else {
+      if (!activeDecorType) return; // "üres kéz" (ESC) — nincs mit lerakni
+      const preview = decorPlacementPreview(worldPt);
+      decorations.push({ x: preview.x, z: preview.z, type: activeDecorType, rot: preview.rot, scale: activeScale });
+    }
+    rebuildEditorDecorations(editor3d.decorGroup, decorations);
+    updateStatus();
+  });
+  // Görgő a "kézben" lévő elemen: R lenyomva tartva SZABADON forgat
+  // (tetszőleges fok, nem csak negyedfordulat), R nélkül a méret-szorzót
+  // állítja — UGYANAZ a logika, mint a 2D canvas wheel-kezelőjében.
+  dom.addEventListener(
+    'wheel',
+    (e) => {
+      if (mode !== 'decor' || !activeDecorType) return;
+      e.preventDefault();
+      if (rotateKeyHeld) {
+        const delta = e.deltaY < 0 ? ROTATE_STEP : -ROTATE_STEP;
+        activeRot = (activeRot + delta + Math.PI * 2) % (Math.PI * 2);
+      } else {
+        const delta = e.deltaY < 0 ? SCALE_STEP : -SCALE_STEP;
+        activeScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, activeScale + delta));
+      }
+      if (lastGhostWorld && !hoveredDecoration) {
+        const preview = decorPlacementPreview(lastGhostWorld);
+        decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
+      }
+    },
+    { passive: false }
+  );
+}
+
+function startRafLoop() {
+  if (rafId !== null) return;
+  lastFrameTime = performance.now();
+  const tick = (t) => {
+    const dt = Math.min(0.1, (t - lastFrameTime) / 1000);
+    lastFrameTime = t;
+    if (cameraController) cameraController.update(dt);
+    editor3d.renderer.render(editor3d.scene, editor3d.camera);
+    rafId = requestAnimationFrame(tick);
+  };
+  rafId = requestAnimationFrame(tick);
+}
+
+function stopRafLoop() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+async function setView(newView) {
+  if (newView === view) return;
+  view = newView;
+  view2dBtn.classList.toggle('active', view === '2d');
+  view3dBtn.classList.toggle('active', view === '3d');
+  if (view === '3d') {
+    canvas.style.display = 'none';
+    editor3dContainer.style.display = 'block';
+    // A konténer épp most vált láthatóvá — a createScene3D belső resize-
+    // figyelője (lásd scene.js) 0×0 méret miatt kihagyta a frissítést, amíg
+    // rejtve volt; egy explicit resize-esemény szinkronizálja a kamerát/
+    // renderert a konténer TÉNYLEGES (most már nem-nulla) méretére.
+    await ensureEditor3D();
+    window.dispatchEvent(new Event('resize'));
+    refresh3D();
+    startRafLoop();
+  } else {
+    stopRafLoop();
+    if (decorGhost) decorGhost.hide();
+    editor3dContainer.style.display = 'none';
+    canvas.style.display = 'block';
+  }
+}
+
+view2dBtn.addEventListener('click', () => setView('2d'));
+view3dBtn.addEventListener('click', () => setView('3d'));
 
 // --- Koordináta-átváltás (világ-méter ⇄ vászon-pixel) ---
 
@@ -194,15 +410,16 @@ function pointSegmentDistance(p, a, b) {
 const footprints = {};
 
 // Egy dekoráció LOKÁLIS (rot=0) x/z-eltolását világ-koordinátává forgatja a
-// SAJÁT (d.rot * 90°) elforgatásával.
+// SAJÁT d.rot-jával — d.rot RADIÁNBAN (nem negyedfordulat-index, lásd
+// normalizeRotToRadians: a szabad R+görgő forgatás miatt bármilyen fok lehet).
 function localToWorld(d, lx, lz) {
-  const a = (d.rot || 0) * (Math.PI / 2);
+  const a = d.rot || 0;
   const cos = Math.cos(a);
   const sin = Math.sin(a);
   return { x: d.x + lx * cos - lz * sin, z: d.z + lx * sin + lz * cos };
 }
 function localDirToWorld(d, lx, lz) {
-  const a = (d.rot || 0) * (Math.PI / 2);
+  const a = d.rot || 0;
   const cos = Math.cos(a);
   const sin = Math.sin(a);
   return { x: lx * cos - lz * sin, z: lx * sin + lz * cos };
@@ -238,11 +455,36 @@ function footprintEdges(d, fp) {
   ];
 }
 
+// Egy elhelyezett dekoráció (`d.scale`, alapból 1 — a "kézben" beállított
+// méret-szorzó, LERAKÁS UTÁN már nem módosítható) TÉNYLEGES (a base
+// footprint-re rászorzott) mérete. Egy ÚJONNAN lerakandó elem előnézetéhez
+// nem kell ez a wrapper (azt közvetlenül activeScale-lel számoljuk) — csak a
+// MÁR LÉTEZŐ elemek footprintjét (hit-teszt, illesztés, kirajzolás) kell
+// ezen átvezetni.
+function scaledFootprint(d, fp) {
+  if (!fp) return fp;
+  const s = d.scale || 1;
+  return { width: fp.width * s, depth: fp.depth * s };
+}
+
+// RÉGI mentések d.rot mezője negyedfordulat-INDEX volt (0–3, ×90°) — az új
+// szabad (R + görgő) forgatás óta d.rot RADIÁN. A két alak nem
+// különböztethető meg formálisan, DE a régi formátum kizárólag a {0,1,2,3}
+// egész értékeket vehette fel (a korábbi UI csak ezt a négyet tudta
+// előállítani), míg egy szabadon forgatott, folytonos egér-görgő-bevitelből
+// származó radián érték gyakorlatilag SOSEM esik pontosan egy egészre —
+// ezért ez a heurisztika biztonságosan migrálja a régi mentéseket, új
+// (radián) adatot pedig érintetlenül hagy.
+function normalizeRotToRadians(rot) {
+  const r = rot || 0;
+  return Number.isInteger(r) && r >= 0 && r <= 3 ? r * (Math.PI / 2) : r;
+}
+
 // worldPt a `d` dekoráció (rot-tal elforgatott) téglalapján BELÜL esik-e —
 // inverz forgatással a lokális keretbe transzformálva (a forgatás
 // ortonormált, tehát az inverz a transzponáltja).
 function pointInFootprint(worldPt, d, fp) {
-  const a = (d.rot || 0) * (Math.PI / 2);
+  const a = d.rot || 0;
   const cos = Math.cos(a);
   const sin = Math.sin(a);
   const dx = worldPt.x - d.x;
@@ -260,7 +502,7 @@ function pointInFootprint(worldPt, d, fp) {
 function findDecorationNear(worldPt) {
   return decorations.find((d) => {
     const fp = footprints[d.type];
-    if (fp) return pointInFootprint(worldPt, d, fp);
+    if (fp) return pointInFootprint(worldPt, d, scaledFootprint(d, fp));
     return Math.hypot(d.x - worldPt.x, d.z - worldPt.z) < REMOVE_RADIUS_M;
   });
 }
@@ -279,31 +521,50 @@ function findDecorationNear(worldPt) {
 // a normálisa leginkább SZEMBEN áll a megtalált szomszéd-éllel (tehát "felé
 // néz") — így egyenes folytatásnál (0° eltérés) ugyanúgy simán illeszkedik,
 // de 90°-kal elforgatva egy derékszögű sarkot is pontosan zár.
-function computeSnap(worldPt, type, rot) {
+function computeSnap(worldPt, type, rot, scale = 1) {
   const def = DECORATION_TYPES[type];
   const fp = footprints[type];
   if (!def?.snap || !fp) return null;
+  const ownFp = { width: fp.width * scale, depth: fp.depth * scale };
 
   let bestEdge = null;
+  let bestOwner = null;
   let bestDist = SNAP_DISTANCE_M;
   for (const d of decorations) {
     const ndef = DECORATION_TYPES[d.type];
     const nfp = footprints[d.type];
     if (!ndef?.snap || !nfp) continue;
-    for (const edge of footprintEdges(d, nfp)) {
+    for (const edge of footprintEdges(d, scaledFootprint(d, nfp))) {
       const dist = Math.hypot(edge.mid.x - worldPt.x, edge.mid.z - worldPt.z);
       if (dist < bestDist) {
         bestDist = dist;
         bestEdge = edge;
+        bestOwner = d;
       }
     }
   }
   if (!bestEdge) return null;
 
-  // Az új elem saját élei (a MEGADOTT forgással, egy képzeletbeli origóban álló
-  // példányon) — azt választjuk, amelyiknek a normálisa a legjobban "szembenéz"
-  // a megtalált szomszéd-éllel (skaláris szorzat maximuma a −bestEdge.normal-lal).
-  const ownEdges = footprintEdges({ x: 0, z: 0, rot }, fp);
+  // A szabad (nem csak negyedfordulatos) forgatás óta a MEGADOTT `rot` a
+  // szomszédétól tetszőleges szöggel eltérhet — élő hibajelentés: emiatt a
+  // "legjobban szembenéző" saját él már csak KÖZELÍTŐLEG (nem pontosan)
+  // állt szemben a szomszéd élével, ami a két él KÖZÉPPONTJÁT egybeejtve
+  // ferde, lépcsős illeszkedést adott (screenshot: 3 lelátó eltolva egymáshoz
+  // képest), nem sima, egyenes sort. A javítás: a lerakandó elem forgását a
+  // SZOMSZÉD forgásához képest a LEGKÖZELEBBI 90°-os többszörösre kerekítjük
+  // — így egyenes folytatásnál (kis eltérés) PONTOSAN a szomszéd szögére áll
+  // vissza, derékszögű saroknál (kb. 90°-os eltérés) pedig pontosan 90°-ra —
+  // mindkét esetben a két él GARANTÁLTAN pontosan szembenéz, nem csak
+  // "leginkább".
+  const neighborRot = bestOwner.rot || 0;
+  const relative = rot - neighborRot;
+  const snappedRot = neighborRot + Math.round(relative / (Math.PI / 2)) * (Math.PI / 2);
+
+  // Az új elem saját élei (a KEREKÍTETT forgással, egy képzeletbeli origóban
+  // álló példányon) — azt választjuk, amelyiknek a normálisa a legjobban
+  // "szembenéz" a megtalált szomszéd-éllel (skaláris szorzat maximuma a
+  // −bestEdge.normal-lal) — a kerekítés miatt ez már PONTOSAN szembenéz.
+  const ownEdges = footprintEdges({ x: 0, z: 0, rot: snappedRot }, ownFp);
   let facingEdge = ownEdges[0];
   let bestScore = -Infinity;
   for (const e of ownEdges) {
@@ -319,7 +580,7 @@ function computeSnap(worldPt, type, rot) {
   return {
     x: bestEdge.mid.x - facingEdge.mid.x,
     z: bestEdge.mid.z - facingEdge.mid.z,
-    rot,
+    rot: snappedRot,
   };
 }
 
@@ -461,6 +722,8 @@ function setMode(newMode) {
       `Kattints a MEGRAJZOLT boxutcára (előbb rajzold meg "Boxutca" módban), hogy kijelölj egy PONTOS helyet, ahol meg kell állni a kerékcseréhez — a kattintás a boxutca legközelebbi pontjára illeszkedik. Legfeljebb ${RACE.pitStop.maxBoxes} boxhely rakható le (multiplayerben minden játékosnak a SAJÁTJA jut, sorrendben — 1. hely = 1. beszálló, stb.). Egy MEGLÉVŐ boxhelyre kattintva törlöd.`;
   }
   hover = null;
+  hoveredDecoration = null;
+  if (mode !== 'decor' && decorGhost) decorGhost.hide();
   render();
   updateStatus();
 }
@@ -503,6 +766,10 @@ for (const layer of ['ground', 'object']) {
       activeDecorType = key;
       for (const b of decorPaletteEl.querySelectorAll('button')) b.classList.remove('active');
       btn.classList.add('active');
+      if (view === '3d' && decorGhost && lastGhostWorld) {
+        const preview = decorPlacementPreview(lastGhostWorld);
+        decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
+      }
     });
     paletteButtons[key] = btn;
     group.appendChild(btn);
@@ -523,8 +790,12 @@ for (const key of decorTypeKeys) {
 }
 
 rotateBtn.addEventListener('click', () => {
-  activeRot = (activeRot + 1) % 4;
+  activeRot = (activeRot + Math.PI / 2) % (Math.PI * 2);
   render();
+  if (view === '3d' && decorGhost && lastGhostWorld) {
+    const preview = decorPlacementPreview(lastGhostWorld);
+    decorGhost.update(activeDecorType, preview.x, preview.z, preview.rot, activeScale);
+  }
 });
 
 // --- Interakció ---
@@ -640,11 +911,13 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
   hover = { screenPt, worldPt };
+  hoveredDecoration = mode === 'decor' ? findDecorationNear(worldPt) || null : null;
   render();
 });
 
 canvas.addEventListener('mouseleave', () => {
   hover = null;
+  hoveredDecoration = null;
   render();
 });
 
@@ -702,19 +975,65 @@ canvas.addEventListener('contextmenu', (e) => {
 canvas.addEventListener(
   'wheel',
   (e) => {
-    if (mode !== 'track') return;
-    const screenPt = pixelToScreen(e.clientX, e.clientY);
-    const hitIdx = findPointNear(screenPt);
-    if (hitIdx === -1) return;
-    e.preventDefault();
-    const delta = e.deltaY < 0 ? WIDTH_STEP : -WIDTH_STEP;
-    const p = points[hitIdx];
-    p.width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, p.width + delta));
-    render();
-    updateStatus();
+    if (mode === 'track') {
+      const screenPt = pixelToScreen(e.clientX, e.clientY);
+      const hitIdx = findPointNear(screenPt);
+      if (hitIdx === -1) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? WIDTH_STEP : -WIDTH_STEP;
+      const p = points[hitIdx];
+      p.width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, p.width + delta));
+      render();
+      updateStatus();
+      return;
+    }
+    // Decor módban a "kézben" lévő (LERAKÁS ELŐTTI) elemet finomítja: R
+    // lenyomva tartva SZABADON forgat (bármilyen fok), R nélkül a
+    // méret-szorzót állítja. Egy MÁR LERAKOTT elem többé nem módosítható
+    // utólag (a felhasználó kérése) — a kattintás rá csak törli.
+    if (mode === 'decor' && activeDecorType) {
+      e.preventDefault();
+      if (rotateKeyHeld) {
+        const delta = e.deltaY < 0 ? ROTATE_STEP : -ROTATE_STEP;
+        activeRot = (activeRot + delta + Math.PI * 2) % (Math.PI * 2);
+      } else {
+        const delta = e.deltaY < 0 ? SCALE_STEP : -SCALE_STEP;
+        activeScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, activeScale + delta));
+      }
+      render();
+    }
   },
   { passive: false }
 );
+
+// R billentyű LENYOMVA TARTÁSA: amíg tartjuk, a fenti wheel-kezelő (2D ÉS 3D)
+// forgat méretezés helyett — így a "kézben" lévő elem SZABADON, tetszőleges
+// fokban forgatható, nem csak negyedfordulatonként (a "Forgatás" gomb erre a
+// gyors 90°-os lépésre maradt).
+// ESC: "üres kéz" — leveszi a kiválasztott palett-elemet (activeDecorType
+// null lesz), hogy a kattintás decor módban ne rakjon le semmit, amíg a
+// felhasználó újra nem választ típust a palettán. A palett-gombok "active"
+// jelölése is törlődik. Szövegmezőben gépelést (pl. pálya neve) egyik
+// billentyű sem szakítja meg — csak akkor fut, ha a fókusz NEM egy
+// input/textarea.
+window.addEventListener('keydown', (e) => {
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+
+  if (e.key === 'Escape') {
+    activeDecorType = null;
+    for (const b of decorPaletteEl.querySelectorAll('button')) b.classList.remove('active');
+    if (decorGhost) decorGhost.hide();
+    render();
+    return;
+  }
+
+  if (e.key.toLowerCase() === 'r') rotateKeyHeld = true;
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.key.toLowerCase() === 'r') rotateKeyHeld = false;
+});
 
 // Dupla kattintás egy kontrollponton (track módban): ki/be kapcsolja, hogy a
 // pont ÉLES SAROK legyen-e (törésponttá teszi a görbét, egyenes be/kifutással
@@ -741,9 +1060,9 @@ canvas.addEventListener('click', (e) => {
   if (existing) {
     decorations.splice(decorations.indexOf(existing), 1);
   } else {
-    const snap = computeSnap(worldPt, activeDecorType, activeRot);
-    if (snap) decorations.push({ x: snap.x, z: snap.z, type: activeDecorType, rot: snap.rot });
-    else decorations.push({ x: worldPt.x, z: worldPt.z, type: activeDecorType, rot: activeRot });
+    if (!activeDecorType) return; // "üres kéz" (ESC) — nincs mit lerakni
+    const preview = decorPlacementPreview(worldPt);
+    decorations.push({ x: preview.x, z: preview.z, type: activeDecorType, rot: preview.rot, scale: activeScale });
   }
   render();
   updateStatus();
@@ -763,6 +1082,7 @@ undoBtn.addEventListener('click', () => {
   }
   render();
   updateStatus();
+  refresh3DIfVisible();
 });
 
 clearBtn.addEventListener('click', () => {
@@ -773,9 +1093,11 @@ clearBtn.addEventListener('click', () => {
   pitBoxPoints.length = 0;
   render();
   updateStatus();
+  refresh3DIfVisible();
 });
 
 function gotoGame() {
+  stopRafLoop();
   // Gyökér-relatív útvonal helyett BASE_URL-lel prefixelve, hogy GitHub Pages
   // al-útvonalán (/autos-jatek/) is a helyes index.html-re navigáljon.
   window.location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/index.html';
@@ -797,6 +1119,7 @@ function decorationsForSave() {
     dgx: d.x / TRACK.tile,
     dgy: d.z / TRACK.tile,
     rot: d.rot || 0,
+    scale: d.scale || 1,
   }));
 }
 
@@ -845,6 +1168,7 @@ resetDefaultBtn.addEventListener('click', () => {
   trackNameInput.value = '';
   render();
   renderSavedTracksList();
+  refresh3DIfVisible();
   statusEl.textContent = 'Az alap pálya visszaállítva (törölve az aktív egyéni pálya és dekoráció — a névvel mentett pályák megmaradnak).';
   statusEl.classList.remove('closed');
 });
@@ -1058,7 +1382,7 @@ function render() {
   // méret-felirattal — ez adja a "pontos méret látszik" funkciót.
   for (const d of decorations) {
     const fp = footprints[d.type];
-    if (fp) drawFootprintRect(d, fp, DECORATION_TYPES[d.type].snap ? 'rgba(111,179,122,0.9)' : 'rgba(122,127,140,0.7)');
+    if (fp) drawFootprintRect(d, scaledFootprint(d, fp), DECORATION_TYPES[d.type].snap ? 'rgba(111,179,122,0.9)' : 'rgba(122,127,140,0.7)');
 
     const s = worldToScreen(d);
     ctx.font = '20px sans-serif';
@@ -1191,7 +1515,7 @@ function render() {
     if (existing) {
       const fp = footprints[existing.type];
       if (fp) {
-        drawFootprintRect(existing, fp, '#e05a5a');
+        drawFootprintRect(existing, scaledFootprint(existing, fp), '#e05a5a');
       } else {
         const s = worldToScreen(existing);
         ctx.beginPath();
@@ -1200,13 +1524,19 @@ function render() {
         ctx.lineWidth = 2;
         ctx.stroke();
       }
-    } else {
-      const snap = computeSnap(hover.worldPt, activeDecorType, activeRot);
+    } else if (activeDecorType) {
+      // "Üres kéz" (ESC — activeDecorType===null) esetén nincs mit
+      // előnézetezni, a hover ilyenkor egyszerűen nem rajzol semmit. A
+      // "kézben" lévő elem méret-szorzóját (activeScale — görgővel
+      // állítható, lásd a wheel-kezelőt) is a footprint-en át jelenítjük meg,
+      // hogy a lerakás ELŐTT lásd a tényleges méretet.
+      const snap = computeSnap(hover.worldPt, activeDecorType, activeRot, activeScale);
       const preview = snap
         ? { x: snap.x, z: snap.z, rot: snap.rot }
         : { x: hover.worldPt.x, z: hover.worldPt.z, rot: activeRot };
       const fp = footprints[activeDecorType];
-      if (fp) drawFootprintRect(preview, fp, snap ? '#f2c14e' : 'rgba(217,154,63,0.6)');
+      const dfp = fp ? { width: fp.width * activeScale, depth: fp.depth * activeScale } : fp;
+      if (dfp) drawFootprintRect(preview, dfp, snap ? '#f2c14e' : 'rgba(217,154,63,0.6)');
 
       const s = worldToScreen(preview);
       ctx.globalAlpha = 0.6;
@@ -1264,7 +1594,7 @@ function drawFootprintRect(d, fp, color) {
 // ugyanarra az oldalra mutat.
 function drawFacingArrow(d, color) {
   const s = worldToScreen(d);
-  const angle = ((d.rot || 0) * Math.PI) / 2 - Math.PI / 2;
+  const angle = (d.rot || 0) - Math.PI / 2;
   const len = 22;
   const tipX = s.x + Math.cos(angle) * len;
   const tipY = s.y + Math.sin(angle) * len;
@@ -1361,7 +1691,13 @@ function loadLayoutIntoEditor(savedLayout, savedDecorations, savedPitLane) {
 
   for (const d of savedDecorations || []) {
     if (!DECORATION_TYPES[d.type]) continue; // megszűnt típus — kihagyjuk
-    decorations.push({ x: d.dgx * TRACK.tile, z: d.dgy * TRACK.tile, type: d.type, rot: d.rot || 0 });
+    decorations.push({
+      x: d.dgx * TRACK.tile,
+      z: d.dgy * TRACK.tile,
+      type: d.type,
+      rot: normalizeRotToRadians(d.rot), // régi (0–3 negyedfordulat) mentések migrálása radiánná
+      scale: Number.isFinite(d.scale) && d.scale > 0 ? d.scale : 1, // régi mentés = nincs scale mező → 1
+    });
   }
 }
 
@@ -1414,6 +1750,7 @@ async function renderSavedTracksList() {
         render();
         updateStatus();
         renderSavedTracksList();
+        refresh3DIfVisible();
         statusEl.textContent = `📂 "${entry.name}" betöltve szerkesztésre.`;
         statusEl.classList.add('closed');
       } catch (e) {
@@ -1503,5 +1840,9 @@ if (import.meta.env.DEV) {
     computeSnap,
     setActiveDecorType: (t) => { activeDecorType = t; },
     setMode,
+    get view() { return view; },
+    setView,
+    get editor3d() { return editor3d; },
+    get cameraController() { return cameraController; },
   };
 }

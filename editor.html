@@ -40,6 +40,7 @@
       }
       #canvasWrap {
         flex: 1;
+        position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -51,6 +52,30 @@
         border-radius: 10px;
         cursor: pointer;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      }
+      #editor3d {
+        position: absolute;
+        inset: 0;
+      }
+      #editor3d canvas {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        border: none;
+        box-shadow: none;
+        cursor: crosshair;
+      }
+      #editor3dHint {
+        position: absolute;
+        left: 14px;
+        bottom: 14px;
+        padding: 8px 12px;
+        border-radius: 9px;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        font-size: 12px;
+        color: var(--text-dim);
+        pointer-events: none;
       }
       #panel {
         width: 300px;
@@ -135,6 +160,17 @@
       }
       #modeToggle button.active:hover {
         background: #6a9cfd;
+      }
+      #viewToggle {
+        display: flex;
+        gap: 8px;
+      }
+      #viewToggle button {
+        flex: 1;
+      }
+      #viewToggle button.active {
+        background: var(--gold);
+        color: #1a1508;
       }
       .decorLayerHeader {
         font-size: 11px;
@@ -258,9 +294,19 @@
     <div id="layout">
       <div id="canvasWrap">
         <canvas id="editorCanvas"></canvas>
+        <div id="editor3d" style="display:none">
+          <div id="editor3dHint">
+            Húzd az egeret a körülnézéshez · WASD mozgás · Shift/Ctrl fel/le · R forgat · görgő méretez
+          </div>
+        </div>
       </div>
       <div id="panel">
         <h1>🏗️ Pálya-szerkesztő</h1>
+
+        <div id="viewToggle">
+          <button id="view2dBtn" class="active">🗺️ 2D szerkesztő</button>
+          <button id="view3dBtn">🧊 3D előnézet</button>
+        </div>
 
         <div id="modeToggle">
           <button id="modeTrackBtn" class="active">🛣️ Pálya rajzolása</button>

@@ -18,9 +18,17 @@ const COLORS = {
   wheel: 0x1a1a1a,
 };
 
-export function createScene3D(container) {
+// `includeCar` (alapból true): a pálya-szerkesztő 3D-előnézete (editorPreview.js)
+// false-szal hívja — nincs vezetett autó a szerkesztőben, felesleges lenne a
+// placeholder doboz-autót felépíteni és a jelenetben tartani.
+//
+// A méretezés a KONTÉNER (nem a window) méretéhez igazodik — main.js-ben a
+// `#game` konténer amúgy is teljes-viewport méretű, tehát ott nincs változás;
+// a szerkesztőben viszont a 3D-nézet egy oldalsáv MELLETTI, nem teljes
+// szélességű terület, ahol a window mérete félrevezető lenne.
+export function createScene3D(container, { includeCar = true } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -50,14 +58,19 @@ export function createScene3D(container) {
 
   const camera = new THREE.PerspectiveCamera(
     CAMERA.fov,
-    window.innerWidth / window.innerHeight,
+    container.clientWidth / container.clientHeight,
     0.1,
     700
   );
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    // A szerkesztő 3D-konténere `display:none` alatt 0×0-t jelentene — ilyenkor
+    // kihagyjuk a frissítést (a kamera/renderer a korábbi, érvényes méretén
+    // marad), a hívó pedig a konténer újra-megjelenítésekor egy explicit
+    // `resize` eseménnyel szinkronizál (lásd editor.js setView).
+    if (!container.clientWidth || !container.clientHeight) return;
+    camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(container.clientWidth, container.clientHeight);
   });
 
   addLights(scene);
@@ -67,8 +80,8 @@ export function createScene3D(container) {
   // main.js) — nincs procedurális/textúrázott sík.
 
   const carMesh = new THREE.Group();
-  carMesh.add(createCarMesh());
-  scene.add(carMesh);
+  if (includeCar) carMesh.add(createCarMesh());
+  if (includeCar) scene.add(carMesh);
 
   return { renderer, scene, camera, carMesh, asphaltMesh: null };
 }

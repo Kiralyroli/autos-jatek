@@ -11,8 +11,24 @@ import { TRACK, DECORATION_TYPES } from '../config.js';
 import { loadCustomDecorations } from '../trackStorage.js';
 import { loadModel } from './assets.js';
 
-export async function loadDecorations(scene) {
-  const decorations = loadCustomDecorations();
+// RÉGI mentések d.rot mezője negyedfordulat-INDEX volt (0–3, ×90°) — az
+// editor.js szabad (R lenyomva tartva + görgő) forgatása óta d.rot RADIÁN.
+// UGYANAZ a heurisztika, mint editor.js normalizeRotToRadians-e (lásd ott a
+// részletes indoklást) — itt KELL duplikálni, mert ez a függvény a JÁTÉK
+// tényleges renderelő útvonala (nem csak a szerkesztő-előnézet), tehát a
+// régi mentések helyes forgatásának ITT, futásidőben kell megtörténnie,
+// függetlenül attól, hogy a szerkesztőn át vagy közvetlenül (localStorage/
+// szerver) érkezett-e az adat.
+function normalizeRotToRadians(rot) {
+  const r = rot || 0;
+  return Number.isInteger(r) && r >= 0 && r <= 3 ? r * (Math.PI / 2) : r;
+}
+
+// `decorations` opcionális — alapból a mentett (localStorage) készletet tölti
+// be (a játékban ez fut). A pálya-szerkesztő 3D-előnézete (editorPreview.js)
+// egy ÉLŐ, még el nem mentett tömböt ad át ugyanebben az alakban, hogy a
+// képernyőn éppen lerakott elemek azonnal megjelenjenek.
+export async function loadDecorations(scene, decorations = loadCustomDecorations()) {
   if (!decorations.length) return;
 
   // Típusonként egyszer töltjük be a modellt, utána példányonként klónozzuk.
@@ -48,13 +64,18 @@ export async function loadDecorations(scene) {
     inner.position.z -= cz;
     inner.position.y -= box.min.y;
 
+    // `def.scale`: a TÍPUS alap-normalizálása (config.js). `d.scale`: az EGYES
+    // példány felhasználó által állított méret-szorzója (editor.js, egérgörgő
+    // egy meglévő elem fölött, alapból 1) — a kettő szorzata adja a végleges
+    // méretet, hogy egy adott fa/kerítés-példány a többitől függetlenül
+    // nagyítható/kicsinyíthető legyen.
     const scaler = new THREE.Group();
     scaler.add(inner);
-    scaler.scale.setScalar(TRACK.tile * (def.scale || 1));
+    scaler.scale.setScalar(TRACK.tile * (def.scale || 1) * (d.scale || 1));
 
     const holder = new THREE.Group();
     holder.add(scaler);
-    holder.rotation.y = (d.rot || 0) * (Math.PI / 2);
+    holder.rotation.y = normalizeRotToRadians(d.rot);
     // world = dgx/dgy * TRACK.tile (lásd trackStorage.js megjegyzése).
     holder.position.set(d.dgx * TRACK.tile, 0.05, d.dgy * TRACK.tile);
     scene.add(holder);
