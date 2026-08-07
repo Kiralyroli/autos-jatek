@@ -13,9 +13,17 @@ import { lerp, lerpAngle } from '../utils.js';
 const API_BASE = NET.serverUrl.replace(/^ws(s?):\/\//, 'http$1://');
 
 // Csatlakozás + szoba létrehozás/belépés. Visszatérés: a Colyseus room objektum.
-export async function createRoom({ name, layout, decorations, laps, carIdx, physics, trackName }) {
+//
+// FONTOS: ez a destrukturáló paraméterlista a TELJES adatátviteli felület a
+// szerver felé — élő hibajelentés szerint a `pitLane`/`pitStopRequired`
+// korábban hiányzott innen, ezért a hívó (main.js doCreate) hiába adta át
+// helyesen ezeket, csendben ELVESZTEK itt: egyetlen multiplayer szobának sem
+// volt SOHA működő boxutcája/kötelező kerékcseréje, függetlenül attól, mit
+// pipált be a host. Új mezőt a `doCreate()`-ből csak akkor ér el a szerver,
+// ha IDE is felvesszük.
+export async function createRoom({ name, layout, decorations, pitLane, laps, carIdx, physics, trackName, pitStopRequired }) {
   const client = new Client(NET.serverUrl);
-  return client.create('race', { name, layout, decorations, laps, carIdx, physics, trackName });
+  return client.create('race', { name, layout, decorations, pitLane, laps, carIdx, physics, trackName, pitStopRequired });
 }
 
 // A `code` a felhasználó által bemondott RÖVID, SZÁMOKBÓL álló csatlakozási

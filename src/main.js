@@ -963,9 +963,17 @@ async function playWithSelectedTrack(action) {
 
   const sig = JSON.stringify({ l: loadCustomLayout(), d: loadCustomDecorations() });
   if (sig !== initialTrackSig) {
+    // A "Kötelező kerékcsere" checkbox élő DOM-állapota a reload UTÁN elvész
+    // (a checkbox a következő betöltéskor localStorage-ból áll vissza, lásd
+    // lent) — élő hibajelentés: emiatt egy frissen bepipált checkbox
+    // NÉMÁN visszaesett a régi (mentett) értékre, ha a pálya-váltás miatt
+    // reload történt (ami gyakorlatilag MINDIG megtörténik, ha van
+    // boxutcás egyedi pálya kiválasztva — a funkciónak pont ott van
+    // értelme). A pending akció-payloadba mentve garantáltan túléli a
+    // reload-ot, FÜGGETLENÜL a localStorage-restore időzítésétől.
     sessionStorage.setItem(
       'autos-jatek:pending',
-      JSON.stringify({ action, name: playerName() })
+      JSON.stringify({ action, name: playerName(), pitStopRequired: chosenPitStopRequired() })
     );
     window.location.reload();
     return;
@@ -2658,8 +2666,13 @@ if (rejoinRaw) {
   // A menüben választott pálya alkalmazása utáni reload — a config.js már az új
   // pályával épült, most lefuttatjuk a halasztott akciót.
   sessionStorage.removeItem('autos-jatek:pending');
-  const { action, name } = JSON.parse(pendingRaw);
+  const { action, name, pitStopRequired } = JSON.parse(pendingRaw);
   nameInput.value = name;
+  // A checkbox reload UTÁNI (localStorage-ból visszaállított) állapotát a
+  // FELHASZNÁLÓ ÁLTAL VALÓBAN bepipált értékre írjuk felül, mielőtt az akció
+  // (ami a checkbox élő DOM-állapotát olvassa, lásd chosenPitStopRequired)
+  // lefut — lásd a fenti playWithSelectedTrack megjegyzését.
+  if (pitStopInput) pitStopInput.checked = !!pitStopRequired;
   if (action === 'single') startSingleplayer();
   else if (action === 'hotlap') startSingleplayer(true);
   else doCreate();
