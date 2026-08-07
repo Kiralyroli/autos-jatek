@@ -184,6 +184,26 @@ const audio = createAudio();
 const speedNumEl = document.getElementById('speedNum');
 const spectateBadgeEl = document.getElementById('spectateBadge');
 
+// FPS-számláló — a #ping mellett, minden módban (SP/Hot Lap/MP) egyaránt
+// hívjuk a saját frame() ciklusukból (lásd updateFpsCounter hívásait lejjebb).
+// Fél másodperces ablakon átlagolva (nem minden egyes képkockánál újraszámolva),
+// hogy a szám ne "remegjen" túl gyorsan, de gyorsan reagáljon egy valódi FPS-esésre.
+const fpsEl = document.getElementById('fps');
+let fpsFrameCount = 0;
+let fpsWindowStart = 0;
+function updateFpsCounter(now) {
+  if (!fpsEl) return;
+  fpsFrameCount++;
+  if (fpsWindowStart === 0) fpsWindowStart = now;
+  const elapsed = now - fpsWindowStart;
+  if (elapsed >= 500) {
+    const fps = Math.round((fpsFrameCount * 1000) / elapsed);
+    fpsEl.textContent = `${fps} FPS`;
+    fpsFrameCount = 0;
+    fpsWindowStart = now;
+  }
+}
+
 // Szöveg biztonságos beszúrása HTML-sablonba (XSS-védelem).
 //
 // MINDEN olyan szöveget át kell rajta engedni, ami NEM tőlünk származik: a
@@ -1031,6 +1051,7 @@ function startSingleplayer(hotLap = false) {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  if (fpsEl) fpsEl.style.display = 'block';
   cameraSettings.show();
   infoBtnEl.style.display = 'flex';
   if (touch) touch.show();
@@ -1339,6 +1360,7 @@ function startSingleplayer(hotLap = false) {
   lastTime = performance.now();
 
   function frame(now) {
+    updateFpsCounter(now);
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
 
@@ -1492,6 +1514,7 @@ async function startMultiplayer(room) {
   menuEl.style.display = 'none';
   document.getElementById('btnQuitRace').style.display = 'block';
   minimapEl.style.display = 'block';
+  if (fpsEl) fpsEl.style.display = 'block';
   cameraSettings.show();
   infoBtnEl.style.display = 'flex';
   if (touch) touch.show();
@@ -1993,6 +2016,7 @@ async function startMultiplayer(room) {
   lastTime = performance.now();
 
   function frame(now) {
+    updateFpsCounter(now);
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
 

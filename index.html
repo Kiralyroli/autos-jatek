@@ -797,6 +797,33 @@
         user-select: none;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
       }
+      /* Képkocka/mp (FPS) számláló — a #ping FÖLÖTT, ugyanabban a jobb alsó
+         oszlopban, ugyanazzal a stílussal. Egyjátékos/Hot Lap/multiplayer
+         módban EGYARÁNT látszik (nem csak multiplayerben, mint a ping),
+         mert a képfrissítési ráta ettől függetlenül is hasznos diagnosztika. */
+      #fps {
+        position: fixed;
+        right: 14px;
+        /* A #ping FÖLÖTT — de a #hotlapReset (Hot Lap módban UGYANAZT a
+           206px-es helyet foglalja, mint a #ping, csak nagyobb gombként)
+           magasabb, mint a #ping; élő hibajelentés szerint 242px ráült a
+           #hotlapReset tetejére. 250px már tiszta rést hagy mindkét
+           (kölcsönösen kizáró) alatta lévő elemhez. */
+        bottom: 250px;
+        display: none;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-dim);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--panel-border);
+        padding: 6px 11px;
+        border-radius: 9px;
+        pointer-events: none;
+        user-select: none;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+      }
 
       /* --- Érintős vezérlés (touchControls.js) — csak touch-eszközön jön
          létre, alapból rejtett (a JS mutatja versenyközben, lásd main.js
@@ -935,6 +962,12 @@
       body.has-touch-controls #ping {
         left: 130px;
         top: 56px;
+        right: auto;
+        bottom: auto;
+      }
+      body.has-touch-controls #fps {
+        left: 130px;
+        top: 92px;
         right: auto;
         bottom: auto;
       }
@@ -1976,6 +2009,7 @@
     <button id="hotlapReset">↺ Reset</button>
     <button id="btnQuitRace">← Főmenü</button>
     <div id="ping"></div>
+    <div id="fps"></div>
     <canvas id="minimap" width="150" height="150"></canvas>
 
     <!-- Álló-tájolás figyelmeztetés (touch-eszközön, álló nézetben MINDENÜTT:
