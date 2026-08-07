@@ -65,7 +65,8 @@
         box-shadow: none;
         cursor: crosshair;
       }
-      #editor3dHint {
+      #editor3dHint,
+      #editor2dHint {
         position: absolute;
         left: 14px;
         bottom: 14px;
@@ -294,6 +295,7 @@
     <div id="layout">
       <div id="canvasWrap">
         <canvas id="editorCanvas"></canvas>
+        <div id="editor2dHint">Ctrl + görgő: zoom · középső gomb vagy Szóköz+húzás: pásztázás</div>
         <div id="editor3d" style="display:none">
           <div id="editor3dHint">
             Húzd az egeret a körülnézéshez · WASD mozgás · Shift/Ctrl fel/le · R forgat · görgő méretez

@@ -57,7 +57,22 @@ if (!isDevMode()) {
 
 const CANVAS_W = 800;
 const CANVAS_H = 560;
-const PX_PER_METER = 2; // a látható vászon kb. ±200m × ±140m világot fed le
+// Alapból a látható vászon kb. ±400m × ±280m világot fed le — Ctrl+görgővel
+// (lásd a wheel-kezelőt) a kurzor alatti pont körül be-/kizoomolható,
+// [MIN_ZOOM, MAX_ZOOM] közé szorítva.
+let pxPerMeter = 1;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+// A vászon-KÖZÉP világ-koordinátája — zoomnál ez tolódik el (kurzor alatti
+// pont fixen marad), PÁSZTÁZÁSNÁL (lásd panning-állapot lent) pedig a
+// felhasználó közvetlenül mozgatja: középső egérgombbal húzva, VAGY a
+// Szóköz lenyomva tartása közben a BAL gombbal húzva (mint Figma/Photoshop —
+// trackpaden nincs mindig kényelmes középső gomb).
+const viewCenter = { x: 0, z: 0 };
+let spaceHeld = false;
+let panning = false;
+let panStartScreen = null; // {x,y} vászon-koordinátában, a húzás KEZDETÉN
+let panStartCenter = null; // viewCenter a húzás KEZDETÉN — a delta ehhez képest számol, driftmentesen
 const HIT_RADIUS_PX = 14; // egy kontrollpont "eltalálásának" képernyő-sugara
 const CLOSE_RADIUS_PX = 16; // az első pont közelébe kattintva zár a hurok
 const CURVE_HIT_RADIUS_PX = 10; // a görbe/akkord közelébe kattintva szúr be pontot
@@ -463,10 +478,25 @@ view3dBtn.addEventListener('click', () => setView('3d'));
 // --- Koordináta-átváltás (világ-méter ⇄ vászon-pixel) ---
 
 function worldToScreen(p) {
-  return { x: CANVAS_W / 2 + p.x * PX_PER_METER, y: CANVAS_H / 2 + p.z * PX_PER_METER };
+  return {
+    x: CANVAS_W / 2 + (p.x - viewCenter.x) * pxPerMeter,
+    y: CANVAS_H / 2 + (p.z - viewCenter.z) * pxPerMeter,
+  };
 }
 function screenToWorld(sx, sy) {
-  return { x: (sx - CANVAS_W / 2) / PX_PER_METER, z: (sy - CANVAS_H / 2) / PX_PER_METER };
+  return {
+    x: viewCenter.x + (sx - CANVAS_W / 2) / pxPerMeter,
+    z: viewCenter.z + (sy - CANVAS_H / 2) / pxPerMeter,
+  };
+}
+
+// Be-/kizoomol a MEGADOTT képernyő-pont köré: a pont alatti világ-koordináta
+// a zoom UTÁN is ugyanott marad a képernyőn (nem "ugrik el" a nézet zoomoláskor).
+function zoomAt(screenPt, factor) {
+  const worldPtBefore = screenToWorld(screenPt.x, screenPt.y);
+  pxPerMeter = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pxPerMeter * factor));
+  viewCenter.x = worldPtBefore.x - (screenPt.x - CANVAS_W / 2) / pxPerMeter;
+  viewCenter.z = worldPtBefore.z - (screenPt.y - CANVAS_H / 2) / pxPerMeter;
 }
 function pixelToScreen(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -922,6 +952,17 @@ rotateBtn.addEventListener('click', () => {
 // --- Interakció ---
 
 canvas.addEventListener('mousedown', (e) => {
+  // Pásztázás indítása — középső gomb VAGY Szóköz+bal gomb — módtól
+  // FÜGGETLENÜL az első, hogy a lenti mód-specifikus logika (pont-húzás,
+  // dekoráció-lerakás stb.) sose fusson le ugyanarra a kattintásra.
+  if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+    e.preventDefault();
+    panning = true;
+    canvas.style.cursor = 'grabbing';
+    panStartScreen = pixelToScreen(e.clientX, e.clientY);
+    panStartCenter = { ...viewCenter };
+    return;
+  }
   if (mode === 'pitlane') {
     const screenPt = pixelToScreen(e.clientX, e.clientY);
     const worldPt = screenToWorld(screenPt.x, screenPt.y);
@@ -1010,7 +1051,7 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
   const { index, dist } = nearestChordSegment(worldPt);
-  if (dist * PX_PER_METER < CURVE_HIT_RADIUS_PX) {
+  if (dist * pxPerMeter < CURVE_HIT_RADIUS_PX) {
     // A beszúrt pont szélessége a két szomszédos kontrollpont átlaga — simán
     // illeszkedik a már beállított szélesség-átmenetbe.
     const a = points[index];
@@ -1023,7 +1064,19 @@ canvas.addEventListener('mousedown', (e) => {
   }
 });
 
+// Pásztázás mozgatása — a vászonon KÍVÜLRE is folytatódhat (window-szintű,
+// mint a pont-húzás mouseup-ja lent), a canvas saját mousemove-ja ilyenkor
+// korán visszatér (lásd alább), hogy ne fusson le kétszer/ütközzön.
+window.addEventListener('mousemove', (e) => {
+  if (!panning) return;
+  const screenPt = pixelToScreen(e.clientX, e.clientY);
+  viewCenter.x = panStartCenter.x - (screenPt.x - panStartScreen.x) / pxPerMeter;
+  viewCenter.z = panStartCenter.z - (screenPt.y - panStartScreen.y) / pxPerMeter;
+  render();
+});
+
 canvas.addEventListener('mousemove', (e) => {
+  if (panning) return;
   const screenPt = pixelToScreen(e.clientX, e.clientY);
   const worldPt = screenToWorld(screenPt.x, screenPt.y);
   if (mode === 'track' && dragIndex !== null) {
@@ -1054,6 +1107,10 @@ canvas.addEventListener('mouseleave', () => {
 // A mouseup-ot az EGÉSZ ablakon figyeljük (nem csak a vásznon), hogy a húzás
 // akkor is helyesen véget érjen, ha a felhasználó közben kicsúszik a vászonból.
 window.addEventListener('mouseup', () => {
+  if (panning) {
+    panning = false;
+    canvas.style.cursor = spaceHeld ? 'grab' : '';
+  }
   if (dragIndex !== null) {
     dragIndex = null;
     updateStatus();
@@ -1105,9 +1162,21 @@ canvas.addEventListener('contextmenu', (e) => {
 // szomszédos pontok felé simán, Catmull-Rom-interpolációval vezet át, lásd
 // sim/trackSpline.js). Csak akkor preventDefault-olunk, ha TALÁLTUNK pontot —
 // egyébként a lap normál görgetése marad érintetlen.
+const ZOOM_STEP_FACTOR = 1.15; // egy görgő-kattanás ennyiszeresére nagyítja/kicsinyíti a nézetet
+
 canvas.addEventListener(
   'wheel',
   (e) => {
+    // Ctrl+görgő = zoom a kurzor alá — MÓDTÓL FÜGGETLENÜL az első, hogy ne
+    // ütközzön a lenti mód-specifikus finomhangolásokkal (pálya-szélesség,
+    // dekoráció méret/forgatás), amik simán görgőt használnak modifier nélkül.
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const screenPt = pixelToScreen(e.clientX, e.clientY);
+      zoomAt(screenPt, e.deltaY < 0 ? ZOOM_STEP_FACTOR : 1 / ZOOM_STEP_FACTOR);
+      render();
+      return;
+    }
     if (mode === 'track') {
       const screenPt = pixelToScreen(e.clientX, e.clientY);
       const hitIdx = findPointNear(screenPt);
@@ -1162,10 +1231,24 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (e.key.toLowerCase() === 'r') rotateKeyHeld = true;
+
+  // Szóköz lenyomva tartva: a bal gombos húzás pásztázássá válik (lásd a
+  // canvas mousedown-ját) — az oldal ne görgessen emiatt.
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!spaceHeld) {
+      spaceHeld = true;
+      canvas.style.cursor = 'grab';
+    }
+  }
 });
 
 window.addEventListener('keyup', (e) => {
   if (e.key.toLowerCase() === 'r') rotateKeyHeld = false;
+  if (e.code === 'Space') {
+    spaceHeld = false;
+    if (!panning) canvas.style.cursor = '';
+  }
 });
 
 // Dupla kattintás egy kontrollponton (track módban): ki/be kapcsolja, hogy a
@@ -1343,7 +1426,7 @@ function render() {
   // Halvány referencia-rács — CSAK vizuális tájékozódás, nincs hozzá igazítás.
   ctx.strokeStyle = '#22252e';
   ctx.lineWidth = 1;
-  const stepPx = 20 * PX_PER_METER; // 20 méterenként
+  const stepPx = 20 * pxPerMeter; // 20 méterenként
   for (let x = CANVAS_W / 2; x <= CANVAS_W; x += stepPx) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
   }
@@ -1374,7 +1457,7 @@ function render() {
     // állított szélesség élőben látszódjon.
     ctx.beginPath();
     sampled.forEach((p, i) => {
-      const halfPx = (p.width / 2) * PX_PER_METER;
+      const halfPx = (p.width / 2) * pxPerMeter;
       const s = worldToScreen(p);
       const lx = s.x - Math.sin(p.dir) * halfPx;
       const ly = s.y + Math.cos(p.dir) * halfPx;
@@ -1382,7 +1465,7 @@ function render() {
     });
     for (let i = sampled.length - 1; i >= 0; i--) {
       const p = sampled[i];
-      const halfPx = (p.width / 2) * PX_PER_METER;
+      const halfPx = (p.width / 2) * pxPerMeter;
       const s = worldToScreen(p);
       const rx = s.x + Math.sin(p.dir) * halfPx;
       const ry = s.y - Math.cos(p.dir) * halfPx;
@@ -1486,7 +1569,7 @@ function render() {
       ctx.stroke();
     } else if (closed && points.length >= MIN_CONTROL_POINTS) {
       const { dist } = nearestChordSegment(hover.worldPt);
-      if (dist * PX_PER_METER < CURVE_HIT_RADIUS_PX) {
+      if (dist * pxPerMeter < CURVE_HIT_RADIUS_PX) {
         const s = worldToScreen(hover.worldPt);
         ctx.font = 'bold 18px sans-serif';
         ctx.textAlign = 'center';
@@ -1524,7 +1607,7 @@ function render() {
   // jelezve, hogy a szerkesztőben is lásd, mekkora terület lesz burkolat.
   if (pitLanePoints.length >= 1) {
     if (pitLanePoints.length >= 2) {
-      const halfPx = (RACE.pitStop.laneWidth / 2) * PX_PER_METER;
+      const halfPx = (RACE.pitStop.laneWidth / 2) * pxPerMeter;
       ctx.beginPath();
       for (let i = 0; i < pitLanePoints.length - 1; i++) {
         const a = pitLanePoints[i];
@@ -1592,7 +1675,7 @@ function render() {
     // nélkül vetül a vászonra.
     const cos = Math.cos(dir);
     const sin = Math.sin(dir);
-    const toScreen = (lx, lz) => ({ x: s.x + (lx * cos - lz * sin) * PX_PER_METER, y: s.y + (lx * sin + lz * cos) * PX_PER_METER });
+    const toScreen = (lx, lz) => ({ x: s.x + (lx * cos - lz * sin) * pxPerMeter, y: s.y + (lx * sin + lz * cos) * pxPerMeter });
     // Egyszerű téglalap — csak a külső keret (nincs belső osztóvonal).
     const local = [
       [[-hw, -hd], [hw, -hd]], [[hw, -hd], [hw, hd]], [[hw, hd], [-hw, hd]], [[-hw, hd], [-hw, -hd]],
