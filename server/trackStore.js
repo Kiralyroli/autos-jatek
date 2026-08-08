@@ -9,7 +9,7 @@
 //  Formátum: { tracks: [ { id, name, layout, decorations, createdAt, updatedAt } ] }
 //  A pálya-adat ugyanaz, mint a kliens localStorage-formátuma:
 //    layout: [{ type, turn?, n? }, ...]
-//    decorations: [{ type, dgx, dgy, rot }, ...]
+//    decorations: [{ type, dgx, dgy, rot, scale }, ...]
 // =============================================================================
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -194,6 +194,7 @@ function sanitize({ name, layout, decorations, pitLane, editorPath, editorDecora
       dgx: clampCoord(Number(d.dgx) || 0),
       dgy: clampCoord(Number(d.dgy) || 0),
       rot: Number(d.rot) || 0,
+      scale: Math.max(0.3, Math.min(3, Number(d.scale) || 1)),
     }));
 
   const clean = { name: cleanName, layout: cleanLayout, decorations: cleanDecor, pitLane: sanitizePitLane(pitLane) };
