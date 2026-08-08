@@ -12,7 +12,8 @@ public/assets/
 │   └── grass.jpg           # fű (a talaj)
 └── sounds/
     ├── engine.mp3          # loopolható motorhang
-    └── skid.mp3            # loopolható gumicsikorgás
+    ├── skid.mp3            # loopolható gumicsikorgás
+    └── pitStop.wav         # egyszeri kerékcsere-hang (amikor a boxban állva a mérés elindul)
 ```
 
 ## Ajánlott jogtiszta (CC0) források
@@ -29,10 +30,15 @@ public/assets/
   - Elég a szín- (albedo/diffuse) térkép; nevezd `asphalt.jpg` / `grass.jpg`-re.
   - A tileable (ismétlődő) változat a jó.
 
-### Hangok → `sounds/engine.mp3`, `sounds/skid.mp3`
+### Hangok → `sounds/engine.mp3`, `sounds/skid.mp3`, `sounds/pitStop.wav`
 - **Freesound**: https://freesound.org (szűrő: License = „Creative Commons 0").
   - `engine.mp3`: egyenletes, loopolható motor-alapjárat/zúgás.
   - `skid.mp3`: gumicsikorgás / kerékcsúszás loop.
+  - `pitStop.wav`: RÖVID, NEM loopolható "kattanás" — légkulcs/pneumatikus
+    csavarbehajtó hangja. MÁR BEKERÜLT (lásd CREDITS.md): **"Air Impact Wrench"**
+    by sevenbsb (https://freesound.org/people/sevenbsb/sounds/349398/, CC0),
+    a 4,5 mp utáni résre vágva (a szerelő tényleges "kattogása", az elejei
+    felpörgés nélkül).
 - **Kenney – audio**: https://kenney.nl/assets?q=audio (CC0).
 
 ## Miután beraktad

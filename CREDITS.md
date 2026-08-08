@@ -30,3 +30,7 @@ A játékban használt külső assetek és licenceik.
 - **Boost kimerülve** (`public/assets/sounds/boostEmpty.flac`) — *"CD Glitch 4"*
   by **day-garwood** (https://freesound.org/s/612753/) —
   licenc: **CC-BY 3.0** (feltüntetés kötelező — ez a bejegyzés teljesíti).
+- **Kerékcsere** (`public/assets/sounds/pitStop.wav`) — *"Air Impact Wrench"* by
+  **sevenbsb** (https://freesound.org/people/sevenbsb/sounds/349398/) —
+  licenc: **CC0**. A projektbeli fájl az eredeti felvétel 4,5 mp UTÁNI részére
+  van vágva (a szerelő tényleges "kattogása", az elejei felpörgés nélkül).

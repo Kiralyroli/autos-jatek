@@ -73,6 +73,7 @@ export const ASSETS = {
     // az EGYETLEN nem-CC0/sima-CC-BY asset a projektben).
     boost: '/assets/sounds/boost.mp3',
     boostEmpty: '/assets/sounds/boostEmpty.flac', // "nincs üzemanyag" hiba-hang
+    pitStop: '/assets/sounds/pitStop.wav', // kerékcsere-hang — a boxban ÁLLVA a mérés KEZDETÉN szól egyszer (lásd main.js)
   },
 };
 
@@ -152,6 +153,12 @@ export const AUDIO = {
   // ismétlődik folyamatosan, amíg a gombot nyomva tartja.
   boostEmpty: {
     gain: 0.5,
+  },
+  // Kerékcsere-hang — egyszeri, amikor a boxban ÁLLVA a mérés ELINDUL
+  // (pitStopTimer 0-ból pozitívba vált — lásd main.js edge-detektálás, ua.
+  // minta, mint boostEmpty).
+  pitStop: {
+    gain: 0.6,
   },
   beepGain: 0.35, // visszaszámláló/GO bip hangereje
 };

@@ -229,15 +229,18 @@ export function createAudio() {
   let boost = createSynthBoost(ctx, master);
   // "Nincs üzemanyag" hiba-hang — NINCS szintetizált tartalék (apró, nem
   // kritikus UX-elem): amíg nem töltődött be, playBoostEmpty() csendben
-  // kihagyja (lásd lent).
+  // kihagyja (lásd lent). Ugyanez a kerékcsere-hangnál (playPitStop) —
+  // amíg nincs betöltve `pitStop.mp3`, egyszerűen néma marad.
   let boostEmptyBuffer = null;
+  let pitStopBuffer = null;
 
   (async () => {
-    const [engBuf, skidBuf, boostBuf, boostEmptyBuf] = await Promise.all([
+    const [engBuf, skidBuf, boostBuf, boostEmptyBuf, pitStopBuf] = await Promise.all([
       loadSound(ctx, ASSETS.sounds.engine),
       loadSound(ctx, ASSETS.sounds.skid),
       loadSound(ctx, ASSETS.sounds.boost),
       loadSound(ctx, ASSETS.sounds.boostEmpty),
+      loadSound(ctx, ASSETS.sounds.pitStop),
     ]);
     if (engBuf) {
       engine.dispose();
@@ -252,6 +255,7 @@ export function createAudio() {
       boost = createSampleBoost(ctx, master, boostBuf);
     }
     boostEmptyBuffer = boostEmptyBuf;
+    pitStopBuffer = pitStopBuf;
   })();
 
   // Egyszeri lejátszás — a boost() (createSampleBoost) NEM erre épül, mert az
@@ -262,6 +266,18 @@ export function createAudio() {
     src.buffer = boostEmptyBuffer;
     const g = ctx.createGain();
     g.gain.value = AUDIO.boostEmpty.gain;
+    src.connect(g).connect(master);
+    src.start();
+  }
+
+  // Egyszeri lejátszás, amikor a boxban ÁLLVA a mérés ELINDUL (main.js hívja,
+  // amikor a pitStopTimer 0-ból pozitívba vált) — UGYANAZ a minta, mint playBoostEmpty.
+  function playPitStop() {
+    if (!pitStopBuffer) return;
+    const src = ctx.createBufferSource();
+    src.buffer = pitStopBuffer;
+    const g = ctx.createGain();
+    g.gain.value = AUDIO.pitStop.gain;
     src.connect(g).connect(master);
     src.start();
   }
@@ -300,5 +316,5 @@ export function createAudio() {
     boost.setActive(!!boosting);
   }
 
-  return { beep, update, playBoostEmpty, ctx, master };
+  return { beep, update, playBoostEmpty, playPitStop, ctx, master };
 }

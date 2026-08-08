@@ -1377,6 +1377,10 @@ function startSingleplayer(hotLap = false) {
   // "Nincs üzemanyag" hiba-hang csak ÚJ próbálkozásonként szóljon (élfigyelés),
   // ne minden képkockában, amíg a gombot üres tartállyal nyomva tartja.
   let wasBoostDenied = false;
+  // Kerékcsere-hang: amikor a boxhelyen ÁLLVA a mérés ELINDUL (pitStopTimer
+  // 0-ból pozitívba vált), nem a teljesüléskor — a hang a "most szerelik"
+  // pillanatot jelzi, nem a "kész" pillanatot.
+  let wasPitStopCounting = race.pitStopTimer > 0;
   lastTime = performance.now();
 
   function frame(now) {
@@ -1483,6 +1487,10 @@ function startSingleplayer(hotLap = false) {
       race.phase === 'racing' && input.boost && input.up && drive.boostRemaining <= 0;
     if (boostDenied && !wasBoostDenied) audio.playBoostEmpty();
     wasBoostDenied = boostDenied;
+
+    const pitStopCounting = race.pitStopTimer > 0;
+    if (pitStopCounting && !wasPitStopCounting) audio.playPitStop();
+    wasPitStopCounting = pitStopCounting;
 
     if (speedNumEl) speedNumEl.textContent = String(Math.round(speedKmh(carBody)));
     race.boostRemaining = drive.boostRemaining; // csak megjelenítéshez (hud.js)
@@ -2046,6 +2054,7 @@ async function startMultiplayer(room) {
   let lastPhase = 'lobby';
   let lastStandingsAt = 0;
   let wasBoostDenied = false; // lásd SP — csak új próbálkozásonként szóljon a hiba-hang
+  let wasPitStopCounting = false; // lásd SP — a méres KEZDETÉN szóljon a kerékcsere-hang, ne a végén
   lastTime = performance.now();
 
   function frame(now) {
@@ -2397,6 +2406,10 @@ async function startMultiplayer(room) {
       const boostDenied = racing && input.boost && input.up && mpDrive.boostRemaining <= 0;
       if (boostDenied && !wasBoostDenied) audio.playBoostEmpty();
       wasBoostDenied = boostDenied;
+
+      const pitStopCounting = mpRace.pitStopTimer > 0;
+      if (pitStopCounting && !wasPitStopCounting) audio.playPitStop();
+      wasPitStopCounting = pitStopCounting;
 
       // Az állás-lista DOM-ját elég 4x/mp újraépíteni (60x/mp felesleges terhelés).
       if (now - lastStandingsAt > 250) {
