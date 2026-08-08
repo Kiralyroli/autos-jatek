@@ -19,7 +19,7 @@ import { CAR, OFFROAD, BOOST } from '../config.js';
 // szimuláljuk ezzel a küszöbbel, ahelyett hogy a dragot minden sebességnél
 // tovább erősítenénk (az a magas sebességű lassulást is érezhetően
 // megváltoztatná).
-const STOP_SPEED = 0.3; // m/s ≈ 1.08 km/h
+const STOP_SPEED = 0.56; // m/s ≈ 2 km/h — élő felhasználói visszajelzés alapján emelve (korábban 0.3 ≈ 1.08 km/h)
 
 // Lokális tengelyek világkoordinátában:
 //   előre = +x, jobbra (oldalra) = +y
