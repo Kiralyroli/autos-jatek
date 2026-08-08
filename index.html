@@ -462,25 +462,120 @@
       }
       /* Kötelező kerékcsere jelzés — amíg a versenyző nem állt meg a boxutca-
          zónában, ez emlékezteti (lásd sim/race.js pitStopRequired/pitStopDone).
-         Szándékosan ARANY, nem piros (var(--danger)): ez nem hiba, csak teendő. */
+         Szándékosan ARANY, nem piros (var(--danger)): ez nem hiba, csak teendő.
+         Két állapota (hud.js kapcsolja a `counting`/`almostDone`/`done`
+         osztályokkal): "menj be" (pulzáló ikon, sáv nélkül) és "állva
+         számol" (kitöltődő sáv + nagy visszaszámláló szám) — UGYANAZ a
+         panel-stílus, mint #boostMeter-é, hogy egy vizuális nyelvet
+         beszéljenek. JOBB OLDALT, a kamera-/infó-gombok (top:18px) ALATT,
+         a sebességmérő-gyűrű (bottom:24px) FÖLÖTT ül — élő felhasználói
+         visszajelzés alapján a képernyő KÖZEPÉN túl zavaró volt a pálya
+         látványának (a vezetéshez fontos középső sávnak). KIVÉTEL: amint a
+         játékos ténylegesen a zónában ÁLL (`.counting`) vagy épp most
+         teljesítette (`.done` — a rövid zöld felvillanás), a `.center`
+         módosító visszaviszi a panelt a képernyő KÖZEPÉRE (lásd lent) — ez a
+         két pillanat egyértelmű visszajelzést igényel, a sarki hely itt már
+         nem elég szembetűnő.
+      */
       #pitStopHud {
         position: fixed;
-        top: 220px;
-        left: 50%;
-        transform: translateX(-50%);
+        top: 84px;
+        right: 14px;
         display: none;
         align-items: center;
-        gap: 8px;
-        font-size: 14px;
-        font-weight: 700;
-        color: #241a05;
-        background: var(--gold, #d4a94e);
-        padding: 8px 16px;
-        border-radius: 10px;
+        gap: 12px;
+        padding: 10px 18px;
+        color: var(--text);
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(212, 169, 78, 0.4);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         pointer-events: none;
         user-select: none;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        font-variant-numeric: tabular-nums;
+        transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+      }
+      #pitStopHud .pitIcon {
+        font-size: 22px;
+        line-height: 1;
+        animation: pitIconPulse 1.1s ease-in-out infinite;
+      }
+      #pitStopHud.counting .pitIcon,
+      #pitStopHud.done .pitIcon { animation: none; }
+      #pitStopHud .pitBody {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      #pitStopHud .pitLabel {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--gold);
         white-space: nowrap;
+      }
+      #pitStopHud .pitBarTrack {
+        width: 0;
+        height: 10px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid var(--panel-border);
+        overflow: hidden;
+        opacity: 0;
+        transition: width 0.2s ease, opacity 0.2s ease;
+      }
+      #pitStopHud.counting .pitBarTrack {
+        width: 190px;
+        opacity: 1;
+      }
+      #pitStopHud .pitBarFill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--gold), var(--gold2));
+        transition: width 0.15s linear, background 0.3s ease;
+      }
+      #pitStopHud.almostDone .pitBarFill {
+        background: linear-gradient(90deg, #6fb37a, #9ce0a4);
+      }
+      #pitStopHud .pitValue {
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--gold2);
+        min-width: 30px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      /* A .center módosító a sarki alapállásból a képernyő közepére viszi a
+         panelt (lásd fenti komment) — a .counting/.done TARTALMI stílusától
+         (szín, ragyogás) FÜGGETLEN kapcsoló, hud.js mindkettőt egyszerre
+         adja hozzá, amíg a játékos ténylegesen a zónában áll/épp teljesítette. */
+      #pitStopHud.center {
+        top: 190px;
+        right: auto;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      #pitStopHud.counting {
+        border-color: rgba(212, 169, 78, 0.65);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 18px rgba(212, 169, 78, 0.3);
+      }
+      #pitStopHud.almostDone {
+        border-color: rgba(156, 224, 164, 0.75);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 22px rgba(156, 224, 164, 0.45);
+      }
+      #pitStopHud.almostDone .pitValue { color: #9ce0a4; }
+      #pitStopHud.done {
+        background: rgba(58, 132, 74, 0.88);
+        border-color: rgba(156, 224, 164, 0.9);
+      }
+      #pitStopHud.done .pitLabel,
+      #pitStopHud.done .pitValue { color: #eafff0; }
+      @keyframes pitIconPulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.2); opacity: 0.7; }
       }
       /* Spectate-jelzés: célba érés UTÁN, amíg a verseny (a többiek) még
          tart, a kamera egy még versenyző társra vált (lásd main.js
@@ -2002,7 +2097,14 @@
       <span>ROSSZ IRÁNY!</span>
     </div>
     <div id="invalidlap">⚠️ Érvénytelen kör!</div>
-    <div id="pitStopHud">🔧 Kötelező kiállás a boxutcában!</div>
+    <div id="pitStopHud">
+      <span class="pitIcon">🔧</span>
+      <div class="pitBody">
+        <span class="pitLabel" id="pitLabel">1 kötelező boxkiállás a versenyen</span>
+        <div class="pitBarTrack"><div id="pitBarFill" class="pitBarFill"></div></div>
+      </div>
+      <span class="pitValue" id="pitValue"></span>
+    </div>
     <div id="spectateBadge"></div>
     <div id="sectordelta"></div>
     <button id="restart">🔄 Új verseny</button>

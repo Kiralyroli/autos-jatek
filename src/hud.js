@@ -61,6 +61,9 @@ export function createHud(onRestart, onHotlapReset) {
   const boostFillEl = document.getElementById('boostBarFill');
   const boostValueEl = document.getElementById('boostValue');
   const pitStopEl = document.getElementById('pitStopHud');
+  const pitLabelEl = document.getElementById('pitLabel');
+  const pitBarFillEl = document.getElementById('pitBarFill');
+  const pitValueEl = document.getElementById('pitValue');
 
   if (onRestart) restartEl.addEventListener('click', onRestart);
   if (onHotlapReset) hotlapResetEl.addEventListener('click', onHotlapReset);
@@ -70,6 +73,15 @@ export function createHud(onRestart, onHotlapReset) {
   // null = a jelenlegi kör érvényes, nincs mit mutatni.
   let invalidSince = null;
 
+  // Boxkiállás: mikorra (race.time) tart a rövid "✅ Kiállás megvolt!"
+  // zöld felvillanás — enélkül a jelzés a pitStopDone pillanatában AZONNAL
+  // eltűnne, a játékos alig venné észre, hogy sikerült. `pitWasDone` a
+  // pitStopDone ÉLÉT figyeli (csak az ÁTVÁLTÁS pillanatában indít flash-t),
+  // a 'countdown' fázis (minden új verseny áthalad rajta) nullázza mindkettőt.
+  const PIT_DONE_FLASH_SECONDS = 1.6;
+  let pitWasDone = false;
+  let pitDoneFlashUntil = -Infinity;
+
   return function updateHud(race) {
     raceInfoEl.style.display = 'flex'; // updateHud csak játék közben fut
     if (speedoRingEl) speedoRingEl.style.display = 'flex';
@@ -78,18 +90,51 @@ export function createHud(onRestart, onHotlapReset) {
       race.phase === 'racing' && race.wrongWay ? 'flex' : 'none';
     // Kötelező kerékcsere: amíg nincs meg, végig látszik a versenyen (lásd
     // sim/race.js pitStopRequired/pitStopDone) — nem villanás, mert a
-    // versenyzőnek EGÉSZ végig kell tudnia, hogy még be kell hajtania.
+    // versenyzőnek EGÉSZ végig kell tudnia, hogy még be kell hajtania. Három
+    // vizuális állapot (index.html #pitStopHud .counting/.almostDone/.done):
+    //   1) még nincs a zónában: pulzáló ikon, sáv nélkül ("menj be").
+    //   2) a zónában ÁLL, méri az idő: kitöltődő sáv + nagy visszaszámláló,
+    //      70% fölött zöldbe vált (almostDone) — közelít a végéhez.
+    //   3) épp most lett kész: rövid zöld "✅" felvillanás
+    //      (PIT_DONE_FLASH_SECONDS), utána a jelzés végleg eltűnik.
     if (pitStopEl) {
-      const showPitStop = race.phase === 'racing' && race.pitStopRequired && !race.pitStopDone;
+      if (race.phase === 'countdown') {
+        pitWasDone = false;
+        pitDoneFlashUntil = -Infinity;
+      }
+      const justDone = race.pitStopRequired && race.pitStopDone && !pitWasDone;
+      if (justDone) pitDoneFlashUntil = race.time + PIT_DONE_FLASH_SECONDS;
+      pitWasDone = race.pitStopRequired ? race.pitStopDone : false;
+
+      const flashing = race.pitStopRequired && race.time < pitDoneFlashUntil;
+      const showPitStop =
+        race.phase === 'racing' && race.pitStopRequired && (!race.pitStopDone || flashing);
       pitStopEl.style.display = showPitStop ? 'flex' : 'none';
       if (showPitStop) {
-        // Amíg a zónában, ~állva méri az idő (lásd sim/race.js updatePitStop —
-        // pitStopTimer > 0 csak akkor, ha ÉPP ott áll) — VISSZASZÁMLÁLÁST mutatunk,
-        // különben a statikus "menj be" emlékeztetőt.
-        pitStopEl.textContent =
-          race.pitStopTimer > 0
-            ? `🔧 Állj meg még ${Math.max(0, RACE.pitStop.requiredSeconds - race.pitStopTimer).toFixed(1)} mp-ig!`
-            : '🔧 Kötelező kiállás a boxutcában!';
+        const counting = race.pitStopTimer > 0 && !race.pitStopDone;
+        const frac = Math.max(0, Math.min(1, race.pitStopTimer / RACE.pitStop.requiredSeconds));
+        pitStopEl.classList.toggle('counting', counting);
+        pitStopEl.classList.toggle('almostDone', counting && frac >= 0.7);
+        pitStopEl.classList.toggle('done', flashing);
+        // Alapból a jelzés a sarokban ül (kevésbé zavaró) — de amíg a
+        // játékos ténylegesen a zónában áll, VAGY épp most teljesítette,
+        // a képernyő közepére ugrik (index.html .center), hogy a két
+        // legfontosabb pillanat egyértelműen látszódjon.
+        pitStopEl.classList.toggle('center', counting || flashing);
+        if (flashing) {
+          pitLabelEl.textContent = 'Kiállás megvolt!';
+          pitValueEl.textContent = '✅';
+          pitBarFillEl.style.width = '100%';
+        } else if (counting) {
+          const remaining = Math.max(0, RACE.pitStop.requiredSeconds - race.pitStopTimer);
+          pitLabelEl.textContent = 'Állva tartva…';
+          pitValueEl.textContent = `${remaining.toFixed(1)} mp`;
+          pitBarFillEl.style.width = `${(frac * 100).toFixed(0)}%`;
+        } else {
+          pitLabelEl.textContent = '1 kötelező boxkiállás a versenyen';
+          pitValueEl.textContent = '';
+          pitBarFillEl.style.width = '0%';
+        }
       }
     }
     // A cél utáni "Új verseny" gombot MP-ben a végeredmény-panel váltja ki (main.js).
