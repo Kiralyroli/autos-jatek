@@ -7,7 +7,7 @@
 //  impulzussal kioltjuk. Teljes kioltás → nem csúszik kanyarban; részleges → drift.
 // =============================================================================
 import { Vec2, Box } from 'planck';
-import { CAR, OFFROAD, BOOST } from '../config.js';
+import { CAR, OFFROAD, BOOST, RACE } from '../config.js';
 
 // Ez alatt a sebesség alatt (m/s), ha épp NINCS aktív gáz/fék/tolatás-erő
 // (force===0 az applyDrive-ban), a haladási irányú sebesség-komponenst
@@ -422,14 +422,6 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
 // dobozon belül van (nagy sebességnél egy lépés alatt "belealudt" — ritka
 // védőháló), a legkisebb behatolású tengely mentén tolunk ki.
 //
-// Ütközésnél KÉT korrekció: (1) POZÍCIÓ, hogy a kör pontosan a doboz szélén
-// üljön (nincs átfedés), (2) a doboz felé mutató SEBESSÉG-komponens
-// nullázása — ez adja a "nekiütközik és megáll" érzetet, tisztán pozíció/
-// sebesség-állítással, impulzus/erő nélkül. Több egyidejűleg átfedő
-// dekorációnál a korrekciók EGYMÁS UTÁN, halmozva alkalmazódnak (helyi
-// px,py,vx,vy-ban gyűjtve, egyetlen setPosition/setLinearVelocity hívással a
-// végén — mint separateBodyFromPoints).
-//
 // A world.step() UTÁN hívandó (nem az updateCar része, ami ELŐTTE fut) — így
 // a frissen integrált pozíciót azonnal korrigálja, nem egy lépés csúszással.
 // PONTOS elforgatott-téglalap vs. elforgatott-téglalap ütközés (SAT —
@@ -448,13 +440,34 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
 // adja a kitolás irányát/mértékét (Minimum Translation Vector) — ez PONTOSAN
 // annyival tolja ki az autót, hogy a két téglalap éppen csak érintse
 // egymást, nincs mesterséges "levegő".
-export function resolveDecorationCollisions(body, colliders, car = CAR) {
+//
+// Ütközésnél HÁROM korrekció:
+//   (1) POZÍCIÓ — a két téglalap éppen csak érintse egymást (érintkezésenként,
+//       halmozva, egyetlen setPosition-nel a végén, mint separateBodyFromPoints).
+//   (2) A falba MUTATÓ sebesség-komponens kioltása (érintkezésenként) — ez a
+//       tényleges "nekiütközik és megáll".
+//   (3) FAL-MENTI BESIMULÁS + csúszás-csillapítás (egyszer, a legmélyebb
+//       érintkezésre — lásd applyWallSlide). Enélkül a súroló ütközés
+//       vezethetetlen csúszkálást okozott, lásd RACE.decorationImpact.
+export function resolveDecorationCollisions(body, colliders, dt, car = CAR) {
   if (!colliders || colliders.length === 0) return;
   const pos = body.getPosition();
   let px = pos.x;
   let py = pos.y;
   const angle = body.getAngle();
   let moved = false;
+
+  // A LEGMÉLYEBB érintkezés normálisa. Az ütközés-VÁLASZT (besimulás,
+  // csúszás-/pörgés-csillapítás) csak erre az EGY, meghatározó falra
+  // alkalmazzuk — érintkezésenként ismételve két egyidejű dekorációnál a
+  // kétszeres elforgatás átbillentené az autót.
+  let deepestOverlap = 0;
+  let deepestNx = 0;
+  let deepestNy = 0;
+  // A becsapódás ERŐSSÉGE: a legnagyobb kioltott, falba mutató sebesség (m/s).
+  // Ebből skálázódik a besimulás/csúszás-csillapítás — egy súrolás alig terel,
+  // egy erős becsapódás viszont AZONNAL a fal irányába fordítja a kocsit.
+  let impactSpeed = 0;
 
   const carHalfL = car.length / 2;
   const carHalfW = car.width / 2;
@@ -480,7 +493,6 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
     let minOverlap = Infinity;
     let mtvX = 0;
     let mtvY = 0;
-    let carProjMTV = 0;
     let separated = false;
 
     for (const [ax, ay] of axes) {
@@ -500,7 +512,6 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
         const sign = distAlong >= 0 ? -1 : 1;
         mtvX = ax * sign;
         mtvY = ay * sign;
-        carProjMTV = carProj;
       }
     }
     if (separated) continue;
@@ -509,36 +520,103 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
     py += mtvY * minOverlap;
     moved = true;
 
-    // A sebesség-korrekciót NEM a tömegközépponton, hanem az ÜTKÖZÉSI PONTON
-    // (a kocsi dekoráció felőli szélén) végezzük, ugyanazzal az effektív-tömeg
-    // technikával, mint a kerék-tapadás (tireImpulse fent) — ez a forgást IS
-    // korrekt módon figyelembe veszi. Élő hibajelentés: a korábbi verzió a
-    // tömegközépponti sebességet nullázta, a szögsebességet érintetlenül
-    // hagyva — oldalról/ferdén becsapódva ez ellentmondást hagyott a haladási
-    // irány és a karosszéria-forgás közt, amit a KÖVETKEZŐ lépés
-    // kerék-tapadása (applyTireFriction) extrém, driftszerű pörgésként
-    // próbált "kikorrigálni". A ponton vett impulzus ehelyett rögtön
-    // konzisztens lendületet ad — nincs mit kikorrigálni.
-    const cpx = px - mtvX * carProjMTV;
-    const cpy = py - mtvY * carProjMTV;
-    const vp = body.getLinearVelocityFromWorldPoint(Vec2(cpx, cpy));
-    const vn = vp.x * mtvX + vp.y * mtvY; // az ütközési pont sebessége befelé (a dekorációba) mutató komponense
+    // A falba MUTATÓ sebesség-komponens kioltása, a tömegközépponton. Az
+    // érintkezési PONTON vett impulzus itt semmit nem adna hozzá: az
+    // érintkezési pont helyvektora egy egyenesbe esik a kitolás irányával
+    // (mtv), ezért a keresztszorzat — és így a forgatónyomaték — pontosan 0.
+    const v = body.getLinearVelocity();
+    const vn = v.x * mtvX + v.y * mtvY;
     if (vn < 0) {
-      const com = body.getWorldCenter();
-      const rx = cpx - com.x;
-      const ry = cpy - com.y;
-      const crossN = rx * mtvY - ry * mtvX;
-      const invMass = 1 / body.getMass();
-      const invI = 1 / body.getInertia();
-      const meff = 1 / (invMass + crossN * crossN * invI);
-      const j = -vn * meff;
-      body.applyLinearImpulse(Vec2(mtvX * j, mtvY * j), Vec2(cpx, cpy), true);
+      body.setLinearVelocity(Vec2(v.x - mtvX * vn, v.y - mtvY * vn));
+      if (-vn > impactSpeed) impactSpeed = -vn;
+    }
+
+    if (minOverlap > deepestOverlap) {
+      deepestOverlap = minOverlap;
+      deepestNx = mtvX;
+      deepestNy = mtvY;
     }
   }
 
-  if (moved) {
-    body.setPosition(Vec2(px, py));
+  if (!moved) return;
+  body.setPosition(Vec2(px, py));
+  applyWallSlide(body, deepestNx, deepestNy, impactSpeed, dt);
+}
+
+// FAL-MENTI BESIMULÁS — a súroló ütközés vezethetőségéért felelős rész.
+// `nx,ny`: a falból KIFELÉ (az autó felé) mutató normális.
+// `impactSpeed`: a kioltott, falba mutató sebesség (m/s) — a becsapódás ereje.
+//
+// MÉRT probléma (lásd RACE.decorationImpact): a falba mutató sebesség puszta
+// nullázása után az autó ORRA benne marad a falban, ezért a csúszásszög minden
+// képkockában újratermelődik — 30 m/s-ról, 20°-ban nekisúrolva TARTÓSAN 11-12
+// m/s oldalirányú sebesség maradt, amit a gumi-modell csak ~1,7 s alatt tudott
+// lekoptatni (közben a tapadás telítve → nincs mivel kormányozni).
+//
+// A megoldás a csúszásszöget a FORRÁSÁNÁL szünteti meg: az autó orrát a fal
+// érintője felé fordítjuk (ahogy az arcade versenyjátékok is), majd a maradék
+// oldalirányú sebességet és a pörgést csillapítjuk. Minden csillapítás
+// exponenciális és dt-alapú → képkockasebesség-független.
+//
+// A csillapítás/terelés ÜTEME a becsapódás erejével nő (impactAlignGain,
+// impactSlideGain). Enélkül a CSÚCS-csúszás maradt nagy: a normális kioltása
+// után a sebesség a fal mentén áll be, de az orr még ferdén áll, ezért abban a
+// pillanatban |v|·sin(szög) oldalsebesség keletkezik — MÉRVE 173 km/h-nál,
+// 25°-ban 15,6 m/s, ami messze a látható drift-küszöb (EFFECTS.skid
+// .minLateralSpeed = 4 m/s) fölött van, tehát a játék jogosan rajzolta
+// csúszásnak. Erős ütközésnél tehát MÁR AZ ELSŐ képkockában terelni kell.
+function applyWallSlide(body, nx, ny, impactSpeed, dt) {
+  const imp = RACE.decorationImpact;
+  const vel = body.getLinearVelocity();
+
+  // A fal érintője, a HALADÁSUNK irányába fordítva.
+  let tx = -ny;
+  let ty = nx;
+  if (vel.x * tx + vel.y * ty < 0) {
+    tx = -tx;
+    ty = -ty;
   }
+
+  const fx = Math.cos(body.getAngle());
+  const fy = Math.sin(body.getAngle());
+  // 1 = az orr már a fallal párhuzamos, 0 = merőleges (szemből), < 0 = tolatás.
+  const cosAlign = fx * tx + fy * ty;
+
+  // Besimulás CSAK súroló ütközésnél, a súroltság mértékével skálázva: szemből
+  // nekihajtva (cosAlign ≈ 0) nincs elfordítás, tehát a "nekimegy és megáll"
+  // viselkedés változatlan; tolatva (cosAlign < 0) sincs, hogy a fal ne
+  // pörgesse meg az autót.
+  if (cosAlign > 0) {
+    const angleDiff = Math.atan2(fx * ty - fy * tx, cosAlign); // az orr és a fal-irány előjeles szögkülönbsége
+    const rate = imp.alignRate + imp.impactAlignGain * impactSpeed;
+    let turn = angleDiff * (1 - Math.exp(-rate * cosAlign * dt));
+    // A fordulás SEBESSÉGE korlátos: az elfordítás LÁTHATÓ, és korlát nélkül
+    // meredek (40-70°-os) becsapódásnál egyetlen képkocka alatt 36-54°-ot
+    // rántott a kocsin — ez "elkapja a fal" érzetet ad. A csúcs-csúszás
+    // ellen ilyenkor a (láthatatlan) oldalsebesség-csillapítás dolgozik,
+    // lásd impactSlideGain.
+    const maxTurn = imp.maxAlignYawRate * dt;
+    if (turn > maxTurn) turn = maxTurn;
+    else if (turn < -maxTurn) turn = -maxTurn;
+    body.setAngle(body.getAngle() + turn);
+  }
+
+  // A maradék OLDALIRÁNYÚ csúszás lesúrolása + kis fal menti lassítás — MÁR AZ
+  // ÚJ (besimított) irány szerint, hogy a sebesség ahhoz igazodjon.
+  const nfx = Math.cos(body.getAngle());
+  const nfy = Math.sin(body.getAngle());
+  const rightX = -nfy;
+  const rightY = nfx;
+  const lat = vel.x * rightX + vel.y * rightY;
+  const fwd = vel.x * nfx + vel.y * nfy;
+  const dLat = lat * (Math.exp(-(imp.slideDamping + imp.impactSlideGain * impactSpeed) * dt) - 1);
+  const dFwd = fwd * (Math.exp(-imp.scrubDrag * dt) - 1);
+  body.setLinearVelocity(
+    Vec2(vel.x + rightX * dLat + nfx * dFwd, vel.y + rightY * dLat + nfy * dFwd)
+  );
+
+  // A becsapódás ne indítson pörgést.
+  body.setAngularVelocity(body.getAngularVelocity() * Math.exp(-imp.spinDamping * dt));
 }
 
 // Hozzáért-e az autó valamelyik terelőkúphoz? A `points` a kúpok VILÁG-koordinátái

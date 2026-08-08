@@ -1404,7 +1404,7 @@ function startSingleplayer(hotLap = false) {
         // korrigálja, ha belelógna egy dekoráció-dobozba (lásd sim/car.js
         // resolveDecorationCollisions megjegyzését).
         const pos = carBody.getPosition();
-        resolveDecorationCollisions(carBody, decorationColliders, carParamsFor(pos.x, pos.y, pitLanePoints));
+        resolveDecorationCollisions(carBody, decorationColliders, SIM.fixedDt, carParamsFor(pos.x, pos.y, pitLanePoints));
         recordState();
       }
     );
@@ -2143,7 +2143,7 @@ async function startMultiplayer(room) {
             // A world.step() UTÁN — lásd az egyjátékos beállítás ugyanilyen
             // megjegyzését (sim/car.js resolveDecorationCollisions).
             const preColPos = mpCar.getPosition();
-            resolveDecorationCollisions(mpCar, mpDecorationColliders, carParamsFor(preColPos.x, preColPos.y, mpPitLanePoints));
+            resolveDecorationCollisions(mpCar, mpDecorationColliders, SIM.fixedDt, carParamsFor(preColPos.x, preColPos.y, mpPitLanePoints));
             mpPrev.x = mpCurr.x;
             mpPrev.y = mpCurr.y;
             mpPrev.angle = mpCurr.angle;

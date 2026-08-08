@@ -603,6 +603,49 @@ export const RACE = {
     // szétnyomás) érezhetően megtartja a kocsikat, de még nem "pattint el".
     maxStep: 0.3, // m — a lépésenkénti maximális eltolás
   },
+  // AUTÓ-DEKORÁCIÓ ÜTKÖZÉS-VÁLASZ (fal, kerítés, lelátó… — lásd sim/car.js
+  // resolveDecorationCollisions). A puszta "falba mutató sebesség nullázása"
+  // fizikailag helyes, de a VEZETHETŐSÉGET tönkretette. MÉRVE (súroló ütközés:
+  // 30 m/s, 20°-kal a kerítés felé): a becsapódás után az autó TARTÓSAN 11-12
+  // m/s OLDALIRÁNYÚ sebességgel, 20°-os csúszásszögben haladt tovább (a
+  // gumi-modell tapadási határa ezt csak ~1,7 s alatt tudta lekoptatni) — a
+  // felhasználó ezt élte meg úgy, hogy "teljesen kidriftel és irányíthatatlan
+  // lesz, csúszkálni kezd". Az ok: súrolva az orr BENNE MARAD a falban, így a
+  // csúszásszög minden képkockában ÚJRATERMELŐDIK.
+  decorationImpact: {
+    // Fal-menti besimulás: az autó orrát a fal ÉRINTŐJE felé forgatjuk (1/s —
+    // a maradék szög-eltérés ekkora hányada másodpercenként). Ez szünteti meg a
+    // csúszásszöget a FORRÁSÁNÁL. Csak SÚROLÓ ütközésnél hat (a hatás a
+    // fallal bezárt szög koszinuszával skálázódik) — szemből nekihajtva 0,
+    // tehát a "nekimegy és megáll" viselkedés változatlan.
+    alignRate: 9,
+    // …és MENNYIVEL gyorsabban a becsapódás erejével arányosan (1/s per m/s
+    // kioltott, falba mutató sebesség). Ez a kulcs a CSÚCS-csúszás ellen: a
+    // normális kioltása után a még ferdén álló orr miatt egy pillanat alatt
+    // |v|·sin(szög) oldalsebesség keletkezik, amit már AZ ELSŐ képkockában
+    // le kell terelni, különben a játék (jogosan) driftnek látja/rajzolja.
+    impactAlignGain: 5,
+    // A terelés LEGNAGYOBB szögsebessége (rad/s). Az elfordítás látható, ezért
+    // korlátozni kell: enélkül egy meredek (40-70°-os) becsapódás EGYETLEN
+    // képkocka alatt 36-54°-ot rántott a kocsin ("elkapta a fal"). 8 rad/s ≈
+    // 7,6°/képkocka 60 fps-en — határozott, de követhető terelés.
+    maxAlignYawRate: 8,
+    // A megmaradt OLDALIRÁNYÚ (karosszéria-keretbeli) sebesség csillapítása
+    // (1/s) — amit a besimulás nem old meg, azt a fal "lesúrolja", ahelyett
+    // hogy a gumikra bíznánk (azok tapadási határa túl lassú ehhez).
+    slideDamping: 7,
+    // …és ennek becsapódás-arányos többlete (1/s per m/s), az alignRate/
+    // impactAlignGain párjaként.
+    impactSlideGain: 7,
+    // Szögsebesség-csillapítás (1/s) — a becsapódás ne indítson pörgést.
+    spinDamping: 6,
+    // A fal menti haladás lassítása (1/s) — a súrolás kerüljön egy kis
+    // sebességbe, különben "falnak támaszkodva" gyorsulni is lehetne. MÉRVE:
+    // egy rövid (~0,3 s) érintés így ~14% sebességbe kerül, ami megfelel a
+    // kért "csak egy kicsi visszalökés"-nek; 0,8-nál a hosszan tartó súrolás
+    // már 199→36 km/h-ra vitte le a kocsit, ami túl büntető volt.
+    scrubDrag: 0.5,
+  },
   // A checkpointok a pályából generálódnak (sim/track.js), a checkpointCount alapján.
 
   // Kötelező kerékcsere (boxkiállás) — futam-beállításban kapcsolható be (lásd
