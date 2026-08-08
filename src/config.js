@@ -31,6 +31,30 @@ export const CAMERA = {
   // legyen szemet szúró ugrás. Lásd render3d/camera.js updateCamera.
   boostFovBonus: 9, // fok — ennyivel nő a fov teljes boost alatt
   boostFovStiffness: 7, // 1/s — milyen gyorsan simul a cél-fov felé
+  // KAMERA-RÁZÁS dekoráció-ütközésnél (lásd render3d/camera.js updateCamera.shake,
+  // main.js — a sim/car.js resolveDecorationCollisions visszaadott ütközés-
+  // erejéből hívva). Rövid, gyorsan lecsengő véletlen eltolás — NEM a kamera
+  // "hivatalos" (yaw/pozíció) állapotát módosítja, csak egy külön, becsapódás
+  // után exponenciálisan lecsengő ofszetet ad hozzá a végleges pozícióhoz.
+  shake: {
+    perImpactSpeed: 0.06, // m elmozdulás-amplitúdó / (m/s ütközés-erő)
+    maxAmplitude: 0.6, // m — felső korlát, hogy egy extrém ütközés se vigye ki a képet
+    decayRate: 10, // 1/s — milyen gyorsan cseng le (exponenciális)
+  },
+};
+
+// KAROSSZÉRIA-DŐLÉS (body roll/pitch) — tisztán VIZUÁLIS trükk (a fizikát nem
+// érinti), lásd render3d/carLean.js. Kanyarban a kormányszöggel/sebességgel
+// arányosan oldalra dől, gáz/fék alatt kicsit hátra/előre biccen — mint a
+// legtöbb arcade versenyjátékban.
+export const LEAN = {
+  speedRef: 22, // m/s — ennél a sebességnél éri el a TELJES dőlést (lassabban arányosan kevesebb)
+  // ÉLŐ VISSZAJELZÉS: az első értékek (0.16/0.025/0.04) túlzottak voltak —
+  // a dőlés inkább csak "sejtethető" legyen, ne egy látványos billegés.
+  rollPerRad: 0.05, // rad dőlés / rad kormányszög (teljes sebességnél)
+  pitchAccel: 0.01, // rad — hátra-biccenés gázadásnál ("squat")
+  pitchBrake: 0.016, // rad — előre-biccenés fékezésnél ("nose dive")
+  stiffness: 9, // 1/s — milyen gyorsan simul a cél-dőlés felé
 };
 
 // A játékos által állítható kamera-mezők ALAPÉRTÉKEI — a beállító-panel
@@ -161,6 +185,14 @@ export const AUDIO = {
     gain: 0.6,
   },
   beepGain: 0.35, // visszaszámláló/GO bip hangereje
+  // ÜTKÖZÉS-HANG (tompa "puff") — dekoráció-ütközésnél, a sim/car.js
+  // resolveDecorationCollisions visszaadott ütközés-erejével (m/s) skálázva.
+  // Szintetizált (nincs külön hangfájl) — lásd audio.js createImpactThud.
+  impact: {
+    gain: 0.55, // a MAXIMÁLIS (erős ütközésnél elért) hangerő felső korlátja
+    perSpeed: 0.03, // hangerő / (m/s ütközés-erő) — ez skáláz a súrolás/frontális közt
+    minSpeed: 0.5, // m/s — efölötti ütközés-erőnél szólal csak meg (apró koccanás néma)
+  },
 };
 
 // Fizikai szimuláció — determinisztikus, fix timestep (szerver-kész).
@@ -369,6 +401,20 @@ export const EFFECTS = {
     endScale: 1.1,
     startOpacity: 0.9,
     poolSize: 80,
+  },
+  // CÉL-KONFETTI: egyszeri "kirobbanás" a kocsi fölött, amikor a verseny(ünk)
+  // véget ér (lásd main.js — a race.phase 'racing'→'finished' váltásán hívva,
+  // render3d/carEffects.js triggerFinishBurst). UGYANAZ a pool-os
+  // Sprite-technika, mint a por/láng, csak trigger-alapú (nem folytonos
+  // szórás) és gravitációval hullik vissza, nem sodródik.
+  confetti: {
+    burstCount: 90, // egy kirobbanáskor ennyi szemcse indul
+    speed: 6.5, // m/s — kezdő lövellési sebesség
+    upBias: 0.7, // 0-1 — mennyire felfelé húz a kezdő irány (1 = egyenesen fel)
+    gravity: 9, // m/s² — visszahullás
+    lifetime: 1.4, // s
+    startScale: 0.35,
+    poolSize: 120, // > burstCount, hogy egy MP végeredménynél több finish is beférjen
   },
 };
 

@@ -16,10 +16,18 @@ export function createChaseCamera(camera) {
   let yaw = null; // a kamera saját, simított iránya (nem a kocsié!)
   let fov = camera.fov; // a JELENLEGI (simított) látószög — boostnál kitágul
 
+  // KAMERA-RÁZÁS (lásd config.js CAMERA.shake) — a hívó (main.js) egy
+  // ütközés erejével hívja meg a `.shake(strength)` metódust; ez csak egy
+  // amplitúdót állít, a TÉNYLEGES (véletlen irányú, minden képkockában újra
+  // sorsolt) eltolást updateCamera adja hozzá a végleges pozícióhoz.
+  // Exponenciálisan cseng le — nem a kamera "hivatalos" (yaw/pozíció)
+  // állapotát módosítja, azt továbbra is a sima követés vezérli.
+  let shakeAmplitude = 0;
+
   // carX/carZ: az autó pozíciója a talajsíkon; angle: a fizikai (2D) szög;
   // boosting: épp aktív-e a boost (lásd sim/car.js drive.boosting) — enyhén
   // kitágítja a látószöget, klasszikus "sebesség-érzet" trükk.
-  return function updateCamera(carX, carZ, angle, dt, boosting = false) {
+  function updateCamera(carX, carZ, angle, dt, boosting = false) {
     if (yaw === null) yaw = angle;
 
     // A látószög sima be-/kicsengéssel követi a boost állapotát — SOSEM ugrik,
@@ -61,7 +69,20 @@ export function createChaseCamera(camera) {
     if (camPos.lengthSq() === 0) camPos.copy(desired);
     else camPos.lerp(desired, tp);
 
-    camera.position.copy(camPos);
+    // A rázás amplitúdója exponenciálisan cseng le, és VÉLETLEN irányú
+    // eltolást ad a végleges pozícióhoz — a lookAt-ot szándékosan NEM
+    // mozgatjuk vele, hogy a rázás "kamera-remegésnek" hasson, ne törje meg
+    // a kép kompozícióját (a nézési pont stabil marad).
+    shakeAmplitude *= Math.exp(-CAMERA.shake.decayRate * dt);
+    if (shakeAmplitude > 0.001) {
+      camera.position.set(
+        camPos.x + (Math.random() - 0.5) * shakeAmplitude,
+        camPos.y + (Math.random() - 0.5) * shakeAmplitude,
+        camPos.z + (Math.random() - 0.5) * shakeAmplitude
+      );
+    } else {
+      camera.position.copy(camPos);
+    }
     // A nézési pont VÍZSZINTESEN a simított irányból (a látómező nem csapkod
     // kanyarban), FÜGGŐLEGESEN pedig a beállított LEFELÉ DŐLÉSBŐL (pitchDeg)
     // számolva: a kamera aktuális magasságából (camPos.y) annyival lejjebb
@@ -72,5 +93,17 @@ export function createChaseCamera(camera) {
     const lookY = camPos.y - horizDist * Math.tan((CAMERA.pitchDeg * Math.PI) / 180);
     lookAt.set(carX + fx * CAMERA.lookAhead, lookY, carZ + fz * CAMERA.lookAhead);
     camera.lookAt(lookAt);
+  }
+
+  // `strength`: az ütközés-erő (m/s, lásd sim/car.js resolveDecorationCollisions
+  // visszatérési értéke) — a rázás amplitúdója ebből skálázódik (config.js
+  // CAMERA.shake), TÖBB egymást követő ütközésnél a nagyobb amplitúdó nyer
+  // (nem összeadódik — egy már lecsengőben lévő rázást egy újabb, kisebb
+  // ütközés ne "nullázzon vissza" gyengébbre).
+  updateCamera.shake = function shake(strength) {
+    const amp = Math.min(CAMERA.shake.maxAmplitude, strength * CAMERA.shake.perImpactSpeed);
+    if (amp > shakeAmplitude) shakeAmplitude = amp;
   };
+
+  return updateCamera;
 }

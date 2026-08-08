@@ -7,7 +7,7 @@
 //   - MULTIPLAYER (3. fázis): a Colyseus szerver futtatja a fizikát/versenyt,
 //     mi inputot küldünk és a snapshot-okból renderelünk minden autót.
 // =============================================================================
-import { SIM, ASSETS, RACE, NET } from './config.js';
+import { SIM, ASSETS, RACE, NET, AUDIO } from './config.js';
 import { createWorld, createStepper } from './sim/world.js';
 import { spawn, checkpoints, offRoadExcess, trackHeadingAt, trackState } from './sim/track.js';
 import {
@@ -37,6 +37,7 @@ import { addGrassField } from './render3d/grassField.js';
 import { addMountains } from './render3d/mountains.js';
 import { loadModel, loadTexture, loadModelTexture, fitCarModel } from './render3d/assets.js';
 import { setupWheels } from './render3d/wheels.js';
+import { createCarLean } from './render3d/carLean.js';
 import { createCarEffects } from './render3d/carEffects.js';
 import { createNameplate, nameplateOpacityForDistance } from './render3d/nameplate.js';
 import { createPitMarker, updatePitMarker, setMyBoxIndex } from './render3d/pitMarker.js';
@@ -87,6 +88,10 @@ const { renderer, scene, camera, carMesh, asphaltMesh } = createScene3D(
 // Guminyom + porfelhő (render3d/carEffects.js) — egyetlen megosztott effekt-
 // rendszer mindkét módhoz (SP: saját autó; MP: saját + minden távoli autó).
 const carEffects = createCarEffects(scene);
+
+// Karosszéria-dőlés (render3d/carLean.js) — csak a SAJÁT autóra (a távoli
+// autóknál nincs helyi steer/input-adatunk, amiből a dőlést vezérelhetnénk).
+const carLean = createCarLean();
 
 // A menüben választott autó indexe (CARS lista) — perzisztálva. A saját autó
 // modellje (SP + MP) ÉS multiplayerben a hálón küldött választás is ez.
@@ -1389,6 +1394,11 @@ function startSingleplayer(hotLap = false) {
     lastTime = now;
 
     const input = race.phase === 'racing' ? readInput() : NEUTRAL_INPUT;
+    // Az egy KÉPKOCKÁN belüli (több fizika-al-lépés is lehet) legerősebb
+    // ütközés — a kamera-rázást/hangot egyszer, a KÉPKOCKA végén váltjuk ki
+    // ezzel, nem al-lépésenként (az többszörös "puffot" adna egyetlen
+    // képkockában, lásd sim/car.js resolveDecorationCollisions).
+    let frameImpact = 0;
     const alpha = stepper(
       world,
       dt,
@@ -1404,10 +1414,15 @@ function startSingleplayer(hotLap = false) {
         // korrigálja, ha belelógna egy dekoráció-dobozba (lásd sim/car.js
         // resolveDecorationCollisions megjegyzését).
         const pos = carBody.getPosition();
-        resolveDecorationCollisions(carBody, decorationColliders, SIM.fixedDt, carParamsFor(pos.x, pos.y, pitLanePoints));
+        const impact = resolveDecorationCollisions(carBody, decorationColliders, SIM.fixedDt, carParamsFor(pos.x, pos.y, pitLanePoints));
+        if (impact > frameImpact) frameImpact = impact;
         recordState();
       }
     );
+    if (frameImpact > 0) {
+      updateCamera.shake(frameImpact);
+      audio.playImpact(frameImpact);
+    }
 
     const x = lerp(prev.x, curr.x, alpha);
     const z = lerp(prev.y, curr.y, alpha);
@@ -1416,6 +1431,14 @@ function startSingleplayer(hotLap = false) {
     carMesh.position.set(x, 0.12, z);
     carMesh.rotation.y = -angle;
     carWheels.update(forwardSpeed(carBody), drive.steer, dt);
+    carLean(
+      carMesh,
+      forwardSpeed(carBody),
+      drive.steer,
+      race.phase === 'racing' && input.up,
+      race.phase === 'racing' && input.down && forwardSpeed(carBody) > 0.5,
+      dt
+    );
 
     // Ghost car lejátszás: a SAJÁT jelenlegi kör-idővel (race.time - lapStartTime)
     // szinkronban — keret-interpoláció a rögzített mintasoron, NEM újra-szimuláció
@@ -1472,6 +1495,11 @@ function startSingleplayer(hotLap = false) {
       lastCountInt = c;
     }
     if (lastPhase === 'countdown' && race.phase === 'racing') audio.beep(880, 0.35);
+    // CÉL: konfetti-kirobbanás a kocsi fölött, pontosan a 'racing'→'finished'
+    // átváltás pillanatában (nem villanás minden képkockában, amíg 'finished').
+    if (lastPhase === 'racing' && race.phase === 'finished') {
+      carEffects.triggerFinishBurst(x, z);
+    }
     lastPhase = race.phase;
 
     audio.update({
@@ -2055,6 +2083,7 @@ async function startMultiplayer(room) {
   let lastStandingsAt = 0;
   let wasBoostDenied = false; // lásd SP — csak új próbálkozásonként szóljon a hiba-hang
   let wasPitStopCounting = false; // lásd SP — a méres KEZDETÉN szóljon a kerékcsere-hang, ne a végén
+  let lastMpRacePhase = mpRace.phase; // lásd SP lastPhase — a SAJÁT verseny cél-edge-detektálása
   lastTime = performance.now();
 
   function frame(now) {
@@ -2123,6 +2152,7 @@ async function startMultiplayer(room) {
       const input = racing ? readInput() : NEUTRAL_INPUT;
 
       let alpha = 0;
+      let frameImpact = 0; // lásd SP — a legerősebb ütközés EBBEN a képkockában
       if (racing || myFinished) {
         alpha = mpStepper(
           mpWorld,
@@ -2143,7 +2173,8 @@ async function startMultiplayer(room) {
             // A world.step() UTÁN — lásd az egyjátékos beállítás ugyanilyen
             // megjegyzését (sim/car.js resolveDecorationCollisions).
             const preColPos = mpCar.getPosition();
-            resolveDecorationCollisions(mpCar, mpDecorationColliders, SIM.fixedDt, carParamsFor(preColPos.x, preColPos.y, mpPitLanePoints));
+            const impact = resolveDecorationCollisions(mpCar, mpDecorationColliders, SIM.fixedDt, carParamsFor(preColPos.x, preColPos.y, mpPitLanePoints));
+            if (impact > frameImpact) frameImpact = impact;
             mpPrev.x = mpCurr.x;
             mpPrev.y = mpCurr.y;
             mpPrev.angle = mpCurr.angle;
@@ -2195,6 +2226,10 @@ async function startMultiplayer(room) {
         // Rajt előtt parkolva a saját rajt-helyünkön (DNF/finished esetén marad ott).
         mpPlaceAtSpawn();
       }
+      if (frameImpact > 0) {
+        updateCamera.shake(frameImpact);
+        audio.playImpact(frameImpact);
+      }
 
       // Célba érés → azonnali (egyszeri) állapot-küldés, hogy a szerver mielőbb
       // megkapja a finished flaget (helyezés-sorrend + verseny-zárás).
@@ -2212,6 +2247,14 @@ async function startMultiplayer(room) {
       if (myMesh) {
         myMesh.position.set(ownX, 0.12, ownY);
         myMesh.rotation.y = -ownA;
+        carLean(
+          myMesh,
+          forwardSpeed(mpCar),
+          mpDrive.steer,
+          racing && input.up,
+          racing && input.down && forwardSpeed(mpCar) > 0.5,
+          dt
+        );
       }
       carWheels.update(forwardSpeed(mpCar), mpDrive.steer, dt);
       // Guminyom/porfelhő minden RENDERELT autóra — a sajátunkat rögtön
@@ -2393,6 +2436,13 @@ async function startMultiplayer(room) {
         lastCountInt = c;
       }
       if (lastPhase === 'countdown' && serverPhase === 'racing') audio.beep(880, 0.35);
+      // CÉL: konfetti-kirobbanás, amikor a SAJÁT (helyi) versenyünk ér véget —
+      // lásd SP ugyanilyen edge-detektálását. `mpRace.phase` (nem `serverPhase`)
+      // a helyes forrás, mert az MP-ben mindenki KÜLÖN fejezi be a versenyt.
+      if (lastMpRacePhase === 'racing' && mpRace.phase === 'finished') {
+        carEffects.triggerFinishBurst(ownX, ownY);
+      }
+      lastMpRacePhase = mpRace.phase;
       lastPhase = serverPhase;
 
       audio.update({

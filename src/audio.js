@@ -282,7 +282,43 @@ export function createAudio() {
     src.start();
   }
 
-  let muted = false;
+  // ÜTKÖZÉS-HANG — tompa "puff": egy gyorsan lecsengő, alul-áteresztő szűrt
+  // zaj-kitörés + egy rövid, lefelé csúszó szinusz (a "koppanás" mélye), az
+  // erősség (m/s, lásd sim/car.js resolveDecorationCollisions) szerint
+  // skálázott hangerővel. Túl gyenge (kis koccanás) érintésnél néma marad.
+  function playImpact(strength) {
+    if (!strength || strength < AUDIO.impact.minSpeed) return;
+    const gain = Math.min(AUDIO.impact.gain, strength * AUDIO.impact.perSpeed);
+    const t = ctx.currentTime;
+
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseFilter.frequency.value = 900;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(gain, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    noise.connect(noiseFilter).connect(noiseGain).connect(master);
+    noise.start(t);
+    noise.stop(t + 0.13);
+
+    const thump = ctx.createOscillator();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(110, t);
+    thump.frequency.exponentialRampToValueAtTime(35, t + 0.14);
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(gain * 0.9, t);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    thump.connect(thumpGain).connect(master);
+    thump.start(t);
+    thump.stop(t + 0.17);
+  }
+
+let muted = false;
   const resume = () => {
     if (ctx.state === 'suspended') ctx.resume();
   };
@@ -316,5 +352,13 @@ export function createAudio() {
     boost.setActive(!!boosting);
   }
 
-  return { beep, update, playBoostEmpty, playPitStop, ctx, master };
+  return {
+    beep,
+    update,
+    playBoostEmpty,
+    playPitStop,
+    playImpact,
+    ctx,
+    master,
+  };
 }

@@ -449,8 +449,12 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
 //   (3) FAL-MENTI BESIMULÁS + csúszás-csillapítás (egyszer, a legmélyebb
 //       érintkezésre — lásd applyWallSlide). Enélkül a súroló ütközés
 //       vezethetetlen csúszkálást okozott, lásd RACE.decorationImpact.
+// Visszatérési érték: a legerősebb ütközés (m/s, a kioltott falba mutató
+// sebesség-komponens), vagy 0, ha nem volt ütközés — a hívó (main.js) ebből
+// vezérli a kamera-rázást és az ütközés-hangot (render3d/camera.js .shake,
+// audio.js playImpact).
 export function resolveDecorationCollisions(body, colliders, dt, car = CAR) {
-  if (!colliders || colliders.length === 0) return;
+  if (!colliders || colliders.length === 0) return 0;
   const pos = body.getPosition();
   let px = pos.x;
   let py = pos.y;
@@ -538,9 +542,10 @@ export function resolveDecorationCollisions(body, colliders, dt, car = CAR) {
     }
   }
 
-  if (!moved) return;
+  if (!moved) return 0;
   body.setPosition(Vec2(px, py));
   applyWallSlide(body, deepestNx, deepestNy, impactSpeed, dt);
+  return impactSpeed;
 }
 
 // FAL-MENTI BESIMULÁS — a súroló ütközés vezethetőségéért felelős rész.

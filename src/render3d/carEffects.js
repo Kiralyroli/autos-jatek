@@ -370,6 +370,86 @@ export function createCarEffects(scene) {
     }
   }
 
+  // --- CÉL-KONFETTI: TRIGGER-alapú kirobbanás (nem folytonos szórás, mint a
+  // por/láng) — ugyanaz a pool-os Sprite-technika, de saját (véletlen) SZÍNŰ
+  // anyaggal szemcsénként, és gravitációval hullik vissza sodródás helyett. ---
+  const CONFETTI_COLORS = [0xe05a5a, 0xf2c14e, 0x6fb37a, 0x5a8fe0, 0xffffff];
+  function makeConfettiTexture(color) {
+    const size = 16;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+    ctx.fillRect(1, 1, size - 2, size - 2);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  const confettiTextures = CONFETTI_COLORS.map(makeConfettiTexture);
+  const confettiSprites = [];
+  const confettiParticles = [];
+  for (let i = 0; i < EFFECTS.confetti.poolSize; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: confettiTextures[i % confettiTextures.length],
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.visible = false;
+    scene.add(sprite);
+    confettiSprites.push(sprite);
+    confettiParticles.push({ active: false, age: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
+  }
+  let nextConfettiIdx = 0;
+
+  // Egyszeri kirobbanás a megadott VILÁG-pozíció fölött (lásd main.js — a
+  // race.phase 'racing'→'finished' váltásán hívva). Minden szemcse VÉLETLEN
+  // vízszintes irányba és felfelé (config.js EFFECTS.confetti.upBias) indul.
+  function triggerFinishBurst(x, z) {
+    for (let n = 0; n < EFFECTS.confetti.burstCount; n++) {
+      const idx = nextConfettiIdx;
+      nextConfettiIdx = (nextConfettiIdx + 1) % EFFECTS.confetti.poolSize;
+      const p = confettiParticles[idx];
+      p.active = true;
+      p.age = 0;
+      p.x = x;
+      p.y = 1.5;
+      p.z = z;
+      const dir = Math.random() * Math.PI * 2;
+      const horiz = EFFECTS.confetti.speed * (1 - EFFECTS.confetti.upBias) * (0.4 + Math.random() * 0.6);
+      p.vx = Math.cos(dir) * horiz;
+      p.vz = Math.sin(dir) * horiz;
+      p.vy = EFFECTS.confetti.speed * EFFECTS.confetti.upBias * (0.6 + Math.random() * 0.8);
+      confettiSprites[idx].visible = true;
+      confettiSprites[idx].position.set(p.x, p.y, p.z);
+      confettiSprites[idx].material.map = confettiTextures[Math.floor(Math.random() * confettiTextures.length)];
+      confettiSprites[idx].scale.setScalar(EFFECTS.confetti.startScale);
+    }
+  }
+
+  function stepConfettiParticles(dt) {
+    for (let i = 0; i < confettiParticles.length; i++) {
+      const p = confettiParticles[i];
+      if (!p.active) continue;
+      p.age += dt;
+      if (p.age >= EFFECTS.confetti.lifetime) {
+        p.active = false;
+        confettiSprites[i].visible = false;
+        continue;
+      }
+      p.vy -= EFFECTS.confetti.gravity * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      if (p.y < 0) p.y = 0; // ne bukjon a talaj alá — "földet ér" és ott hal el
+      const sprite = confettiSprites[i];
+      sprite.position.set(p.x, p.y, p.z);
+      const t = p.age / EFFECTS.confetti.lifetime;
+      sprite.material.opacity = 1 - t;
+    }
+  }
+
   // `cars`: [{ id, x, z, angle, lateralSpeed, forwardSpeed, corneringLoad, boosting }]
   // `offRoadFn`: (x,z) => méter az útszélen kívül (0 = úton) — sim/track.js
   // offRoadExcess-e (SP-ben és MP-ben is ugyanaz a szoba pályája mindenkinek).
@@ -381,6 +461,7 @@ export function createCarEffects(scene) {
     }
     stepDustParticles(dt);
     stepFlameParticles(dt);
+    stepConfettiParticles(dt);
   }
 
   // Egy játékos eltávozott (MP) — a nyom-állapotát eldobjuk, hogy a maradék
@@ -416,7 +497,13 @@ export function createCarEffects(scene) {
     }
     nextFlameIdx = 0;
     flameState.clear();
+
+    for (let i = 0; i < confettiParticles.length; i++) {
+      confettiParticles[i].active = false;
+      confettiSprites[i].visible = false;
+    }
+    nextConfettiIdx = 0;
   }
 
-  return { update, remove, reset };
+  return { update, remove, reset, triggerFinishBurst };
 }
