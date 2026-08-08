@@ -23,7 +23,7 @@ const DEFAULTS = Object.freeze({ ...CAR });
 const FIELDS = [
   { key: 'engineForce', label: 'Motorerő (N)', min: 2000, max: 15000, step: 250 },
   { key: 'brakeForce', label: 'Fékerő (N)', min: 4000, max: 25000, step: 500 },
-  { key: 'maxForwardSpeed', label: 'Végsebesség (m/s)', min: 20, max: 60, step: 1 },
+  { key: 'maxForwardSpeed', label: 'Végsebesség (m/s)', min: 20, max: 120, step: 1 },
   { key: 'forwardDrag', label: 'Gördülési ellenállás', min: 0, max: 1, step: 0.02 },
   { key: 'maxSteerAngle', label: 'Kormányszög (rad)', min: 0.2, max: 1.2, step: 0.02 },
   { key: 'steerSpeed', label: 'Kormány be (rad/s)', min: 1, max: 20, step: 0.25 },

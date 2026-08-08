@@ -179,7 +179,7 @@ export const CAR = {
   coastBrakeForce: 3000, // cél után: lágy fékezés ereje (kicsi → "lassan" áll meg)
 
   // Sebességhatárok (m/s) — 1 m/s = 3.6 km/h
-  maxForwardSpeed: 39, // ~140 km/h
+  maxForwardSpeed: 100, // ~360 km/h
   maxReverseSpeed: 10, // ~36 km/h
 
   // Kormányzás + tapadás — KÉTTENGELYES GUMI-MODELL (sim/car.js applyTireFriction).
