@@ -393,67 +393,87 @@ export function isFullyOffRoad(body, offRoad, car = CAR) {
 //
 // A world.step() UTÁN hívandó (nem az updateCar része, ami ELŐTTE fut) — így
 // a frissen integrált pozíciót azonnal korrigálja, nem egy lépés csúszással.
+// PONTOS elforgatott-téglalap vs. elforgatott-téglalap ütközés (SAT —
+// Separating Axis Theorem), NEM kör-közelítés. Élő hibajelentés: a korábbi
+// verzió az autót egy KÖRREL közelítette (sugár = a doboz átlójának fele),
+// hogy elkerülje a bonyolultabb matekot — ez viszont szemből/oldalról
+// nekihajtva egy jól látható, "levegős" rést hagyott az autó és a modell
+// között (a kör sugara minden irányban a LEGNAGYOBB, átlós méretet
+// használta, holott szemből csak a fél-hosszúság/fél-szélesség számít).
+//
+// A SAT módszer: két konvex sokszög (itt: két téglalap) PONTOSAN akkor NEM
+// ütközik, ha van legalább EGY tengely, amire vetítve a két alakzat vetülete
+// nem fedi egymást — egy téglalapnál elég a 4 saját élirányt (ill. az
+// egymással párhuzamos élek miatt csak 2+2 EGYEDI irányt) tesztelni. Ha
+// egyik tengelyen SEM található szétválasztás, a legkisebb átfedésű tengely
+// adja a kitolás irányát/mértékét (Minimum Translation Vector) — ez PONTOSAN
+// annyival tolja ki az autót, hogy a két téglalap éppen csak érintse
+// egymást, nincs mesterséges "levegő".
 export function resolveDecorationCollisions(body, colliders, car = CAR) {
   if (!colliders || colliders.length === 0) return;
-  const carRadius = Math.hypot(car.length, car.width) / 2;
   const pos = body.getPosition();
   let px = pos.x;
   let py = pos.y;
+  const angle = body.getAngle();
   const vel = body.getLinearVelocity();
   let vx = vel.x;
   let vy = vel.y;
   let moved = false;
 
+  const carHalfL = car.length / 2;
+  const carHalfW = car.width / 2;
+
   for (const c of colliders) {
-    const cos = Math.cos(c.rot);
-    const sin = Math.sin(c.rot);
-    const dx = px - c.x;
-    const dy = py - c.y;
-    const lx = dx * cos + dy * sin; // világ → dekoráció helyi kerete (inverz forgatás)
-    const ly = -dx * sin + dy * cos;
+    const carFx = Math.cos(angle), carFy = Math.sin(angle); // autó "előre" tengelye (világ)
+    const carRx = -Math.sin(angle), carRy = Math.cos(angle); // autó "jobbra" tengelye (világ)
+    const decoXx = Math.cos(c.rot), decoXy = Math.sin(c.rot); // dekoráció helyi-X (width) tengelye (világ)
+    const decoZx = -Math.sin(c.rot), decoZy = Math.cos(c.rot); // dekoráció helyi-Z (depth) tengelye (világ)
 
-    const cx = Math.max(-c.halfW, Math.min(c.halfW, lx));
-    const cy = Math.max(-c.halfD, Math.min(c.halfD, ly));
-    const ex = lx - cx;
-    const ey = ly - cy;
-    const distSq = ex * ex + ey * ey;
-    if (distSq >= carRadius * carRadius) continue; // nincs átfedés
+    const dx = c.x - px;
+    const dy = c.y - py; // dekoráció-közép − autó-közép
 
-    let nx;
-    let ny;
-    let dist;
-    if (distSq > 1e-8) {
-      dist = Math.sqrt(distSq);
-      nx = ex / dist;
-      ny = ey / dist;
-    } else {
-      // A kör-középpont a dobozon BELÜL van — a legkisebb behatolású
-      // tengely mentén toljuk ki (dist negatív = "mélyebben" van, mint a
-      // sugár, tehát az overlap = carRadius - dist ettől is nagyobb lesz).
-      const penX = c.halfW - Math.abs(lx);
-      const penY = c.halfD - Math.abs(ly);
-      if (penX < penY) {
-        nx = lx < 0 ? -1 : 1;
-        ny = 0;
-        dist = -penX;
-      } else {
-        nx = 0;
-        ny = ly < 0 ? -1 : 1;
-        dist = -penY;
+    // A 4 jelölt szétválasztó tengely: az autó és a dekoráció SAJÁT
+    // (egymással páronként párhuzamos élű) irányai.
+    const axes = [
+      [carFx, carFy],
+      [carRx, carRy],
+      [decoXx, decoXy],
+      [decoZx, decoZy],
+    ];
+
+    let minOverlap = Infinity;
+    let mtvX = 0;
+    let mtvY = 0;
+    let separated = false;
+
+    for (const [ax, ay] of axes) {
+      const distAlong = dx * ax + dy * ay; // középpontok távolsága a tengely mentén (előjeles)
+      const carProj = Math.abs(carHalfL * (carFx * ax + carFy * ay)) + Math.abs(carHalfW * (carRx * ax + carRy * ay));
+      const decoProj = Math.abs(c.halfW * (decoXx * ax + decoXy * ay)) + Math.abs(c.halfD * (decoZx * ax + decoZy * ay));
+      const overlap = carProj + decoProj - Math.abs(distAlong);
+      if (overlap <= 0) {
+        separated = true; // találtunk szétválasztó tengelyt — nincs ütközés
+        break;
+      }
+      if (overlap < minOverlap) {
+        minOverlap = overlap;
+        // A kitolás iránya az autó FELÉ mutasson (a dekorációtól elfelé) —
+        // ha a dekoráció a tengely POZITÍV irányában van, az autót a
+        // NEGATÍV irányba toljuk.
+        const sign = distAlong >= 0 ? -1 : 1;
+        mtvX = ax * sign;
+        mtvY = ay * sign;
       }
     }
+    if (separated) continue;
 
-    const overlap = carRadius - dist;
-    const wnx = nx * cos - ny * sin; // dekoráció helyi normális → világ
-    const wny = nx * sin + ny * cos;
+    px += mtvX * minOverlap;
+    py += mtvY * minOverlap;
 
-    px += wnx * overlap;
-    py += wny * overlap;
-
-    const vn = vx * wnx + vy * wny; // a sebesség befelé (a dobozba) mutató komponense
+    const vn = vx * mtvX + vy * mtvY; // a sebesség befelé (a dekorációba) mutató komponense
     if (vn < 0) {
-      vx -= wnx * vn;
-      vy -= wny * vn;
+      vx -= mtvX * vn;
+      vy -= mtvY * vn;
     }
     moved = true;
   }
