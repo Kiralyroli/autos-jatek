@@ -9,6 +9,18 @@
 import { Vec2, Box } from 'planck';
 import { CAR, OFFROAD, BOOST } from '../config.js';
 
+// Ez alatt a sebesség alatt (m/s), ha épp NINCS aktív gáz/fék/tolatás-erő
+// (force===0 az applyDrive-ban), a haladási irányú sebesség-komponenst
+// egyenesen NULLÁRA fogjuk, nem hagyjuk a gördülési ellenállásra (drag).
+// Élő hibajelentés: a drag a sebességgel ARÁNYOS erő, ezért a lassulás
+// exponenciális — az utolsó ~1 km/h-t GYAKORLATILAG SOSEM éri el nullát
+// (aszimptotikusan közelít), a kocsi órákig "araszolna". Valós autónál ezen
+// a ponton a sztatikus súrlódás/tapadás egyszerűen megállítja — ezt
+// szimuláljuk ezzel a küszöbbel, ahelyett hogy a dragot minden sebességnél
+// tovább erősítenénk (az a magas sebességű lassulást is érezhetően
+// megváltoztatná).
+const STOP_SPEED = 0.3; // m/s ≈ 1.08 km/h
+
 // Lokális tengelyek világkoordinátában:
 //   előre = +x, jobbra (oldalra) = +y
 function forwardNormal(body) {
@@ -111,8 +123,12 @@ export function createDriveState() {
     // marad egy fékezésből, tolatás nem indulhat — csak ha a gombot elengedtük,
     // majd ÚJRA megnyomtuk, miután az autó már majdnem áll. `prevDown` az előző
     // fizika-lépés gombállapota (az él-észleléshez), `reverseArmed` a döntés maga.
+    // `prevUp`/`forwardArmed` UGYANEZ fordítva: tolatásból a gáz-gomb
+    // FOLYAMATOS nyomva tartása csak FÉKEZ (nem vált azonnal előre menetbe).
     prevDown: false,
     reverseArmed: false,
+    prevUp: false,
+    forwardArmed: false,
   };
 }
 
@@ -244,8 +260,19 @@ function applyDrive(body, input, drive, car) {
 
   let force = 0;
   if (input.up) {
-    // Csak a GÁZT csökkenti a fű-büntetés — fék és tolatás mindig teljes erővel.
-    force = engineForce * drive.throttleMul;
+    if (speed < -0.5) {
+      // Még tolat → fék. Nem előre-indulás-kész: a gombot előbb el kell engedni.
+      force = car.brakeForce;
+    } else {
+      // Megállt (vagy majdnem) / már előre gurul — de az ELŐRE-INDULÁS csak ÚJ
+      // gombnyomásra él (a gomb az ELŐZŐ fizika-lépésen még nem volt nyomva) —
+      // UGYANAZ a zár, mint a tolatásnál (lásd lent), csak fordítva: egy
+      // FOLYAMATOSAN tartott, tolatásból fékező gombnyomás ne csússzon át
+      // magától előre menetbe.
+      if (!drive.prevUp) drive.forwardArmed = true;
+      // Csak a GÁZT csökkenti a fű-büntetés — fék és tolatás mindig teljes erővel.
+      force = drive.forwardArmed ? engineForce * drive.throttleMul : 0;
+    }
   } else if (input.down) {
     if (speed > 0.5) {
       // Még előre gurul → fék. Nem tolatás-kész: a gombot előbb el kell engedni.
@@ -261,12 +288,24 @@ function applyDrive(body, input, drive, car) {
     }
   } else {
     drive.reverseArmed = false; // elengedve → a KÖVETKEZŐ nyomás új ciklus
+    drive.forwardArmed = false;
   }
   drive.prevDown = !!input.down;
+  drive.prevUp = !!input.up;
 
   // Sebességhatárok: a határ felett nem adunk több hajtóerőt az adott irányba.
   if (force > 0 && speed > maxForwardSpeed) force = 0;
   if (force < 0 && speed < -car.maxReverseSpeed) force = 0;
+
+  // Nincs aktív hajtó-/fékerő ÉS már majdnem áll → egyenesen megállítjuk
+  // (lásd STOP_SPEED fenti megjegyzését), a lassú, sose-teljesen-nulla
+  // drag-araszolás helyett.
+  if (force === 0 && Math.abs(speed) < STOP_SPEED) {
+    const vel = body.getLinearVelocity();
+    const fwdComp = Vec2.dot(vel, forward);
+    body.setLinearVelocity(Vec2(vel.x - forward.x * fwdComp, vel.y - forward.y * fwdComp));
+    return;
+  }
 
   // Hajtóerő és gördülési ellenállás egyetlen, forward irányú eredő erőként.
   // (A drag a sebességgel arányos, azzal ellentétes irányú fékerő.)
