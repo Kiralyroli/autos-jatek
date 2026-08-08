@@ -415,9 +415,6 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
   let px = pos.x;
   let py = pos.y;
   const angle = body.getAngle();
-  const vel = body.getLinearVelocity();
-  let vx = vel.x;
-  let vy = vel.y;
   let moved = false;
 
   const carHalfL = car.length / 2;
@@ -444,6 +441,7 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
     let minOverlap = Infinity;
     let mtvX = 0;
     let mtvY = 0;
+    let carProjMTV = 0;
     let separated = false;
 
     for (const [ax, ay] of axes) {
@@ -463,24 +461,44 @@ export function resolveDecorationCollisions(body, colliders, car = CAR) {
         const sign = distAlong >= 0 ? -1 : 1;
         mtvX = ax * sign;
         mtvY = ay * sign;
+        carProjMTV = carProj;
       }
     }
     if (separated) continue;
 
     px += mtvX * minOverlap;
     py += mtvY * minOverlap;
-
-    const vn = vx * mtvX + vy * mtvY; // a sebesség befelé (a dekorációba) mutató komponense
-    if (vn < 0) {
-      vx -= mtvX * vn;
-      vy -= mtvY * vn;
-    }
     moved = true;
+
+    // A sebesség-korrekciót NEM a tömegközépponton, hanem az ÜTKÖZÉSI PONTON
+    // (a kocsi dekoráció felőli szélén) végezzük, ugyanazzal az effektív-tömeg
+    // technikával, mint a kerék-tapadás (tireImpulse fent) — ez a forgást IS
+    // korrekt módon figyelembe veszi. Élő hibajelentés: a korábbi verzió a
+    // tömegközépponti sebességet nullázta, a szögsebességet érintetlenül
+    // hagyva — oldalról/ferdén becsapódva ez ellentmondást hagyott a haladási
+    // irány és a karosszéria-forgás közt, amit a KÖVETKEZŐ lépés
+    // kerék-tapadása (applyTireFriction) extrém, driftszerű pörgésként
+    // próbált "kikorrigálni". A ponton vett impulzus ehelyett rögtön
+    // konzisztens lendületet ad — nincs mit kikorrigálni.
+    const cpx = px - mtvX * carProjMTV;
+    const cpy = py - mtvY * carProjMTV;
+    const vp = body.getLinearVelocityFromWorldPoint(Vec2(cpx, cpy));
+    const vn = vp.x * mtvX + vp.y * mtvY; // az ütközési pont sebessége befelé (a dekorációba) mutató komponense
+    if (vn < 0) {
+      const com = body.getWorldCenter();
+      const rx = cpx - com.x;
+      const ry = cpy - com.y;
+      const crossN = rx * mtvY - ry * mtvX;
+      const invMass = 1 / body.getMass();
+      const invI = 1 / body.getInertia();
+      const meff = 1 / (invMass + crossN * crossN * invI);
+      const j = -vn * meff;
+      body.applyLinearImpulse(Vec2(mtvX * j, mtvY * j), Vec2(cpx, cpy), true);
+    }
   }
 
   if (moved) {
     body.setPosition(Vec2(px, py));
-    body.setLinearVelocity(Vec2(vx, vy));
   }
 }
 
