@@ -92,6 +92,22 @@ const adminLimit = rateLimit({
   message: 'Túl sok adminisztratív kérés.',
 });
 
+// A /api/* JSON-válaszok SOSE cache-elődjenek. Élő hibajelentés: pálya-
+// szerkesztésnél (arrébb rakott boxutca, majd globális mentés) a szerkesztő
+// gépén minden friss volt, de egy MÁSIK, rendes böngészőjű játékosnál
+// makacsul a RÉGI pálya jött vissza — inkognitóban (üres cache) viszont
+// azonnal a friss. Az ok: a static-fájloknak lent explicit Cache-Control
+// van (lásd DIST_DIR middleware), de az /api/tracks, /api/leaderboard stb.
+// válaszaira semmi — Express alapból ETag-et tesz rájuk cache-vezérlő fejléc
+// NÉLKÜL, ami a böngészőnek szabad kezet ad a HEURISZTIKUS (saját belátású)
+// cache-eléshez. Az API mindig dinamikus, gyorsan változó adatot ad vissza
+// (más játékos bármikor menthet/törölhet) — itt sosem szabad a hálózat
+// megkerülésével, a cache-ből válaszolni.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // A rövid, számokból álló csatlakozási kód (lásd roomCodes.js) feloldása a
