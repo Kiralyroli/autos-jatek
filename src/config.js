@@ -220,7 +220,7 @@ export const PHYSICS_PRESETS = {
   realistic: {
     engineForce: 15000,
     brakeForce: 12000,
-    maxForwardSpeed: 60,
+    maxForwardSpeed: 100,
     forwardDrag: 0.25,
     maxSteerAngle: 0.5,
     steerSpeed: 3.5,
