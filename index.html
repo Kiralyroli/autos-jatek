@@ -938,17 +938,23 @@
       #touchControls .tc-group {
         display: flex;
         align-items: flex-end;
-        gap: 14px;
+        gap: 12px;
         pointer-events: none;
       }
+      /* Jobb oldali pedál-blokk: KÉT SOR (fent drift+boost, lent fék+gáz).
+         A BOOST szándékosan pontosan a GÁZ FÖLÖTT, azonos szélességgel — a
+         hüvelykujj egyenesen felfelé csúsztatva eléri (a zóna-alapú
+         ujjkövetés miatt felemelés nélkül is, lásd touchControls.js). */
       #touchControls .tc-group-right {
         flex-direction: column;
         align-items: flex-end;
         gap: 10px;
       }
-      #touchControls .tc-pedals {
+      #touchControls .tc-row {
         display: flex;
-        gap: 14px;
+        align-items: flex-end;
+        gap: 12px;
+        pointer-events: none;
       }
       #touchControls .tc-btn {
         pointer-events: auto;
@@ -977,56 +983,100 @@
         transform: scale(0.9);
         background: var(--panel-soft);
       }
+      /* Méretek: MINDEN érintő-célpont legalább 54px — az Apple HIG (44pt) és a
+         Material (48dp) minimumai fölött, mert menet közben, rázkódó kézzel
+         célzunk. A korábbi 46px magas drift/boost gombok ez alatt voltak. */
       #touchControls .tc-steer {
-        width: 82px;
-        height: 82px;
+        width: 88px;
+        height: 88px;
         border-radius: 50%;
-        font-size: 32px;
+        font-size: 34px;
       }
       #touchControls .tc-gas {
-        width: 98px;
-        height: 98px;
+        width: 104px;
+        height: 104px;
         border-radius: 50%;
-        font-size: 38px;
+        font-size: 40px;
         color: var(--success);
         border-color: rgba(47, 174, 102, 0.5);
       }
       #touchControls .tc-gas.active { background: rgba(47, 174, 102, 0.22); }
       #touchControls .tc-brake {
-        width: 78px;
-        height: 78px;
+        width: 84px;
+        height: 84px;
         border-radius: 50%;
-        font-size: 30px;
+        font-size: 32px;
         color: var(--danger);
         border-color: rgba(224, 80, 90, 0.5);
       }
       #touchControls .tc-brake.active { background: rgba(224, 80, 90, 0.22); }
       #touchControls .tc-drift {
-        min-width: 84px;
-        height: 46px;
-        padding: 0 16px;
-        border-radius: 23px;
-        font-size: 13px;
+        width: 84px;
+        height: 56px;
+        border-radius: 16px;
+        font-size: 12.5px;
         letter-spacing: 0.04em;
         color: var(--gold);
         border-color: rgba(224, 177, 61, 0.5);
       }
       #touchControls .tc-drift.active { background: rgba(224, 177, 61, 0.22); }
-      #touchControls .tc-sidebtns {
-        display: flex;
-        gap: 10px;
+      /* BOOST: a gáz FÖLÖTT, azonos szélességgel. A gomb egyben a boost-
+         ÜZEMANYAG kijelzője is (lásd touchControls.js setBoostFuel) — a külön
+         #boostMeter HUD touchon el is rejtődik, mert a hüvelykujj alatt lévő
+         gombon sokkal természetesebb ránézni. */
+      #touchControls .tc-boost {
+        position: relative;
+        overflow: hidden;
+        width: 104px;
+        height: 56px;
+        border-radius: 16px;
+        font-size: 12.5px;
+        letter-spacing: 0.03em;
+        color: var(--gold2);
+        border-color: rgba(224, 80, 90, 0.55);
+      }
+      /* A hátralévő üzemanyag: balról fogyó, színes kitöltés a gomb MÖGÖTT.
+         A --fuel (0..1) értéket a JS állítja minden képkockában. */
+      /* SZÁNDÉKOSAN NINCS CSS-transition: az értéket a játékciklus úgyis MINDEN
+         képkockában frissíti, tehát a mozgás magától sima. Egy transition itt
+         nemhogy segítene, hanem minden frissítéskor ÚJRAINDULNA — mérve: az
+         átmenet emiatt sosem ért célba, a csík vizuálisan beragadt teli
+         állapotba, miközben az üzemanyag már fogyott. */
+      #touchControls .tc-boost .tc-fuel {
+        position: absolute;
+        inset: 0;
+        transform-origin: left center;
+        transform: scaleX(var(--fuel, 1));
+        background: linear-gradient(90deg, rgba(224, 80, 90, 0.42), rgba(242, 193, 78, 0.42));
         pointer-events: none;
       }
-      #touchControls .tc-boost {
-        min-width: 60px;
-        height: 46px;
-        padding: 0 14px;
-        border-radius: 23px;
-        font-size: 20px;
-        color: var(--danger);
-        border-color: rgba(224, 80, 90, 0.5);
+      #touchControls .tc-boost .tc-label {
+        position: relative; /* a kitöltés FÖLÉ, hogy olvasható maradjon */
+        white-space: nowrap;
       }
-      #touchControls .tc-boost.active { background: rgba(224, 80, 90, 0.28); }
+      #touchControls .tc-boost.active { border-color: var(--gold2); }
+      /* Kifogyott: a gomb elhalványul — egyértelmű, hogy most nincs mit
+         használni (a gáz-hatása viszont ilyenkor is megmarad, lásd
+         touchControls.js readInput — így sosem "hal el" a gáz a hüvelyk alatt). */
+      #touchControls .tc-boost.empty {
+        opacity: 0.45;
+        border-color: var(--panel-border);
+      }
+      /* NAGYON ALACSONY fekvő képernyő (pl. iPhone SE 1. gen: 568×320). Ott a
+         teljes jobb oldali pedál-blokk (56 + 10 + 104 + 16 alsó margó = 186px)
+         MÉG BELEÉRNE a sebességmérő-gyűrű alá (az 60..152-ig tart) — MÉRVE
+         320px magasságnál a boost-gomb teteje 134-re csúszna, tehát átfedné.
+         Ezért itt mindent arányosan kisebbre veszünk. */
+      @media (max-height: 360px) {
+        #touchControls { padding: 0 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+        #touchControls .tc-steer { width: 74px; height: 74px; font-size: 28px; }
+        #touchControls .tc-gas { width: 88px; height: 88px; font-size: 34px; }
+        #touchControls .tc-brake { width: 72px; height: 72px; font-size: 27px; }
+        #touchControls .tc-drift { width: 72px; height: 48px; font-size: 11px; }
+        #touchControls .tc-boost { width: 88px; height: 48px; font-size: 11px; }
+        body.has-touch-controls #speedoRing { width: 76px; height: 76px; top: 52px; }
+        body.has-touch-controls #speedoRing .speedNum { font-size: 21px; }
+      }
 
       /* Amikor az érintős vezérlés aktív (lásd touchControls.js — a body
          ekkor kapja a has-touch-controls osztályt), a játék FEKVŐ nézetre
@@ -1054,21 +1104,35 @@
         padding: 8px 12px;
         font-size: 12px;
       }
-      body.has-touch-controls #ping {
-        left: 130px;
-        top: 56px;
-        right: auto;
-        bottom: auto;
-      }
+      /* A bal oszlop függőleges sorrendje: Főmenü (14) → kamera (54).
+         A DIAGNOSZTIKAI kijelzők (FPS, ping) NEM ide, hanem a képernyő
+         SZÉLÉRE, a minitérkép alá kerülnek — a korábbi left:130 a vezetési
+         nézetbe lógott bele. A minitérkép 14..118-ig tart, a kormány-gombok
+         pedig csak 236-tól kezdődnek (a legalacsonyabb, 320px-es fekvő
+         képernyőn), tehát ez a sáv szabad.
+         Az FPS van felül, mert az MINDIG látszik; a ping csak multiplayerben. */
       body.has-touch-controls #fps {
-        left: 130px;
-        top: 92px;
+        left: 14px;
+        top: 124px;
         right: auto;
         bottom: auto;
       }
+      body.has-touch-controls #ping {
+        left: 14px;
+        top: 160px;
+        right: auto;
+        bottom: auto;
+      }
+      /* A kamera-gomb a bal oldali oszlopba, a "Főmenü" ALÁ kerül — NEM mellé.
+         MÉRVE: mellé téve (left:232) a középre zárt #raceinfo panellel egy
+         keskenyebb fekvő telefonon (pl. 568px széles iPhone SE) átfedésbe
+         került (raceinfo 237..331 vs. kamera-gomb 232..272). Függőlegesen
+         egymás alá rendezve a bal oszlop 210px-nél véget ér, így bármilyen
+         fekvő szélességnél elfér a középső panel mellett. */
       body.has-touch-controls #btnCamera {
-        left: 232px;
-        top: 14px;
+        left: 130px;
+        top: 54px;
+        right: auto;
         bottom: auto;
         width: 40px;
         height: 40px;
@@ -1098,17 +1162,14 @@
         height: 92px;
       }
       body.has-touch-controls #speedoRing .speedNum { font-size: 26px; }
-      /* Boost-sáv touchon: a képernyő alján a két szélső sarkot a kormány- és
-         pedál-gombok foglalják, a középső sáv viszont szabad — ott marad, csak
-         kompaktabban, és feljebb csúszik a home-sáv (safe-area) elől. */
-      body.has-touch-controls #boostMeter {
-        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-        gap: 8px;
-        padding: 6px 12px;
-      }
-      body.has-touch-controls #boostMeter .boostLabel { font-size: 9px; }
-      body.has-touch-controls #boostMeter .boostBarTrack { width: 130px; height: 8px; }
-      body.has-touch-controls #boostMeter .boostValue { font-size: 10.5px; min-width: 34px; }
+      /* Boost-sáv touchon ELREJTVE: az üzemanyag-kijelzés átkerült MAGÁRA a
+         boost-gombra (lásd #touchControls .tc-boost .tc-fuel + touchControls.js
+         setBoostFuel) — ott van, ahova a hüvelykujj amúgy is néz.
+         MÉRVE (667×375 fekvő): a régi, alul-középen ülő sáv 204..463 px-ig ért,
+         a fék-gomb pedig 461-nél kezdődött — vagyis ténylegesen ÁTFEDTÉK
+         egymást. Az elrejtéssel az ütközés is megszűnik, és marad szabad hely
+         a pálya látványának. */
+      body.has-touch-controls #boostMeter { display: none !important; }
       /* Szektor-delta touchon KISEBB és FELJEBB — a kompakt kör/idő-panel +
          boost-mérő ALÁ (top:94px), közvetlenül a felső HUD alatt, hogy ne a
          vezetési nézet közepén (a korábbi 132px pont a képernyő közepére esett
@@ -1134,6 +1195,42 @@
         gap: 6px;
         border-radius: 8px;
       }
+      /* Boxkiállás-jelző touchon: ALUL KÖZÉPRE, kompaktan. MÉRVE: az asztali
+         helye (jobb felül, right:14 / top:84) fekvő telefonon PONTOSAN a
+         sebességmérő-gyűrűre esett (92×52 px-es átfedés), a ~375px széles
+         panel pedig a szektor-deltát is takarta. Az alsó-középső sáv viszont
+         épp felszabadult (oda került volna a #boostMeter, amit touchon
+         elrejtettünk), és a két hüvelykujj-blokk KÖZÖTT van, tehát semmit nem
+         takar el a vezetésből. A "counting" (középre ugró) állapot is ide
+         kerül — mobilon ez a hely önmagában elég feltűnő. */
+      body.has-touch-controls #pitStopHud,
+      body.has-touch-controls #pitStopHud.center {
+        top: auto;
+        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        max-width: 46vw;
+        padding: 6px 10px;
+        gap: 8px;
+      }
+      body.has-touch-controls #pitStopHud .pitIcon { font-size: 17px; }
+      /* A HOSSZÚ emlékeztető-szöveg ("1 kötelező boxkiállás a versenyen")
+         touchon ELMARAD — MÉRVE vele a panel 279px széles lett, a két
+         hüvelykujj-blokk közti szabad sáv viszont csak 247px (667px-es
+         képernyőn), tehát belelógott a kormány- és fékgombba. A pulzáló 🔧
+         ikon + a pályán lévő arany BOX-jelölő (render3d/pitMarker.js) ezt
+         önmagában is közli. A RÖVID állapot-feliratok ("Állva tartva…",
+         "Kiállás megvolt!") viszont maradnak — azok elférnek. */
+      body.has-touch-controls #pitStopHud .pitLabel { display: none; }
+      body.has-touch-controls #pitStopHud.counting .pitLabel,
+      body.has-touch-controls #pitStopHud.done .pitLabel {
+        display: block;
+        font-size: 9px;
+        letter-spacing: 0.05em;
+      }
+      body.has-touch-controls #pitStopHud .pitValue { font-size: 12px; min-width: 26px; }
+      body.has-touch-controls #pitStopHud.counting .pitBarTrack { width: 96px; height: 8px; }
 
       /* "Fordítsd el fekvőbe" figyelmeztetés — touch-eszközön (body.has-touch-
          controls, lásd touchControls.js) ÉS álló tájolásnál, MINDENÜTT: a

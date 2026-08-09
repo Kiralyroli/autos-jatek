@@ -1,8 +1,24 @@
 // =============================================================================
 //  ÉRINTŐS VEZÉRLÉS — mobil/touch eszközökön a billentyűzet mellett/helyett.
 //  Ugyanazt a semleges input-alakot adja, mint input.js readInput()-ja
-//  (up/down/left/right/drift), hogy main.js egyszerűen ÖSSZE tudja olvasztani
-//  (OR) a kettőt — egy eszközön akár mindkettő egyszerre is használható.
+//  (up/down/left/right/drift/boost), hogy main.js egyszerűen ÖSSZE tudja
+//  olvasztani (OR) a kettőt — egy eszközön akár mindkettő egyszerre is
+//  használható.
+//
+//  KÉT DÖNTÉS, ami a mobil-élményt megkülönbözteti a sima "gombok" megoldástól:
+//
+//  1) BOOST = GÁZ + BOOST. Élő visszajelzés: a boost volt a legnehezebben
+//     használható, mert KÜLÖN gombként a gáz MELLETT kellett volna nyomni —
+//     egy hüvelykujjal ez gyakorlatilag lehetetlen, kettővel meg elveszik a
+//     kormányzás. Mostantól a boost-gomb ÖNMAGÁBAN teljes gázt IS ad (lásd
+//     readInput lent), így egyetlen ujjal, a gázról feljebb csúszva elérhető.
+//
+//  2) ZÓNA-ALAPÚ ujjkövetés a gombonkénti listenerek helyett. A gyökér-elemen
+//     figyelünk, és a pointer KOORDINÁTÁJÁBÓL döntjük el, melyik gomb fölött
+//     van — ezért az ujj ÁTCSÚSZTATHATÓ egyik gombról a másikra (gáz → boost)
+//     anélkül, hogy fel kellene emelni. A korábbi, gombonkénti
+//     pointerdown/up + setPointerCapture ezt NEM tudta: a capture a lenyomás
+//     gombjához kötötte az ujjat, a szomszéd gomb néma maradt.
 // =============================================================================
 
 // Touch-eszköz heurisztika: az ELSŐDLEGES vezérlés ujj-e? A korábbi
@@ -38,59 +54,33 @@ export function requestFullscreen() {
 }
 
 export function createTouchControls() {
+  // A GOMBOK nyers állapota (amit az ujjak épp nyomnak). A `readInput()` ebből
+  // származtatja a játék-inputot — ott kapja meg a boost a gáz-hatást is.
   const state = { up: false, down: false, left: false, right: false, drift: false, boost: false };
 
   const root = document.createElement('div');
   root.id = 'touchControls';
+  // Elrendezés (fekvő telefon): BAL hüvelyk = kormány, JOBB hüvelyk = pedálok.
+  // A jobb oldali 2×2 rácsban a BOOST pontosan a GÁZ FÖLÖTT ül (azonos
+  // szélességgel), hogy az ujj egyenesen felfelé csúsztatva elérje.
   root.innerHTML = `
     <div class="tc-group tc-group-left">
       <button type="button" class="tc-btn tc-steer" data-key="left" aria-label="Balra">◀</button>
       <button type="button" class="tc-btn tc-steer" data-key="right" aria-label="Jobbra">▶</button>
     </div>
     <div class="tc-group tc-group-right">
-      <div class="tc-sidebtns">
+      <div class="tc-row">
         <button type="button" class="tc-btn tc-drift" data-key="drift" aria-label="Drift">DRIFT</button>
-        <button type="button" class="tc-btn tc-boost" data-key="boost" aria-label="Boost">🔥</button>
+        <button type="button" class="tc-btn tc-boost" data-key="boost" aria-label="Boost (gázzal együtt)">
+          <span class="tc-fuel"></span><span class="tc-label">🔥 BOOST</span>
+        </button>
       </div>
-      <div class="tc-pedals">
+      <div class="tc-row">
         <button type="button" class="tc-btn tc-brake" data-key="down" aria-label="Fék/tolatás">▼</button>
         <button type="button" class="tc-btn tc-gas" data-key="up" aria-label="Gyorsítás">▲</button>
       </div>
     </div>
   `;
-
-  // Pointer Events (nem touchstart/end) — egyszerre kezeli az egeret ÉS az
-  // ujjakat, és setPointerCapture-rel akkor is megbízhatóan felenged, ha az
-  // ujj lecsúszik a gombról (nem csak pontos touchend-nél a gomb fölött).
-  root.querySelectorAll('.tc-btn').forEach((btn) => {
-    const key = btn.dataset.key;
-    const press = (e) => {
-      e.preventDefault();
-      // A pointer-capture azt biztosítja, hogy a felengedés (pointerup) akkor is
-      // ehhez a gombhoz érkezzen, ha az ujj közben lecsúszott róla — DE csak
-      // "kiegészítés": ha valamiért nem sikerül (pl. a pointerId már nem aktív),
-      // az input-állapotot AKKOR IS be kell állítani, különben a gomb néma marad.
-      // Ezért try/catch-ben van, és a state/osztály tőle FÜGGETLENÜL frissül.
-      try {
-        btn.setPointerCapture(e.pointerId);
-      } catch {
-        /* nem kritikus — a lenti állapot-frissítés a lényeg */
-      }
-      state[key] = true;
-      btn.classList.add('active');
-    };
-    const release = (e) => {
-      e.preventDefault();
-      state[key] = false;
-      btn.classList.remove('active');
-    };
-    btn.addEventListener('pointerdown', press);
-    btn.addEventListener('pointerup', release);
-    btn.addEventListener('pointercancel', release);
-    btn.addEventListener('lostpointercapture', release);
-    // Kontextusmenü/hosszan-nyomás (pl. iOS szöveg-kijelölés) letiltása a gombon.
-    btn.addEventListener('contextmenu', (e) => e.preventDefault());
-  });
 
   document.body.appendChild(root);
   // A CSS ennek jelenlétéhez köti a mobil-elrendezést (lásd index.html) —
@@ -98,18 +88,135 @@ export function createTouchControls() {
   // hogy ne fedjék egymást a képernyő alján lévő gombokkal.
   document.body.classList.add('has-touch-controls');
 
+  const buttons = Array.from(root.querySelectorAll('.tc-btn'));
+  const boostBtn = root.querySelector('.tc-boost');
+
+  // A gombok képernyő-téglalapjai, gyorsítótárazva — a pointermove percenként
+  // több százszor is lefut, ott már NEM hívunk getBoundingClientRect-et.
+  // Újraszámolás: lenyomáskor (ritka), illetve átméretezés/tájolás-váltáskor.
+  let rects = [];
+  function refreshRects() {
+    rects = buttons.map((el) => ({ el, key: el.dataset.key, r: el.getBoundingClientRect() }));
+  }
+  refreshRects();
+  window.addEventListener('resize', refreshRects);
+  window.addEventListener('orientationchange', refreshRects);
+
+  // A gombok közti RÉSEK áthidalása: nem szigorú "benne van-e a téglalapban"
+  // tesztet végzünk, hanem a legKÖZELEBBI gombot választjuk, ha a távolság a
+  // toleranciát nem lépi túl (a téglalapon BELÜL a távolság 0, tehát az mindig
+  // nyer). Enélkül a gáz → boost átcsúsztatás közben a 10 px-es vizuális rés
+  // fölött egy pillanatra MINDEN gomb elengedettnek látszana — vagyis a gáz
+  // megszakadna épp a boost aktiválása közben.
+  const HIT_TOLERANCE = 8; // px
+  function hitTest(x, y) {
+    let bestKey = null;
+    let bestDist = Infinity;
+    for (const b of rects) {
+      const r = b.r;
+      const dx = Math.max(r.left - x, 0, x - r.right);
+      const dy = Math.max(r.top - y, 0, y - r.bottom);
+      const d = Math.hypot(dx, dy);
+      if (d < bestDist) {
+        bestDist = d;
+        bestKey = b.key;
+      }
+    }
+    return bestDist <= HIT_TOLERANCE ? bestKey : null;
+  }
+
+  // pointerId → épp NYOMOTT gomb kulcsa (vagy null, ha az ujj lecsúszott a
+  // gombokról, de még a képernyőn van). Több ujj egyszerre is lehet.
+  const active = new Map();
+
+  function syncState() {
+    for (const k of Object.keys(state)) state[k] = false;
+    for (const key of active.values()) if (key) state[key] = true;
+    for (const b of rects) b.el.classList.toggle('active', state[b.key]);
+  }
+
+  root.addEventListener(
+    'pointerdown',
+    (e) => {
+      const btn = e.target.closest?.('.tc-btn');
+      if (!btn) return;
+      e.preventDefault();
+      refreshRects(); // a lenyomás ritka — itt még megengedhető a méréssel járó költség
+      // A capture-t a LENYOMOTT gombra tesszük, hogy a további pointermove/up
+      // biztosan hozzá (és onnan ide, a gyökérre buborékolva) érkezzen akkor is,
+      // ha az ujj közben lecsúszik róla. A tényleges "melyik gomb" döntést
+      // viszont MINDIG a koordináta adja (hitTest), nem a capture célpontja —
+      // ettől működik az átcsúsztatás.
+      try {
+        btn.setPointerCapture(e.pointerId);
+      } catch {
+        /* nem kritikus — a koordináta-alapú követés e nélkül is működik */
+      }
+      active.set(e.pointerId, hitTest(e.clientX, e.clientY));
+      syncState();
+    },
+    { passive: false }
+  );
+
+  root.addEventListener(
+    'pointermove',
+    (e) => {
+      if (!active.has(e.pointerId)) return;
+      e.preventDefault();
+      const key = hitTest(e.clientX, e.clientY);
+      if (key !== active.get(e.pointerId)) {
+        active.set(e.pointerId, key);
+        syncState();
+      }
+    },
+    { passive: false }
+  );
+
+  const endPointer = (e) => {
+    if (!active.has(e.pointerId)) return;
+    active.delete(e.pointerId);
+    syncState();
+  };
+  root.addEventListener('pointerup', endPointer);
+  root.addEventListener('pointercancel', endPointer);
+  // Kontextusmenü/hosszan-nyomás (pl. iOS szöveg-kijelölés) letiltása.
+  root.addEventListener('contextmenu', (e) => e.preventDefault());
+
   return {
     // Új objektum minden hívásra — a hívó (main.js) biztonságosan tovább
     // olvaszthatja anélkül, hogy a belső state-et véletlenül módosítaná.
-    readInput: () => ({ ...state }),
+    // A BOOST teljes GÁZT is ad (lásd a fájl fejlécének 1. pontját).
+    readInput: () => ({
+      up: state.up || state.boost,
+      down: state.down,
+      left: state.left,
+      right: state.right,
+      drift: state.drift,
+      boost: state.boost,
+    }),
+    // A boost-üzemanyag (0..1) KÖZVETLENÜL a boost-gombon jelenik meg (kifogyó
+    // háttér-csík + kimerülten halvány gomb) — mobilon így nem kell egy külön
+    // HUD-elemre pillantani a hüvelykujj alól (a külön #boostMeter touchon
+    // ezért el is rejtődik, lásd index.html).
+    setBoostFuel(frac) {
+      if (!boostBtn) return;
+      // 3 tizedesre kerekítve: képkockánként hívjuk, a 16 jegyű lebegőpontos
+      // érték csak felesleges stílus-újraszámolást okozna, láthatóan semmit
+      // nem adna hozzá.
+      const f = Math.round(Math.max(0, Math.min(1, frac)) * 1000) / 1000;
+      boostBtn.style.setProperty('--fuel', String(f));
+      boostBtn.classList.toggle('empty', f <= 0.001);
+    },
     show() {
       root.style.display = 'flex';
+      refreshRects(); // a megjelenítés MOST adja meg a valódi méreteket
     },
     hide() {
       root.style.display = 'none';
       // Ha épp nyomva volt egy gomb, amikor elrejtettük (pl. célba érés
       // közben), ne maradjon "beragadva" a gáz/kormány a háttérben.
-      state.up = state.down = state.left = state.right = state.drift = state.boost = false;
+      active.clear();
+      syncState();
     },
   };
 }

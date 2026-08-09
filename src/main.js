@@ -7,7 +7,7 @@
 //   - MULTIPLAYER (3. fázis): a Colyseus szerver futtatja a fizikát/versenyt,
 //     mi inputot küldünk és a snapshot-okból renderelünk minden autót.
 // =============================================================================
-import { SIM, ASSETS, RACE, NET, AUDIO } from './config.js';
+import { SIM, ASSETS, RACE, NET, AUDIO, BOOST } from './config.js';
 import { createWorld, createStepper } from './sim/world.js';
 import { spawn, checkpoints, offRoadExcess, trackHeadingAt, trackState } from './sim/track.js';
 import {
@@ -1522,6 +1522,9 @@ function startSingleplayer(hotLap = false) {
 
     if (speedNumEl) speedNumEl.textContent = String(Math.round(speedKmh(carBody)));
     race.boostRemaining = drive.boostRemaining; // csak megjelenítéshez (hud.js)
+    // Mobilon a boost-üzemanyag MAGÁN a boost-gombon látszik (a külön #boostMeter
+    // touchon rejtve van) — lásd touchControls.js setBoostFuel.
+    if (touch) touch.setBoostFuel(drive.boostRemaining / BOOST.maxPerLap);
     updateHud(race);
     minimap.draw([{ x, z, color: CARS[selectedCar]?.color, isMe: true }]);
 
@@ -2403,6 +2406,8 @@ async function startMultiplayer(room) {
         pitStopTimer: mpRace.pitStopTimer,
       };
       updateHud(hudRace);
+      // Mobil boost-üzemanyag a gombon — lásd az egyjátékos ág megjegyzését.
+      if (touch) touch.setBoostFuel(mpDrive.boostRemaining / BOOST.maxPerLap);
       if (mpPitMarker) {
         mpPitMarker.group.visible = !mpRace.pitStopDone;
         if (!mpRace.pitStopDone) updatePitMarker(mpPitMarker, mpRace.time);
