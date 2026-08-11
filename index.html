@@ -946,6 +946,7 @@
          hüvelykujj egyenesen felfelé csúsztatva eléri (a zóna-alapú
          ujjkövetés miatt felemelés nélkül is, lásd touchControls.js). */
       #touchControls .tc-group-right {
+        position: relative; /* a tanító-nyíl (.tc-hint) ehhez pozicionál */
         flex-direction: column;
         align-items: flex-end;
         gap: 10px;
@@ -1062,6 +1063,62 @@
         opacity: 0.45;
         border-color: var(--panel-border);
       }
+      /* "HÚZD FEL A BOOSTRA" tanító-nyilak — a gáz és a boost gomb közti utat
+         TÖBB, egymás után felfelé úszó nyíl mutatja (klasszikus "húzd fel"
+         jelzés). MINDEN futam elején újra megjelennek; a futamon belül
+         eltűnnek, ha a játékos boostolt, illetve idő után maguktól (lásd
+         touchControls.js startHint/stopHint). A GÁZ+BOOST oszlop fölé
+         fekszenek, pointer-events NÉLKÜL, hogy semmilyen érintést ne
+         fogjanak el. */
+      #touchControls .tc-hint {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 104px; /* = a gáz/boost oszlop szélessége */
+        height: 170px; /* boost (56) + rés (10) + gáz (104) */
+        display: none;
+        pointer-events: none;
+        overflow: hidden;
+      }
+      #touchControls .tc-hint.on { display: block; }
+      /* A nyilak EGYMÁSRA vannak pozicionálva (mind a sáv aljáról indul), és
+         csak az indítási késleltetésük tér el — így egy folyamatos, felfelé
+         áramló sor látszik. Teljes szélességű blokk + text-align:center, hogy
+         a vízszintes középre igazítás NE a transformban legyen (azt az
+         animáció használja). */
+      #touchControls .tc-hint .tc-hint-arrow {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        text-align: center;
+        font-size: 30px;
+        font-weight: 900;
+        line-height: 1;
+        color: var(--gold2);
+        text-shadow: 0 0 12px rgba(0, 0, 0, 0.75);
+        animation: tc-hint-up 1.7s ease-out infinite;
+      }
+      #touchControls .tc-hint .tc-hint-arrow:nth-child(2) { animation-delay: 0.3s; }
+      #touchControls .tc-hint .tc-hint-arrow:nth-child(3) { animation-delay: 0.6s; }
+      /* A nyilak a GÁZ közepe tájáról indulnak, és a BOOST közepéig úsznak fel. */
+      @keyframes tc-hint-up {
+        0% { transform: translateY(-44px); opacity: 0; }
+        18% { opacity: 1; }
+        70% { opacity: 1; }
+        100% { transform: translateY(-136px); opacity: 0; }
+      }
+      /* Csökkentett mozgás igénye esetén ne ússzanak — csak egy állandó,
+         halvány nyíl-sor jelezze az irányt a két gomb között. */
+      @media (prefers-reduced-motion: reduce) {
+        #touchControls .tc-hint .tc-hint-arrow {
+          animation: none;
+          opacity: 0.85;
+        }
+        #touchControls .tc-hint .tc-hint-arrow:nth-child(1) { transform: translateY(-62px); }
+        #touchControls .tc-hint .tc-hint-arrow:nth-child(2) { transform: translateY(-90px); }
+        #touchControls .tc-hint .tc-hint-arrow:nth-child(3) { transform: translateY(-118px); }
+      }
       /* NAGYON ALACSONY fekvő képernyő (pl. iPhone SE 1. gen: 568×320). Ott a
          teljes jobb oldali pedál-blokk (56 + 10 + 104 + 16 alsó margó = 186px)
          MÉG BELEÉRNE a sebességmérő-gyűrű alá (az 60..152-ig tart) — MÉRVE
@@ -1074,6 +1131,9 @@
         #touchControls .tc-brake { width: 72px; height: 72px; font-size: 27px; }
         #touchControls .tc-drift { width: 72px; height: 48px; font-size: 11px; }
         #touchControls .tc-boost { width: 88px; height: 48px; font-size: 11px; }
+        /* A tanító-nyíl sávja a kisebb gombokhoz: boost (48) + rés (10) + gáz (88) */
+        #touchControls .tc-hint { width: 88px; height: 146px; }
+        #touchControls .tc-hint .tc-hint-arrow { font-size: 26px; }
         body.has-touch-controls #speedoRing { width: 76px; height: 76px; top: 52px; }
         body.has-touch-controls #speedoRing .speedNum { font-size: 21px; }
       }

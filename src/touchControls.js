@@ -79,6 +79,11 @@ export function createTouchControls() {
         <button type="button" class="tc-btn tc-brake" data-key="down" aria-label="Fék/tolatás">▼</button>
         <button type="button" class="tc-btn tc-gas" data-key="up" aria-label="Gyorsítás">▲</button>
       </div>
+      <div class="tc-hint" aria-hidden="true">
+        <span class="tc-hint-arrow">⌃</span>
+        <span class="tc-hint-arrow">⌃</span>
+        <span class="tc-hint-arrow">⌃</span>
+      </div>
     </div>
   `;
 
@@ -90,6 +95,32 @@ export function createTouchControls() {
 
   const buttons = Array.from(root.querySelectorAll('.tc-btn'));
   const boostBtn = root.querySelector('.tc-boost');
+
+  // "HÚZD FEL A BOOSTRA" tanító-nyilak. A gázról a boostra való ÁTCSÚSZTATÁS a
+  // mobil-vezérlés legfontosabb, de leginkább REJTETT képessége — több, egymás
+  // után felfelé úszó nyíl mutatja a gáz és a boost közti utat.
+  //
+  // MINDEN FUTAM ELEJÉN újra megjelenik (a `show()`-ból indul, ami versenyenként
+  // egyszer fut) — szándékosan NINCS "egyszer megtanulta, soha többé" tárolás.
+  // A futamon BELÜL viszont eltűnik, amint a játékos ténylegesen boostolt
+  // (fölösleges tovább mutatni), illetve HINT_SECONDS után magától, hogy ne
+  // animáljon végig a verseny alatt a szeme sarkában.
+  const HINT_SECONDS = 14;
+  const hintEl = root.querySelector('.tc-hint');
+  let hintTimer = null;
+  function stopHint() {
+    if (hintTimer) {
+      clearTimeout(hintTimer);
+      hintTimer = null;
+    }
+    if (hintEl) hintEl.classList.remove('on');
+  }
+  function startHint() {
+    if (!hintEl) return;
+    hintEl.classList.add('on');
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = setTimeout(stopHint, HINT_SECONDS * 1000);
+  }
 
   // A gombok képernyő-téglalapjai, gyorsítótárazva — a pointermove percenként
   // több százszor is lefut, ott már NEM hívunk getBoundingClientRect-et.
@@ -133,6 +164,10 @@ export function createTouchControls() {
     for (const k of Object.keys(state)) state[k] = false;
     for (const key of active.values()) if (key) state[key] = true;
     for (const b of rects) b.el.classList.toggle('active', state[b.key]);
+    // A tanító-nyilak eltűnnek, amint a játékos EBBEN a futamban boostolt —
+    // mindegy, hogy rányomtak vagy a gázról CSÚSZTATTÁK rá (ezért itt, a közös
+    // állapot-szinkronban figyeljük, nem a pointerdown-ban).
+    if (state.boost) stopHint();
   }
 
   root.addEventListener(
@@ -210,6 +245,7 @@ export function createTouchControls() {
     show() {
       root.style.display = 'flex';
       refreshRects(); // a megjelenítés MOST adja meg a valódi méreteket
+      startHint(); // gáz → boost átcsúsztatás tanító-nyilai (minden futam elején)
     },
     hide() {
       root.style.display = 'none';
@@ -217,6 +253,7 @@ export function createTouchControls() {
       // közben), ne maradjon "beragadva" a gáz/kormány a háttérben.
       active.clear();
       syncState();
+      stopHint(); // a versenyen kívül ne fusson tovább az animáció/időzítő
     },
   };
 }
