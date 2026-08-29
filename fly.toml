@@ -18,12 +18,17 @@ primary_region = 'fra'
 [http_service]
   internal_port = 2567
   force_https = true
-  auto_stop_machines = 'off'
+  # 'suspend': ugyanannyiba kerül, mint a 'stop' (csak a volume-ért fizetünk,
+  # CPU/RAM-díj nincs, amíg a gép áll), de a felébredés ~200-300 ezredmásodperc
+  # a 'stop' ~2+ másodperces hidegindítása helyett. EGYETLEN gépnél (nincs
+  # több instance ugyanabban a régióban) a proxy csak akkor állítja le, ha a
+  # forgalom TÉNYLEGESEN nulla (load=0) — egy aktív WebSocket-kapcsolat (valaki
+  # épp versenyez) ezt kizárja, tehát futó verseny alatt nem szakadhat meg.
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0 # 1 helyett — enélkül sose alhatna el
 
 [[vm]]
-  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
+  memory_mb = 256 # a "Machine Sizes" dashboard-választás értéke; a Fly generátora egy ELLENTMONDÓ memory='1gb' sort is berakott ide, azt kivettük
