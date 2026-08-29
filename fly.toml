@@ -1,0 +1,27 @@
+# =============================================================================
+#  FLY.IO KONFIG. A `region`-t/`app`-ot a `fly launch`/`fly deploy` felülírja/
+#  kéri, ha még nincs — ez a fájl a maradékot (port, perzisztens volume,
+#  health check) rögzíti, hogy ne kelljen a webes felületen külön beállítani.
+# =============================================================================
+app = "" # a `fly launch` tölti ki / kérdezi meg
+
+[build]
+
+[env]
+  # A PORT-ot NEM itt adjuk meg — a szerver a process.env.PORT-ot olvassa,
+  # de a Fly proxy amúgy is az [http_service].internal_port-ra küld forgalmat,
+  # ide elég azt beállítani (lásd lent). ADMIN_TOKEN-t és TRUST_PROXY-t
+  # SZÁNDÉKOSAN NEM ide írjuk (titok + könnyen elgépelhető), hanem
+  # `fly secrets set` / a Fly dashboard Environment Variables mezőjébe.
+  DATA_DIR = "/data"
+
+[http_service]
+  internal_port = 2567
+  force_https = true
+  auto_stop_machines = false   # egy játékszervernek NEM szabad elaludnia menet közben
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "autos_jatek_data"
+  destination = "/data"
