@@ -170,6 +170,58 @@ function enforceBoardLimit(db, key, phys) {
   db.entries = db.entries.filter((e) => !doomed.has(e));
 }
 
+// TELJES, NYERS adatkimentés (admin export/import funkció) — a listEntries()-
+// szal szemben a ghost-mintasor is benne van, és nincs MAX_ENTRIES_RETURNED-
+// felső korlát (az teljes tábla-visszaadás, nem a menü-lista).
+export function exportAll() {
+  return load().entries;
+}
+
+// TELJES adat-visszaállítás (admin export/import — pl. szerver-költözésnél).
+// Minden bejövő bejegyzés a MEGLÉVŐ ellenőrzéseken megy át (isPlausibleLapTime,
+// sanitizeGhost) — EGY különbséggel a recordLap-hoz képest: itt a beküldött
+// idő MINDIG felülír egy meglévő bejegyzést (nem csak akkor, ha jobb), mert a
+// cél a régi adat HITELES visszaállítása, nem egy verseny közbeni beküldés.
+// Az achievedAt is az IMPORTÁLT fájlból származik, nem "most"-ra bélyegzünk.
+export function importAll(entries) {
+  if (!Array.isArray(entries)) return { imported: 0, skipped: 0 };
+  const db = load();
+  let imported = 0;
+  let skipped = 0;
+  for (const raw of entries) {
+    const key = cleanStr(raw?.trackKey, 64);
+    const phys = cleanStr(raw?.physics, 32);
+    const player = cleanStr(raw?.playerName, MAX_NAME);
+    const name = cleanStr(raw?.trackName, MAX_NAME) || 'Egyedi pálya';
+    const time = Number(raw?.lapTime);
+    if (!key || !phys || !player || !isPlausibleLapTime(key, time)) {
+      skipped++;
+      continue;
+    }
+    const ghost = sanitizeGhost(raw.ghost);
+    const achievedAt = Number.isFinite(raw.achievedAt) ? raw.achievedAt : Date.now();
+
+    const existing = db.entries.find(
+      (e) => e.trackKey === key && e.physics === phys && e.playerName === player
+    );
+    if (existing) {
+      existing.lapTime = time;
+      existing.trackName = name;
+      existing.achievedAt = achievedAt;
+      if (ghost) existing.ghost = ghost;
+      else delete existing.ghost;
+    } else {
+      const rec = { trackKey: key, trackName: name, physics: phys, playerName: player, lapTime: time, achievedAt };
+      if (ghost) rec.ghost = ghost;
+      db.entries.push(rec);
+      enforceBoardLimit(db, key, phys);
+    }
+    imported++;
+  }
+  persist();
+  return { imported, skipped };
+}
+
 // Egy játékos köridejének törlése (dev mód). true, ha törölt valamit.
 export function deleteEntry(trackKey, physics, playerName) {
   const key = cleanStr(trackKey, 64);

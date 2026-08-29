@@ -34,3 +34,21 @@ export async function apiSaveTrack({ name, layout, decorations, pitLane, editorP
 export async function apiDeleteTrack(id) {
   return apiAdminRequest(`/api/tracks/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+
+// TELJES adat-export (admin) — MINDEN pálya + a teljes örök ranglista, ghost-
+// felvételekkel együtt. Lásd server/index.js GET /api/export.
+export async function apiExportAll() {
+  return apiAdminRequest('/api/export');
+}
+
+// TELJES adat-visszaállítás (admin) — az apiExportAll() eredményét várja
+// vissza. Lásd server/index.js POST /api/import (SAJÁT, nagyobb méretkorláttal,
+// mert egy teljes mentés — sok pálya + ghost-felvétel — könnyen meghaladja a
+// normál mentés méretét).
+export async function apiImportAll({ tracks, leaderboard }) {
+  return apiAdminRequest('/api/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tracks, leaderboard }),
+  });
+}

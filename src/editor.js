@@ -31,7 +31,7 @@ import {
   setActiveTrack,
   getActiveTrackName,
 } from './trackStorage.js';
-import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack } from './net/trackApi.js';
+import { apiListTracks, apiGetTrack, apiSaveTrack, apiDeleteTrack, apiExportAll, apiImportAll } from './net/trackApi.js';
 import { DECORATION_TYPES, DECORATION_CATEGORIES, TRACK, RACE } from './config.js';
 import { isDevMode } from './devmode.js';
 import { isSplineLayout } from './sim/trackFactory.js';
@@ -112,6 +112,10 @@ const rotateBtn = document.getElementById('rotateBtn');
 const trackNameInput = document.getElementById('trackNameInput');
 const saveAsBtn = document.getElementById('saveAsBtn');
 const savedTracksListEl = document.getElementById('savedTracksList');
+const exportAllBtn = document.getElementById('exportAllBtn');
+const importAllBtn = document.getElementById('importAllBtn');
+const importAllInput = document.getElementById('importAllInput');
+const backupStatusEl = document.getElementById('backupStatus');
 const view2dBtn = document.getElementById('view2dBtn');
 const view3dBtn = document.getElementById('view3dBtn');
 const editor3dContainer = document.getElementById('editor3d');
@@ -2063,6 +2067,75 @@ saveAsBtn.addEventListener('click', async () => {
     statusEl.classList.remove('closed');
   } finally {
     saveAsBtn.disabled = false;
+  }
+});
+
+// --- Teljes biztonsági mentés (export/import) ---
+// Szerver-költözéshez (pl. Railway → VPS) vagy egyszerű backup-hoz: MINDEN
+// pálya + a teljes örök ranglista (ghost-felvételekkel együtt) egyetlen
+// letölthető JSON-fájlban. Lásd server/index.js GET /api/export, POST /api/import.
+function setBackupStatus(text, isError) {
+  backupStatusEl.textContent = text;
+  backupStatusEl.style.color = isError ? 'var(--danger)' : '';
+}
+
+exportAllBtn.addEventListener('click', async () => {
+  exportAllBtn.disabled = true;
+  setBackupStatus('Exportálás…', false);
+  try {
+    const data = await apiExportAll();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date(data.exportedAt || Date.now()).toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `autos-jatek-backup-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setBackupStatus(
+      `✅ Exportálva: ${data.tracks.length} pálya, ${data.leaderboard.length} ranglista-bejegyzés.`,
+      false
+    );
+  } catch (e) {
+    setBackupStatus(`⚠️ Exportálás sikertelen: ${e.message}`, true);
+  } finally {
+    exportAllBtn.disabled = false;
+  }
+});
+
+importAllBtn.addEventListener('click', () => importAllInput.click());
+
+importAllInput.addEventListener('change', async () => {
+  const file = importAllInput.files?.[0];
+  importAllInput.value = ''; // ugyanaz a fájl újra kiválasztható legyen
+  if (!file) return;
+
+  if (
+    !window.confirm(
+      'Ez a MEGLÉVŐ pályákat/köridőket AZONOS NÉV/JÁTÉKOS esetén felülírja a fájlban lévővel. Folytatod?'
+    )
+  ) {
+    return;
+  }
+
+  importAllBtn.disabled = true;
+  setBackupStatus('Importálás…', false);
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const result = await apiImportAll(data);
+    setBackupStatus(
+      `✅ Importálva: ${result.tracks.imported} pálya (${result.tracks.skipped} kihagyva), ` +
+        `${result.leaderboard.imported} ranglista-bejegyzés (${result.leaderboard.skipped} kihagyva).`,
+      false
+    );
+    renderSavedTracksList();
+  } catch (e) {
+    setBackupStatus(`⚠️ Importálás sikertelen: ${e.message}`, true);
+  } finally {
+    importAllBtn.disabled = false;
   }
 });
 

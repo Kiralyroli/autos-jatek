@@ -24,8 +24,23 @@ const express = require('express');
 const cors = require('cors');
 
 import { RaceRoom } from './RaceRoom.js';
-import { listTracks, getTrack, saveTrack, deleteTrack } from './trackStore.js';
-import { listEntries, recordLap, deleteEntry, clearBoard, getGhost } from './leaderboardStore.js';
+import {
+  listTracks,
+  getTrack,
+  saveTrack,
+  deleteTrack,
+  exportAll as exportTracks,
+  importAll as importTracks,
+} from './trackStore.js';
+import {
+  listEntries,
+  recordLap,
+  deleteEntry,
+  clearBoard,
+  getGhost,
+  exportAll as exportLeaderboard,
+  importAll as importLeaderboard,
+} from './leaderboardStore.js';
 import { resolveJoinCode } from './roomCodes.js';
 import {
   requireAdmin,
@@ -64,12 +79,12 @@ app.disable('x-powered-by');
 
 app.use(securityHeaders);
 app.use(cors(corsOptions));
-// 1 MB → 256 KB: a legnagyobb jogos kérés (egy teljes pálya layout+dekorációkkal)
-// bőven belefér, egy felfújt kérés viszont ne foglaljon feleslegesen memóriát.
-app.use(express.json({ limit: '256kb' }));
 
 // Végpont-csoportonkénti korlátok. Az olvasás bőkezű (a menü több hívást is indít
-// egy pálya-váltásnál), az írás és a szoba-kód feloldás szigorú.
+// egy pálya-váltásnál), az írás és a szoba-kód feloldás szigorú. FELJEBB hozva
+// (a globális express.json() ELÉ), mert az /api/import route lent MÁR
+// hivatkozik az adminLimit-re — const-ként a definíció előtti hivatkozás
+// ReferenceError-t adna.
 const readLimit = rateLimit({ name: 'read', limit: 300, windowMs: 60_000 });
 const writeLimit = rateLimit({
   name: 'write',
@@ -91,6 +106,26 @@ const adminLimit = rateLimit({
   windowMs: 60_000,
   message: 'Túl sok adminisztratív kérés.',
 });
+
+// TELJES ADAT-VISSZAÁLLÍTÁS (admin export/import — lásd lent /api/export is).
+// SAJÁT, nagyobb body-parserrel, a globális 256 KB-os korlát ELŐTT regisztrálva
+// — Express middleware-sorrendben ez az ÚTVONALHOZ kötött parser fut le előbb
+// erre az egy route-ra, és beállítja a body-parser belső "már fel van dolgozva"
+// jelzőjét, ezért a lentebbi globális express.json() ITT már nem parzsol
+// újra (és nem is érvényesíti rá a szűkebb limitet). Csak EZ az egy admin-
+// védett route kap nagyobb keretet — minden más végpont (pl. a nyitott,
+// hitelesítés nélküli POST /api/leaderboard) a szűk 256 KB alatt marad.
+app.post('/api/import', express.json({ limit: '20mb' }), adminLimit, requireAdmin, (req, res) => {
+  const { tracks, leaderboard } = req.body || {};
+  res.json({
+    tracks: importTracks(Array.isArray(tracks) ? tracks : []),
+    leaderboard: importLeaderboard(Array.isArray(leaderboard) ? leaderboard : []),
+  });
+});
+
+// 1 MB → 256 KB: a legnagyobb jogos kérés (egy teljes pálya layout+dekorációkkal)
+// bőven belefér, egy felfújt kérés viszont ne foglaljon feleslegesen memóriát.
+app.use(express.json({ limit: '256kb' }));
 
 // A /api/* JSON-válaszok SOSE cache-elődjenek. Élő hibajelentés: pálya-
 // szerkesztésnél (arrébb rakott boxutca, majd globális mentés) a szerkesztő
@@ -179,6 +214,20 @@ app.delete('/api/leaderboard/:trackKey/:physics/:playerName', adminLimit, requir
 });
 app.delete('/api/leaderboard/:trackKey/:physics', adminLimit, requireAdmin, (req, res) => {
   res.json({ removed: clearBoard(req.params.trackKey, req.params.physics) });
+});
+
+// --- TELJES adat-export/import (admin) — szerver-költözéshez (pl. Railway →
+// VPS), lásd server/trackStore.js + leaderboardStore.js exportAll/importAll.
+// Az EXPORT admin-védett (nem publikus, mint a listázó végpontok), mert a
+// ghost-mintasorokkal EGYÜTT, teljes egészében adja vissza a ranglistát —
+// a nyilvános GET /api/leaderboard/:trackKey/:physics szándékosan NEM teszi
+// ezt (lásd leaderboardStore.js listEntries megjegyzése).
+app.get('/api/export', adminLimit, requireAdmin, (_req, res) => {
+  res.json({
+    exportedAt: Date.now(),
+    tracks: exportTracks(),
+    leaderboard: exportLeaderboard(),
+  });
 });
 
 // Cache-fejlécek — élesben ez rövidíti a pálya/fizika-váltás (vagy bármi más)

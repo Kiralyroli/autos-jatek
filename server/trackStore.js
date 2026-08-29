@@ -294,6 +294,65 @@ export function saveTrack(input, nowMs) {
   return rec;
 }
 
+// TELJES, NYERS adatkimentés (admin export/import funkció) — a listTracks()-
+// szal szemben a layout/decorations/pitLane is benne van, VÁLTOZATLANUL.
+export function exportAll() {
+  return load().tracks;
+}
+
+// TELJES adat-visszaállítás (admin export/import — pl. szerver-költözésnél).
+// Minden bejövő pálya a MEGLÉVŐ sanitize()-on megy át (ugyanaz a védelem —
+// MAX_LAYOUT, MAX_TRACK_LENGTH stb. —, mint a normál szerkesztő-mentésnél),
+// és NÉVRE upsertel (mint saveTrack). A createdAt/updatedAt viszont az
+// IMPORTÁLT fájlból származik, nem "most"-ra bélyegzünk — a cél a régi adat
+// HITELES visszaállítása, nem egy új mentés. A MAX_TRACKS korlát itt IS
+// érvényes (a saveTrack-kal megegyező logika, csak ciklusban).
+export function importAll(tracks) {
+  if (!Array.isArray(tracks)) return { imported: 0, skipped: 0 };
+  const db = load();
+  let imported = 0;
+  let skipped = 0;
+  for (const raw of tracks) {
+    const clean = sanitize(raw);
+    if (!clean) {
+      skipped++;
+      continue;
+    }
+    const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
+    const updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt;
+
+    const existing = db.tracks.find((t) => t.name === clean.name);
+    if (existing) {
+      existing.layout = clean.layout;
+      existing.decorations = clean.decorations;
+      existing.pitLane = clean.pitLane;
+      existing.editorPath = clean.editorPath;
+      existing.editorDecorations = clean.editorDecorations;
+      existing.updatedAt = updatedAt;
+      imported++;
+      continue;
+    }
+    if (db.tracks.length >= MAX_TRACKS) {
+      skipped++;
+      continue;
+    }
+    db.tracks.push({
+      id: randomUUID(),
+      name: clean.name,
+      layout: clean.layout,
+      decorations: clean.decorations,
+      pitLane: clean.pitLane,
+      editorPath: clean.editorPath,
+      editorDecorations: clean.editorDecorations,
+      createdAt,
+      updatedAt,
+    });
+    imported++;
+  }
+  persist();
+  return { imported, skipped };
+}
+
 // Pálya törlése id alapján. true, ha törölt valamit.
 export function deleteTrack(id) {
   const db = load();
